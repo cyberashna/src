@@ -7,6 +7,7 @@ type Habit = {
   targetPerWeek: number;
   doneCount: number;
   lastDoneAt?: string; // ISO timestamp of last time it was done
+  frequency: "weekly" | "monthly";
 };
 
 type Theme = {
@@ -28,37 +29,6 @@ type Block = {
   completed?: boolean; // whether this block instance is checked off
 };
 
-// ---- Habit recency + color helpers ----
-function daysSince(iso?: string): number | null {
-  if (!iso) return null;
-  const diffMs = Date.now() - new Date(iso).getTime();
-  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-}
-
-function targetDaysFromPerWeek(targetPerWeek?: number): number | undefined {
-  if (!targetPerWeek) return undefined;
-  // e.g., 3/week ≈ every 2.3 days → ~2 days
-  return Math.max(1, Math.round(7 / targetPerWeek));
-}
-
-function getBadgeColorClass(
-  days: number | null,
-  targetPerWeek?: number
-): string {
-  if (days === null) return "neutral"; // never done
-
-  const targetDays = targetDaysFromPerWeek(targetPerWeek);
-
-  // No target → always green
-  if (!targetDays) return "green";
-
-  const ratio = days / targetDays;
-
-  if (ratio <= 0.5) return "green"; // well within target
-  if (ratio <= 0.85) return "yellowgreen"; // getting older
-  if (ratio <= 1.0) return "yellow"; // near the limit
-  return "red"; // past target
-}
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -92,6 +62,7 @@ function createInitialThemes(): Theme[] {
     name: "Write poetry",
     targetPerWeek: 2,
     doneCount: 0,
+    frequency: "weekly",
     // lastDoneAt is optional; starts undefined
   };
 
@@ -126,6 +97,7 @@ const App: React.FC = () => {
   const [addingThemeId, setAddingThemeId] = useState<string | null>(null);
   const [newThemeHabitName, setNewThemeHabitName] = useState("");
   const [newThemeHabitTarget, setNewThemeHabitTarget] = useState<number>(2);
+  const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"weekly" | "monthly">("weekly");
 
   // For adding a new theme
   const [newThemeName, setNewThemeName] = useState("");
@@ -145,11 +117,12 @@ const App: React.FC = () => {
   const addHabitToTheme = (
     themeId: string,
     name: string,
-    targetPerWeek: number
+    targetPerWeek: number,
+    frequency: "weekly" | "monthly"
   ) => {
     const trimmed = name.trim();
     if (!trimmed || !targetPerWeek || targetPerWeek <= 0) {
-      alert("Enter a habit name and a valid target per week.");
+      alert("Enter a habit name and a valid target.");
       return;
     }
 
@@ -159,6 +132,7 @@ const App: React.FC = () => {
       name: trimmed,
       targetPerWeek,
       doneCount: 0,
+      frequency,
       // lastDoneAt starts undefined
     };
 
@@ -478,7 +452,7 @@ const App: React.FC = () => {
           </div>
           <p className="small-label">
             Group habits by theme (Household, Creativity, etc). Each habit is
-            tracked as “X times per week”.
+            tracked with a weekly or monthly target.
           </p>
 
           <div className="theme-list">
@@ -493,6 +467,7 @@ const App: React.FC = () => {
                       setAddingThemeId(theme.id);
                       setNewThemeHabitName("");
                       setNewThemeHabitTarget(2);
+                      setNewThemeHabitFrequency("weekly");
                     }}
                   >
                     Add habit
@@ -505,9 +480,6 @@ const App: React.FC = () => {
 
                 <div className="habit-list theme-habit-list">
   {theme.habits.map((habit) => {
-    const days = daysSince(habit.lastDoneAt);
-    const colorClass = getBadgeColorClass(days, habit.targetPerWeek);
-
     return (
       <div key={habit.id} className="habit-item">
         {/* Top-right X button */}
@@ -532,17 +504,10 @@ const App: React.FC = () => {
           </div>
 
           <div className="habit-meta">
-            Target: {habit.targetPerWeek} / week
+            Target: {habit.targetPerWeek} / {habit.frequency}
           </div>
 
           <span className="pill">Done: {habit.doneCount}</span>
-
-          {/* floating countdown square */}
-          <div className="habit-badge-float">
-            <span className={`habit-days-badge ${colorClass}`}>
-              {days === null ? "—" : days}
-            </span>
-          </div>
         </div>
 
         {/* Done button on the right */}
@@ -569,11 +534,19 @@ const App: React.FC = () => {
                       onChange={(e) => setNewThemeHabitName(e.target.value)}
                       placeholder="e.g. Clean kitchen"
                     />
-                    <label className="small-label">Target per week</label>
+                    <label className="small-label">Frequency</label>
+                    <select
+                      value={newThemeHabitFrequency}
+                      onChange={(e) => setNewThemeHabitFrequency(e.target.value as "weekly" | "monthly")}
+                    >
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                    <label className="small-label">Target</label>
                     <input
                       type="number"
                       min={1}
-                      max={14}
+                      max={newThemeHabitFrequency === "weekly" ? 14 : 28}
                       value={newThemeHabitTarget}
                       onChange={(e) =>
                         setNewThemeHabitTarget(
@@ -588,11 +561,13 @@ const App: React.FC = () => {
                           addHabitToTheme(
                             theme.id,
                             newThemeHabitName,
-                            newThemeHabitTarget
+                            newThemeHabitTarget,
+                            newThemeHabitFrequency
                           );
                           setAddingThemeId(null);
                           setNewThemeHabitName("");
                           setNewThemeHabitTarget(2);
+                          setNewThemeHabitFrequency("weekly");
                         }}
                       >
                         Save habit
@@ -604,6 +579,7 @@ const App: React.FC = () => {
                           setAddingThemeId(null);
                           setNewThemeHabitName("");
                           setNewThemeHabitTarget(2);
+                          setNewThemeHabitFrequency("weekly");
                         }}
                       >
                         Cancel
