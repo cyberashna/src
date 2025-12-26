@@ -27,6 +27,7 @@ type Block = {
   location: BlockLocation;
   habitId?: string; // link back to a habit (for habit blocks)
   completed?: boolean; // whether this block instance is checked off
+  hashtag?: string; // hashtag for grouping blocks
 };
 
 
@@ -104,6 +105,7 @@ const App: React.FC = () => {
 
   // For unscheduled generic blocks (non-habit tasks)
   const [blockLabel, setBlockLabel] = useState("");
+  const [blockHashtag, setBlockHashtag] = useState("");
 
   // Flatten all habits (for helper functions)
   const allHabits = themes.flatMap((theme) =>
@@ -233,7 +235,8 @@ const App: React.FC = () => {
   const createBlock = (
     label: string,
     isHabitBlock = false,
-    habitId?: string
+    habitId?: string,
+    hashtag?: string
   ) => {
     const trimmed = label.trim();
     if (!trimmed) {
@@ -248,10 +251,12 @@ const App: React.FC = () => {
       location: { type: "unscheduled" },
       habitId,
       completed: false,
+      hashtag: hashtag?.trim() || undefined,
     };
 
     setBlocks((prev) => [...prev, newBlock]);
     setBlockLabel("");
+    setBlockHashtag("");
   };
 
   // Used when dragging directly from a habit into a slot
@@ -270,6 +275,7 @@ const App: React.FC = () => {
       location: { type: "slot", dayIndex, timeIndex },
       habitId: habit.id,
       completed: false,
+      hashtag: habit.themeName,
     };
 
     setBlocks((prev) => [...prev, newBlock]);
@@ -313,6 +319,21 @@ const App: React.FC = () => {
         b.id === blockId ? { ...b, location: { type: "unscheduled" } } : b
       )
     );
+  };
+
+  const deleteBlock = (blockId: string) => {
+    setBlocks((prev) => prev.filter((b) => b.id !== blockId));
+  };
+
+  const handleBlockDoubleClick = (blockId: string) => {
+    const block = blocks.find((b) => b.id === blockId);
+    if (!block) return;
+
+    if (block.isHabitBlock) {
+      deleteBlock(blockId);
+    } else {
+      moveBlockToUnscheduled(blockId);
+    }
   };
 
   // Toggle completion from the calendar checkbox (for habit blocks)
@@ -637,11 +658,20 @@ const App: React.FC = () => {
                 onChange={(e) => setBlockLabel(e.target.value)}
               />
             </div>
+            <div className="inline" style={{ marginTop: 4 }}>
+              <input
+                id="blockHashtagInput"
+                type="text"
+                placeholder="Hashtag (optional)"
+                value={blockHashtag}
+                onChange={(e) => setBlockHashtag(e.target.value)}
+              />
+            </div>
             <div style={{ marginTop: 4 }}>
               <button
                 className="secondary"
                 type="button"
-                onClick={() => createBlock(blockLabel, false)}
+                onClick={() => createBlock(blockLabel, false, undefined, blockHashtag)}
               >
                 Add block
               </button>
@@ -661,6 +691,7 @@ const App: React.FC = () => {
                   onDragEnd={handleDragEnd}
                 >
                   {block.label}
+                  {block.hashtag && <span style={{ marginLeft: 8, opacity: 0.7, fontSize: 12 }}>#{block.hashtag}</span>}
                 </div>
               ))}
               {unscheduledBlocks.length === 0 && (
@@ -669,7 +700,7 @@ const App: React.FC = () => {
             </div>
 
             <small className="small-label" style={{ marginTop: 4 }}>
-              Double-click a block in the grid to send it back here.
+              Double-click a regular block in the grid to send it back here. Habit blocks are deleted on double-click.
             </small>
           </div>
         </div>
@@ -794,7 +825,7 @@ const App: React.FC = () => {
                               onDragStart={() => handleDragStart(block.id)}
                               onDragEnd={handleDragEnd}
                               onDoubleClick={() =>
-                                moveBlockToUnscheduled(block.id)
+                                handleBlockDoubleClick(block.id)
                               }
                             >
                               {block.isHabitBlock ? (
@@ -809,10 +840,16 @@ const App: React.FC = () => {
                                       toggleBlockCompletion(block.id)
                                     }
                                   />
-                                  <span>{block.label}</span>
+                                  <span>
+                                    {block.label}
+                                    {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
+                                  </span>
                                 </label>
                               ) : (
-                                block.label
+                                <>
+                                  {block.label}
+                                  {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
+                                </>
                               )}
                             </div>
                           ))}
