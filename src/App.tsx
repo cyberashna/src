@@ -7,7 +7,7 @@ type Habit = {
   targetPerWeek: number;
   doneCount: number;
   lastDoneAt?: string; // ISO timestamp of last time it was done
-  frequency: "weekly" | "monthly";
+  frequency: "weekly" | "monthly" | "none";
 };
 
 type Theme = {
@@ -97,7 +97,7 @@ const App: React.FC = () => {
   const [addingThemeId, setAddingThemeId] = useState<string | null>(null);
   const [newThemeHabitName, setNewThemeHabitName] = useState("");
   const [newThemeHabitTarget, setNewThemeHabitTarget] = useState<number>(2);
-  const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"weekly" | "monthly">("weekly");
+  const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"weekly" | "monthly" | "none">("weekly");
 
   // For adding a new theme
   const [newThemeName, setNewThemeName] = useState("");
@@ -118,11 +118,15 @@ const App: React.FC = () => {
     themeId: string,
     name: string,
     targetPerWeek: number,
-    frequency: "weekly" | "monthly"
+    frequency: "weekly" | "monthly" | "none"
   ) => {
     const trimmed = name.trim();
-    if (!trimmed || !targetPerWeek || targetPerWeek <= 0) {
-      alert("Enter a habit name and a valid target.");
+    if (!trimmed) {
+      alert("Enter a habit name.");
+      return;
+    }
+    if (frequency !== "none" && (!targetPerWeek || targetPerWeek <= 0)) {
+      alert("Enter a valid target.");
       return;
     }
 
@@ -504,7 +508,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="habit-meta">
-            Target: {habit.targetPerWeek} / {habit.frequency}
+            {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
           </div>
 
           <span className="pill">Done: {habit.doneCount}</span>
@@ -537,23 +541,28 @@ const App: React.FC = () => {
                     <label className="small-label">Frequency</label>
                     <select
                       value={newThemeHabitFrequency}
-                      onChange={(e) => setNewThemeHabitFrequency(e.target.value as "weekly" | "monthly")}
+                      onChange={(e) => setNewThemeHabitFrequency(e.target.value as "weekly" | "monthly" | "none")}
                     >
                       <option value="weekly">Weekly</option>
                       <option value="monthly">Monthly</option>
+                      <option value="none">No Target</option>
                     </select>
-                    <label className="small-label">Target</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={newThemeHabitFrequency === "weekly" ? 14 : 28}
-                      value={newThemeHabitTarget}
-                      onChange={(e) =>
-                        setNewThemeHabitTarget(
-                          parseInt(e.target.value || "0", 10)
-                        )
-                      }
-                    />
+                    {newThemeHabitFrequency !== "none" && (
+                      <>
+                        <label className="small-label">Target</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={newThemeHabitFrequency === "weekly" ? 14 : 28}
+                          value={newThemeHabitTarget}
+                          onChange={(e) =>
+                            setNewThemeHabitTarget(
+                              parseInt(e.target.value || "0", 10)
+                            )
+                          }
+                        />
+                      </>
+                    )}
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                       <button
                         type="button"
