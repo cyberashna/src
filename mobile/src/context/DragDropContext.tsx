@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
-import { View, Text, StyleSheet, Dimensions } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { View, Text, StyleSheet } from 'react-native';
 
 type DragItem = {
   type: 'habit' | 'block';
@@ -57,30 +56,28 @@ export const DragDropProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         dragPosition,
       }}
     >
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        {children}
-        {isDragging && dragItem && (
-          <View
-            style={[
-              styles.dragOverlay,
-              {
-                left: dragPosition.x - 50,
-                top: dragPosition.y - 25,
-              },
-            ]}
-            pointerEvents="none"
-          >
-            <View style={styles.dragPreview}>
-              <Text style={styles.dragText} numberOfLines={2}>
-                {dragItem.label}
-              </Text>
-              {dragItem.themeName && (
-                <Text style={styles.dragTheme}>#{dragItem.themeName}</Text>
-              )}
-            </View>
+      {children}
+      {isDragging && dragItem && (
+        <View
+          style={[
+            styles.dragOverlay,
+            {
+              left: dragPosition.x - 50,
+              top: dragPosition.y - 25,
+            },
+          ]}
+          pointerEvents="none"
+        >
+          <View style={styles.dragPreview}>
+            <Text style={styles.dragText} numberOfLines={2}>
+              {dragItem.label}
+            </Text>
+            {dragItem.themeName && (
+              <Text style={styles.dragTheme}>#{dragItem.themeName}</Text>
+            )}
           </View>
-        )}
-      </GestureHandlerRootView>
+        </View>
+      )}
     </DragDropContext.Provider>
   );
 };

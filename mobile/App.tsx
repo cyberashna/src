@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from './src/lib/supabase';
 import { databaseService } from './src/services/database';
 import { Theme, Habit, Block, ViewMode } from './src/types';
@@ -395,10 +396,11 @@ export default function App() {
   const scheduledBlocks = blocks.filter((b) => b.location_type === 'slot');
 
   return (
-    <DragDropProvider>
-      <View style={styles.container}>
-        <StatusBar style="auto" />
-        <ScrollView style={styles.scrollView}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <DragDropProvider>
+        <View style={styles.container}>
+          <StatusBar style="auto" />
+          <ScrollView style={styles.scrollView}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Habit Planner</Text>
           <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
@@ -459,9 +461,10 @@ export default function App() {
             onToggleCompletion={handleToggleCompletion}
           />
         </View>
-      </ScrollView>
-      </View>
-    </DragDropProvider>
+        </ScrollView>
+        </View>
+      </DragDropProvider>
+    </GestureHandlerRootView>
   );
 }
 
