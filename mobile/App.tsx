@@ -17,6 +17,7 @@ import { AuthScreen } from './src/screens/AuthScreen';
 import { ThemeCard } from './src/components/ThemeCard';
 import { UnscheduledBlocks } from './src/components/UnscheduledBlocks';
 import { WeeklyPlanner } from './src/components/WeeklyPlanner';
+import { DragDropProvider } from './src/context/DragDropContext';
 
 export default function App() {
   const [session, setSession] = useState<any>(null);
@@ -33,8 +34,6 @@ export default function App() {
     'Night',
   ]);
   const [newThemeName, setNewThemeName] = useState('');
-  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
-  const [draggedItemType, setDraggedItemType] = useState<'habit' | 'block' | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -202,35 +201,16 @@ export default function App() {
     }
   };
 
-  const handleHabitLongPress = (habitId: string) => {
-    setDraggedItemId(habitId);
-    setDraggedItemType('habit');
-    Alert.alert(
-      'Schedule Habit',
-      'Habit selected. Now tap on a time slot in the planner to schedule it.',
-      [{ text: 'OK' }]
-    );
-  };
-
-  const handleBlockLongPress = (blockId: string) => {
-    setDraggedItemId(blockId);
-    setDraggedItemType('block');
-    Alert.alert(
-      'Move Block',
-      'Block selected. Now tap on a time slot in the planner to move it.',
-      [{ text: 'OK' }]
-    );
-  };
-
-  const handleSlotLongPress = async (dayIndex: number, timeIndex: number) => {
-    if (!draggedItemId || !draggedItemType || !session?.user) {
-      Alert.alert('Info', 'Long-press a habit or block first, then tap a slot.');
-      return;
-    }
+  const handleDrop = async (
+    item: { type: 'habit' | 'block'; id: string },
+    dayIndex: number,
+    timeIndex: number
+  ) => {
+    if (!session?.user) return;
 
     try {
-      if (draggedItemType === 'habit') {
-        const habit = habits.find((h) => h.id === draggedItemId);
+      if (item.type === 'habit') {
+        const habit = habits.find((h) => h.id === item.id);
         if (!habit) return;
 
         const theme = themes.find((t) => t.id === habit.theme_id);
@@ -257,8 +237,8 @@ export default function App() {
             time_index: timeIndex,
           },
         ]);
-      } else if (draggedItemType === 'block') {
-        await databaseService.updateBlock(draggedItemId, {
+      } else if (item.type === 'block') {
+        await databaseService.updateBlock(item.id, {
           location_type: 'slot',
           day_index: dayIndex,
           time_index: timeIndex,
@@ -266,7 +246,7 @@ export default function App() {
 
         setBlocks((prev) =>
           prev.map((b) =>
-            b.id === draggedItemId
+            b.id === item.id
               ? {
                   ...b,
                   location_type: 'slot',
@@ -277,9 +257,6 @@ export default function App() {
           )
         );
       }
-
-      setDraggedItemId(null);
-      setDraggedItemType(null);
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to schedule item');
     }
@@ -418,9 +395,10 @@ export default function App() {
   const scheduledBlocks = blocks.filter((b) => b.location_type === 'slot');
 
   return (
-    <View style={styles.container}>
-      <StatusBar style="auto" />
-      <ScrollView style={styles.scrollView}>
+    <DragDropProvider>
+      <View style={styles.container}>
+        <StatusBar style="auto" />
+        <ScrollView style={styles.scrollView}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Habit Planner</Text>
           <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
@@ -444,7 +422,6 @@ export default function App() {
               onAddHabit={handleAddHabit}
               onIncrementHabit={handleIncrementHabit}
               onDeleteHabit={handleDeleteHabit}
-              onHabitLongPress={handleHabitLongPress}
             />
           ))}
 
@@ -468,7 +445,6 @@ export default function App() {
           <UnscheduledBlocks
             blocks={unscheduledBlocks}
             onCreateBlock={handleCreateBlock}
-            onBlockLongPress={handleBlockLongPress}
           />
         </View>
 
@@ -479,12 +455,13 @@ export default function App() {
             bucketSlots={bucketSlots}
             onViewModeChange={setViewMode}
             onBlockTap={handleBlockTap}
-            onSlotLongPress={handleSlotLongPress}
+            onDrop={handleDrop}
             onToggleCompletion={handleToggleCompletion}
           />
         </View>
       </ScrollView>
-    </View>
+      </View>
+    </DragDropProvider>
   );
 }
 

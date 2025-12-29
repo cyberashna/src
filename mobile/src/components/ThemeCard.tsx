@@ -7,6 +7,7 @@ import {
   TextInput,
 } from 'react-native';
 import { Theme, Habit } from '../types';
+import { Draggable } from './Draggable';
 
 type ThemeCardProps = {
   theme: Theme;
@@ -19,7 +20,6 @@ type ThemeCardProps = {
   ) => void;
   onIncrementHabit: (habitId: string) => void;
   onDeleteHabit: (habitId: string) => void;
-  onHabitLongPress: (habitId: string) => void;
 };
 
 export const ThemeCard: React.FC<ThemeCardProps> = ({
@@ -28,7 +28,6 @@ export const ThemeCard: React.FC<ThemeCardProps> = ({
   onAddHabit,
   onIncrementHabit,
   onDeleteHabit,
-  onHabitLongPress,
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [habitName, setHabitName] = useState('');
@@ -62,37 +61,43 @@ export const ThemeCard: React.FC<ThemeCardProps> = ({
       )}
 
       {habits.map((habit) => (
-        <View key={habit.id} style={styles.habitItem}>
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() => onDeleteHabit(habit.id)}
-          >
-            <Text style={styles.deleteText}>×</Text>
-          </TouchableOpacity>
+        <Draggable
+          key={habit.id}
+          item={{
+            type: 'habit',
+            id: habit.id,
+            label: `Habit: ${habit.name}`,
+            themeName: theme.name,
+          }}
+        >
+          <View style={styles.habitItem}>
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={() => onDeleteHabit(habit.id)}
+            >
+              <Text style={styles.deleteText}>×</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.habitMain}
-            onLongPress={() => onHabitLongPress(habit.id)}
-            delayLongPress={500}
-          >
-            <Text style={styles.habitName}>{habit.name}</Text>
-            <Text style={styles.habitMeta}>
-              {habit.frequency === 'none'
-                ? 'No target'
-                : `Target: ${habit.target_per_week} / ${habit.frequency}`}
-            </Text>
-            <View style={styles.pill}>
-              <Text style={styles.pillText}>Done: {habit.done_count}</Text>
+            <View style={styles.habitMain}>
+              <Text style={styles.habitName}>{habit.name}</Text>
+              <Text style={styles.habitMeta}>
+                {habit.frequency === 'none'
+                  ? 'No target'
+                  : `Target: ${habit.target_per_week} / ${habit.frequency}`}
+              </Text>
+              <View style={styles.pill}>
+                <Text style={styles.pillText}>Done: {habit.done_count}</Text>
+              </View>
             </View>
-          </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.doneButton}
-            onPress={() => onIncrementHabit(habit.id)}
-          >
-            <Text style={styles.doneButtonText}>Done</Text>
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity
+              style={styles.doneButton}
+              onPress={() => onIncrementHabit(habit.id)}
+            >
+              <Text style={styles.doneButtonText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </Draggable>
       ))}
 
       {isAdding && (

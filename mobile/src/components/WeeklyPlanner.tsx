@@ -7,6 +7,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Block, ViewMode } from '../types';
+import { Droppable } from './Droppable';
 
 type WeeklyPlannerProps = {
   blocks: Block[];
@@ -14,7 +15,7 @@ type WeeklyPlannerProps = {
   bucketSlots: string[];
   onViewModeChange: (mode: ViewMode) => void;
   onBlockTap: (blockId: string) => void;
-  onSlotLongPress: (dayIndex: number, timeIndex: number) => void;
+  onDrop: (item: { type: 'habit' | 'block'; id: string }, dayIndex: number, timeIndex: number) => void;
   onToggleCompletion: (blockId: string) => void;
 };
 
@@ -46,7 +47,7 @@ export const WeeklyPlanner: React.FC<WeeklyPlannerProps> = ({
   bucketSlots,
   onViewModeChange,
   onBlockTap,
-  onSlotLongPress,
+  onDrop,
   onToggleCompletion,
 }) => {
   const slotLabels = viewMode === 'hourly' ? hourlySlots : bucketSlots;
@@ -103,8 +104,8 @@ export const WeeklyPlanner: React.FC<WeeklyPlannerProps> = ({
       </View>
 
       <Text style={styles.description}>
-        Long-press habit or block from the left, then tap a time slot to schedule
-        it. Tap blocks to toggle completion or remove them.
+        Drag habits or blocks from the left into time slots to schedule them. Tap
+        blocks to toggle completion or remove them.
       </Text>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={true}>
@@ -129,11 +130,10 @@ export const WeeklyPlanner: React.FC<WeeklyPlannerProps> = ({
                 {days.map((_, dayIndex) => {
                   const slotBlocks = getBlocksForSlot(dayIndex, timeIndex);
                   return (
-                    <TouchableOpacity
+                    <Droppable
                       key={`${dayIndex}-${timeIndex}`}
+                      onDrop={(item) => onDrop(item, dayIndex, timeIndex)}
                       style={styles.slotCell}
-                      onLongPress={() => onSlotLongPress(dayIndex, timeIndex)}
-                      delayLongPress={500}
                     >
                       {slotBlocks.map((block) => (
                         <TouchableOpacity
@@ -164,7 +164,7 @@ export const WeeklyPlanner: React.FC<WeeklyPlannerProps> = ({
                           )}
                         </TouchableOpacity>
                       ))}
-                    </TouchableOpacity>
+                    </Droppable>
                   );
                 })}
               </View>

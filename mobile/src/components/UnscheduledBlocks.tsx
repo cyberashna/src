@@ -8,17 +8,16 @@ import {
   ScrollView,
 } from 'react-native';
 import { Block } from '../types';
+import { Draggable } from './Draggable';
 
 type UnscheduledBlocksProps = {
   blocks: Block[];
   onCreateBlock: (label: string, hashtag?: string) => void;
-  onBlockLongPress: (blockId: string) => void;
 };
 
 export const UnscheduledBlocks: React.FC<UnscheduledBlocksProps> = ({
   blocks,
   onCreateBlock,
-  onBlockLongPress,
 }) => {
   const [blockLabel, setBlockLabel] = useState('');
   const [blockHashtag, setBlockHashtag] = useState('');
@@ -38,8 +37,8 @@ export const UnscheduledBlocks: React.FC<UnscheduledBlocksProps> = ({
     <View style={styles.container}>
       <Text style={styles.title}>Unscheduled blocks</Text>
       <Text style={styles.description}>
-        Create generic blocks (tasks, one-off plans), then long-press to drag them
-        into the weekly planner. For habits, long-press directly from the habit list.
+        Create generic blocks (tasks, one-off plans), then drag them into the weekly
+        planner. For habits, drag directly from the habit list.
       </Text>
 
       <View style={styles.inputContainer}>
@@ -62,21 +61,28 @@ export const UnscheduledBlocks: React.FC<UnscheduledBlocksProps> = ({
 
       <ScrollView style={styles.blockList} horizontal showsHorizontalScrollIndicator={false}>
         {blocks.map((block) => (
-          <TouchableOpacity
+          <Draggable
             key={block.id}
-            style={[
-              styles.block,
-              block.is_habit_block && styles.habitBlock,
-              block.completed && styles.blockDone,
-            ]}
-            onLongPress={() => onBlockLongPress(block.id)}
-            delayLongPress={500}
+            item={{
+              type: 'block',
+              id: block.id,
+              label: block.label,
+              themeName: block.hashtag,
+            }}
           >
-            <Text style={styles.blockText}>{block.label}</Text>
-            {block.hashtag && (
-              <Text style={styles.hashtagText}>#{block.hashtag}</Text>
-            )}
-          </TouchableOpacity>
+            <View
+              style={[
+                styles.block,
+                block.is_habit_block && styles.habitBlock,
+                block.completed && styles.blockDone,
+              ]}
+            >
+              <Text style={styles.blockText}>{block.label}</Text>
+              {block.hashtag && (
+                <Text style={styles.hashtagText}>#{block.hashtag}</Text>
+              )}
+            </View>
+          </Draggable>
         ))}
         {blocks.length === 0 && (
           <Text style={styles.emptyText}>No unscheduled blocks yet.</Text>
