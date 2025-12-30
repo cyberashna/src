@@ -87,85 +87,24 @@ export const listCalendars = async (): Promise<GoogleCalendar[]> => {
   }
 };
 
-export const createCalendarEvent = async (
+export const getCalendarEvents = async (
   calendarId: string,
-  summary: string,
-  startDateTime: string,
-  endDateTime: string,
-  description?: string
-): Promise<GoogleEvent> => {
+  startDate: Date,
+  endDate: Date
+): Promise<GoogleEvent[]> => {
   try {
-    const event = {
-      summary,
-      description,
-      start: {
-        dateTime: startDateTime,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-      end: {
-        dateTime: endDateTime,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-    };
-
-    const response = await window.gapi.client.calendar.events.insert({
+    const response = await window.gapi.client.calendar.events.list({
       calendarId,
-      resource: event,
+      timeMin: startDate.toISOString(),
+      timeMax: endDate.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 100,
     });
 
-    return response.result;
+    return response.result.items || [];
   } catch (error) {
-    console.error('Error creating calendar event:', error);
-    throw error;
-  }
-};
-
-export const updateCalendarEvent = async (
-  calendarId: string,
-  eventId: string,
-  summary: string,
-  startDateTime: string,
-  endDateTime: string,
-  description?: string
-): Promise<GoogleEvent> => {
-  try {
-    const event = {
-      summary,
-      description,
-      start: {
-        dateTime: startDateTime,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-      end: {
-        dateTime: endDateTime,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-    };
-
-    const response = await window.gapi.client.calendar.events.update({
-      calendarId,
-      eventId,
-      resource: event,
-    });
-
-    return response.result;
-  } catch (error) {
-    console.error('Error updating calendar event:', error);
-    throw error;
-  }
-};
-
-export const deleteCalendarEvent = async (
-  calendarId: string,
-  eventId: string
-): Promise<void> => {
-  try {
-    await window.gapi.client.calendar.events.delete({
-      calendarId,
-      eventId,
-    });
-  } catch (error) {
-    console.error('Error deleting calendar event:', error);
+    console.error('Error fetching calendar events:', error);
     throw error;
   }
 };
@@ -183,7 +122,6 @@ export const saveCalendarConnection = async (
       selected_calendar_id: calendarId,
       calendar_name: calendarName,
       google_refresh_token: accessToken,
-      sync_enabled: true,
       updated_at: new Date().toISOString(),
     })
     .select()
@@ -204,10 +142,10 @@ export const getCalendarConnection = async (userId: string) => {
   return data;
 };
 
-export const updateSyncEnabled = async (userId: string, enabled: boolean) => {
+export const updateLastSynced = async (userId: string) => {
   const { error } = await supabase
     .from('calendar_connections')
-    .update({ sync_enabled: enabled, updated_at: new Date().toISOString() })
+    .update({ last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('user_id', userId);
 
   if (error) throw error;
@@ -222,49 +160,6 @@ export const disconnectCalendar = async (userId: string) => {
   if (error) throw error;
 };
 
-export const saveEventMapping = async (
-  userId: string,
-  blockId: string,
-  googleEventId: string,
-  calendarId: string
-) => {
-  const { data, error } = await supabase
-    .from('calendar_event_mappings')
-    .upsert({
-      user_id: userId,
-      block_id: blockId,
-      google_event_id: googleEventId,
-      calendar_id: calendarId,
-      last_synced_at: new Date().toISOString(),
-    })
-    .select()
-    .maybeSingle();
-
-  if (error) throw error;
-  return data;
-};
-
-export const getEventMapping = async (userId: string, blockId: string) => {
-  const { data, error } = await supabase
-    .from('calendar_event_mappings')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('block_id', blockId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data;
-};
-
-export const deleteEventMapping = async (userId: string, blockId: string) => {
-  const { error } = await supabase
-    .from('calendar_event_mappings')
-    .delete()
-    .eq('user_id', userId)
-    .eq('block_id', blockId);
-
-  if (error) throw error;
-};
 
 declare global {
   interface Window {

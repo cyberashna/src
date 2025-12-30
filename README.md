@@ -19,11 +19,12 @@ A weekly habit planner with Google Calendar integration to help you track and sc
 - Schedule both habit blocks and generic task blocks
 
 ### Google Calendar Integration
-- Automatic sync of scheduled blocks to Google Calendar
-- Real-time event creation, updates, and deletion
-- Select which calendar to sync with
-- Toggle sync on/off as needed
+- Import events FROM Google Calendar into your planner
+- One-way import (read-only access to your calendar)
+- Import current week's events with one click
+- Select which calendar to import from
 - Visual calendar settings modal
+- Imported events tagged for easy identification
 
 ### Unscheduled Blocks
 - Create generic task blocks with optional hashtags
@@ -91,13 +92,13 @@ Quick steps:
 3. Click "Add block"
 4. Drag the block to schedule it
 
-### Using Google Calendar Sync
+### Using Google Calendar Import
 1. Click the calendar icon (📅) in the bottom-right
 2. Click "Connect Google Calendar"
-3. Sign in with Google and grant permissions
+3. Sign in with Google and grant permissions (read-only)
 4. Select a calendar from the dropdown
-5. Enable "automatic sync"
-6. Scheduled blocks will now sync to Google Calendar automatically
+5. Click "Import This Week's Events"
+6. Events appear as blocks in your weekly planner
 
 ### Managing Your Schedule
 - **Move blocks**: Drag them to different time slots
@@ -153,8 +154,10 @@ The app uses Supabase with the following tables:
 
 ## Troubleshooting
 
-### Calendar not syncing
-- Check that you've enabled automatic sync in settings
+### Calendar not importing
+- Check that you've connected a calendar
+- Verify your calendar has events this week
+- Events must have specific start times (not all-day events)
 - Verify Google Calendar API is enabled in Google Cloud Console
 - Check browser console for error messages
 
@@ -171,11 +174,12 @@ The app uses Supabase with the following tables:
 ## Future Enhancements
 
 Potential features for future development:
-- Two-way sync (import Google Calendar events)
+- Automatic scheduled imports (periodic refresh)
 - Multi-week view
 - Habit statistics and analytics
 - Mobile app (React Native version in `/mobile`)
 - Recurring habit templates
+- Export planner to Google Calendar (two-way sync)
 - Social sharing features
 
 ## License

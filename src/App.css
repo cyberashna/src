@@ -599,6 +599,16 @@ table.planner td.slot.drag-over {
   margin-bottom: 12px;
 }
 
+.success-message {
+  padding: 12px;
+  background: #e7f9ed;
+  border: 1px solid #a3d9b1;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #0d5c1f;
+  margin-bottom: 12px;
+}
+
 .connected-state,
 .calendar-selection,
 .connect-state {

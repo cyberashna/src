@@ -15,7 +15,6 @@ export type CalendarConnection = {
   google_refresh_token: string | null;
   selected_calendar_id: string | null;
   calendar_name: string | null;
-  sync_enabled: boolean;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;

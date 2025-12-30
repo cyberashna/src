@@ -1,6 +1,6 @@
 # Google Calendar Integration Setup
 
-This guide explains how to set up Google Calendar integration for the Habit Planner app.
+This guide explains how to set up Google Calendar integration for the Habit Planner app to import events from your calendar.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ This guide explains how to set up Google Calendar integration for the Habit Plan
 3. If prompted, configure the OAuth consent screen:
    - Choose "External" user type
    - Fill in the required information (app name, user support email, developer email)
-   - Add the scope: `https://www.googleapis.com/auth/calendar`
+   - Add the scope: `https://www.googleapis.com/auth/calendar.readonly`
    - Add test users if needed
    - Save and continue
 4. Create OAuth client ID:
@@ -87,17 +87,17 @@ This guide explains how to set up Google Calendar integration for the Habit Plan
 6. Grant the requested permissions
 7. Select a calendar from the dropdown
 8. Click "Connect"
+9. Click "Import This Week's Events" to import events
 
 ## How It Works
 
-- **Automatic Sync**: When enabled, scheduled habit blocks are automatically synced to your Google Calendar
-- **Event Creation**: Each scheduled block creates a calendar event with:
-  - Title: The block/habit name
-  - Start time: Based on the time slot
-  - Duration: 1 hour (default)
-  - Description: Includes hashtags if present
-- **Event Updates**: Moving a block updates the corresponding calendar event
-- **Event Deletion**: Removing a block from the schedule deletes the calendar event
+- **One-Way Import**: Events are imported FROM Google Calendar into your planner
+- **Manual Import**: Click the import button to fetch events from the current week
+- **Event Mapping**: Each calendar event is converted to a block with:
+  - Title: The event name
+  - Time slot: Matched to the nearest hourly slot
+  - Hashtag: Tagged as "imported" for easy identification
+- **No Modifications**: Your Google Calendar is never modified by this app
 
 ## Troubleshooting
 
@@ -111,17 +111,31 @@ This guide explains how to set up Google Calendar integration for the Habit Plan
 - Check that authorized JavaScript origins match your domain
 - Clear browser cache and try again
 
-### Events not syncing
-- Ensure "Enable automatic sync" is checked in settings
-- Check that you've granted calendar permissions
+### Events not importing
+- Check that you've selected a calendar
+- Verify the calendar has events this week
+- Events must have specific start times (all-day events are not imported)
 - Look for error messages in the browser console
+
+### Events appear in wrong time slots
+- The app matches events to the nearest hourly slot (6 AM - 10 PM)
+- Events outside this range won't be imported
+- Check your timezone settings in Google Calendar
 
 ## Security Notes
 
 - Never commit your `.env` file to version control
 - Keep your API key and Client ID secure
 - Use API restrictions to limit key usage
-- Regularly review OAuth consent screen settings
+- The app only requests READ-ONLY access to your calendar
+- No data is sent to external servers (except Google)
+
+## Imported Event Management
+
+- Imported events have the hashtag "imported"
+- You can move or delete imported blocks like any other block
+- Re-importing will create duplicate blocks (remove old ones first)
+- Imported blocks are not linked to calendar events
 
 ## Support
 
@@ -129,3 +143,4 @@ For issues or questions:
 - Check the browser console for error messages
 - Review the Supabase logs
 - Ensure all environment variables are set correctly
+- Verify you have events in your Google Calendar for this week

@@ -5,24 +5,52 @@ import {
   listCalendars,
   saveCalendarConnection,
   getCalendarConnection,
-  updateSyncEnabled,
+  updateLastSynced,
   disconnectCalendar,
   GoogleCalendar,
 } from '../services/googleCalendar';
+import { importCalendarEvents } from '../services/calendarSync';
 import type { CalendarConnection } from '../lib/supabase';
+import type { Block } from '../App';
 
 type CalendarSettingsProps = {
   userId: string | null;
   onClose: () => void;
+  onImportEvents: (blocks: Block[]) => void;
 };
 
-export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onClose }) => {
+const hourlySlots = [
+  "6:00 AM",
+  "7:00 AM",
+  "8:00 AM",
+  "9:00 AM",
+  "10:00 AM",
+  "11:00 AM",
+  "12:00 PM",
+  "1:00 PM",
+  "2:00 PM",
+  "3:00 PM",
+  "4:00 PM",
+  "5:00 PM",
+  "6:00 PM",
+  "7:00 PM",
+  "8:00 PM",
+  "9:00 PM",
+  "10:00 PM",
+];
+
+export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
+  userId,
+  onClose,
+  onImportEvents
+}) => {
   const [loading, setLoading] = useState(false);
   const [connection, setConnection] = useState<CalendarConnection | null>(null);
   const [calendars, setCalendars] = useState<GoogleCalendar[]>([]);
   const [selectedCalendarId, setSelectedCalendarId] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [gapiReady, setGapiReady] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string>('');
 
   useEffect(() => {
     initGoogleCalendar()
@@ -93,6 +121,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onCl
 
       await loadConnection();
       setCalendars([]);
+      setSuccessMessage('Calendar connected successfully!');
+      setTimeout(() => setSuccessMessage(''), 3000);
     } catch (err: any) {
       console.error('Error saving calendar:', err);
       setError(err.message || 'Failed to save calendar');
@@ -101,23 +131,48 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onCl
     }
   };
 
-  const handleToggleSync = async () => {
-    if (!userId || !connection) return;
+  const handleImportEvents = async () => {
+    if (!userId || !connection?.selected_calendar_id) return;
 
     setLoading(true);
+    setError('');
+    setSuccessMessage('');
+
     try {
-      await updateSyncEnabled(userId, !connection.sync_enabled);
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      const dayOfWeek = now.getDay();
+      const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      startOfWeek.setDate(now.getDate() - diff);
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 7);
+      endOfWeek.setHours(23, 59, 59, 999);
+
+      const importedBlocks = await importCalendarEvents(
+        connection.selected_calendar_id,
+        startOfWeek,
+        endOfWeek,
+        hourlySlots
+      );
+
+      onImportEvents(importedBlocks);
+      await updateLastSynced(userId);
       await loadConnection();
+
+      setSuccessMessage(`Successfully imported ${importedBlocks.length} events from this week!`);
+      setTimeout(() => setSuccessMessage(''), 5000);
     } catch (err: any) {
-      console.error('Error toggling sync:', err);
-      setError(err.message || 'Failed to toggle sync');
+      console.error('Error importing events:', err);
+      setError(err.message || 'Failed to import events');
     } finally {
       setLoading(false);
     }
   };
 
   const handleDisconnect = async () => {
-    if (!userId || !window.confirm('Disconnect Google Calendar? Event mappings will be deleted.')) {
+    if (!userId || !window.confirm('Disconnect Google Calendar?')) {
       return;
     }
 
@@ -127,6 +182,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onCl
       setConnection(null);
       setCalendars([]);
       setSelectedCalendarId('');
+      setSuccessMessage('');
     } catch (err: any) {
       console.error('Error disconnecting calendar:', err);
       setError(err.message || 'Failed to disconnect calendar');
@@ -139,7 +195,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onCl
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Google Calendar Settings</h2>
+          <h2>Google Calendar Import</h2>
           <button className="modal-close" onClick={onClose}>
             ×
           </button>
@@ -153,6 +209,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onCl
           )}
 
           {error && <div className="error-message">{error}</div>}
+          {successMessage && <div className="success-message">{successMessage}</div>}
 
           {connection ? (
             <div className="connected-state">
@@ -161,32 +218,31 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onCl
                 <div className="connection-value">{connection.calendar_name}</div>
               </div>
 
-              <div className="sync-toggle">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={connection.sync_enabled}
-                    onChange={handleToggleSync}
-                    disabled={loading}
-                  />
-                  <span>Enable automatic sync</span>
-                </label>
-              </div>
-
               {connection.last_synced_at && (
                 <div className="sync-info">
-                  Last synced: {new Date(connection.last_synced_at).toLocaleString()}
+                  Last imported: {new Date(connection.last_synced_at).toLocaleString()}
                 </div>
               )}
 
-              <button
-                className="secondary"
-                onClick={handleDisconnect}
-                disabled={loading}
-                style={{ marginTop: 12 }}
-              >
-                {loading ? 'Disconnecting...' : 'Disconnect Calendar'}
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                <button
+                  onClick={handleImportEvents}
+                  disabled={loading}
+                >
+                  {loading ? 'Importing...' : 'Import This Week\'s Events'}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={handleDisconnect}
+                  disabled={loading}
+                >
+                  {loading ? 'Disconnecting...' : 'Disconnect Calendar'}
+                </button>
+              </div>
+
+              <p className="small-text" style={{ marginTop: 8 }}>
+                Events from your Google Calendar will be imported as blocks in your weekly planner.
+              </p>
             </div>
           ) : calendars.length > 0 ? (
             <div className="calendar-selection">
@@ -223,8 +279,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({ userId, onCl
           ) : (
             <div className="connect-state">
               <p>
-                Connect your Google Calendar to automatically sync your scheduled
-                habit blocks as calendar events.
+                Connect your Google Calendar to import events from your calendar
+                into your weekly habit planner.
               </p>
               <button
                 onClick={handleConnect}

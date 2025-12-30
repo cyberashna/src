@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import "./App.css";
 import { CalendarSettings } from "./components/CalendarSettings";
-import { syncBlockToCalendar, deleteBlockFromCalendar } from "./services/calendarSync";
 
 type Habit = {
   id: string;
@@ -265,7 +264,7 @@ const App: React.FC = () => {
     setBlockHashtag("");
   };
 
-  const createHabitBlockAtSlot = async (
+  const createHabitBlockAtSlot = (
     habitId: string,
     dayIndex: number,
     timeIndex: number
@@ -284,21 +283,6 @@ const App: React.FC = () => {
     };
 
     setBlocks((prev) => [...prev, newBlock]);
-
-    if (userId) {
-      try {
-        await syncBlockToCalendar(
-          userId,
-          newBlock,
-          dayIndex,
-          timeIndex,
-          habit.name,
-          hourlySlots
-        );
-      } catch (error) {
-        console.error('Failed to sync habit block to calendar:', error);
-      }
-    }
   };
 
   const handleDragStart = (blockId: string) => {
@@ -319,7 +303,7 @@ const App: React.FC = () => {
     setDragHabitId(null);
   };
 
-  const moveBlockToSlot = async (
+  const moveBlockToSlot = (
     blockId: string,
     dayIndex: number,
     timeIndex: number
@@ -331,53 +315,18 @@ const App: React.FC = () => {
           : b
       )
     );
-
-    if (userId) {
-      const block = blocks.find((b) => b.id === blockId);
-      if (block) {
-        const habit = block.habitId ? allHabits.find((h) => h.id === block.habitId) : undefined;
-        try {
-          await syncBlockToCalendar(
-            userId,
-            block,
-            dayIndex,
-            timeIndex,
-            habit?.name,
-            hourlySlots
-          );
-        } catch (error) {
-          console.error('Failed to sync block to calendar:', error);
-        }
-      }
-    }
   };
 
-  const moveBlockToUnscheduled = async (blockId: string) => {
+  const moveBlockToUnscheduled = (blockId: string) => {
     setBlocks((prev) =>
       prev.map((b) =>
         b.id === blockId ? { ...b, location: { type: "unscheduled" } } : b
       )
     );
-
-    if (userId) {
-      try {
-        await deleteBlockFromCalendar(userId, blockId);
-      } catch (error) {
-        console.error('Failed to delete block from calendar:', error);
-      }
-    }
   };
 
-  const deleteBlock = async (blockId: string) => {
+  const deleteBlock = (blockId: string) => {
     setBlocks((prev) => prev.filter((b) => b.id !== blockId));
-
-    if (userId) {
-      try {
-        await deleteBlockFromCalendar(userId, blockId);
-      } catch (error) {
-        console.error('Failed to delete block from calendar:', error);
-      }
-    }
   };
 
   const handleBlockDoubleClick = (blockId: string) => {
@@ -491,7 +440,7 @@ const App: React.FC = () => {
     );
   };
 
-  const handleSlotDrop = async (
+  const handleSlotDrop = (
     e: React.DragEvent<HTMLTableCellElement>,
     dayIndex: number,
     timeIndex: number
@@ -500,9 +449,9 @@ const App: React.FC = () => {
     e.currentTarget.classList.remove("drag-over");
 
     if (dragBlockId) {
-      await moveBlockToSlot(dragBlockId, dayIndex, timeIndex);
+      moveBlockToSlot(dragBlockId, dayIndex, timeIndex);
     } else if (dragHabitId) {
-      await createHabitBlockAtSlot(dragHabitId, dayIndex, timeIndex);
+      createHabitBlockAtSlot(dragHabitId, dayIndex, timeIndex);
     }
   };
 
@@ -903,6 +852,9 @@ const App: React.FC = () => {
         <CalendarSettings
           userId={userId}
           onClose={() => setShowCalendarSettings(false)}
+          onImportEvents={(importedBlocks) => {
+            setBlocks((prev) => [...prev, ...importedBlocks]);
+          }}
         />
       )}
     </div>
