@@ -29,9 +29,11 @@ let gapiInited = false;
 let gisInited = false;
 
 export const initGoogleCalendar = async (): Promise<void> => {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_API_KEY) {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_API_KEY ||
+      GOOGLE_CLIENT_ID.includes('your_actual') ||
+      GOOGLE_API_KEY.includes('your_actual')) {
     throw new Error(
-      'Google Calendar credentials missing. Please add VITE_GOOGLE_CLIENT_ID and VITE_GOOGLE_API_KEY to your .env file. See GOOGLE_CALENDAR_SETUP.md for setup instructions.'
+      'Google Calendar credentials not configured. Please add valid VITE_GOOGLE_CLIENT_ID and VITE_GOOGLE_API_KEY to your .env file. See GOOGLE_CALENDAR_SETUP.md for setup instructions.'
     );
   }
 
