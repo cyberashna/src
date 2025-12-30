@@ -1,12 +1,14 @@
 import React, { useState } from "react";
 import "./App.css";
+import { CalendarSettings } from "./components/CalendarSettings";
+import { syncBlockToCalendar, deleteBlockFromCalendar } from "./services/calendarSync";
 
 type Habit = {
   id: string;
   name: string;
   targetPerWeek: number;
   doneCount: number;
-  lastDoneAt?: string; // ISO timestamp of last time it was done
+  lastDoneAt?: string;
   frequency: "weekly" | "monthly" | "none";
 };
 
@@ -20,14 +22,14 @@ type BlockLocation =
   | { type: "unscheduled" }
   | { type: "slot"; dayIndex: number; timeIndex: number };
 
-type Block = {
+export type Block = {
   id: string;
   label: string;
   isHabitBlock: boolean;
   location: BlockLocation;
-  habitId?: string; // link back to a habit (for habit blocks)
-  completed?: boolean; // whether this block instance is checked off
-  hashtag?: string; // hashtag for grouping blocks
+  habitId?: string;
+  completed?: boolean;
+  hashtag?: string;
 };
 
 
@@ -106,6 +108,10 @@ const App: React.FC = () => {
   // For unscheduled generic blocks (non-habit tasks)
   const [blockLabel, setBlockLabel] = useState("");
   const [blockHashtag, setBlockHashtag] = useState("");
+
+  // Calendar settings
+  const [showCalendarSettings, setShowCalendarSettings] = useState(false);
+  const [userId] = useState<string | null>(null);
 
   // Flatten all habits (for helper functions)
   const allHabits = themes.flatMap((theme) =>
@@ -259,8 +265,7 @@ const App: React.FC = () => {
     setBlockHashtag("");
   };
 
-  // Used when dragging directly from a habit into a slot
-  const createHabitBlockAtSlot = (
+  const createHabitBlockAtSlot = async (
     habitId: string,
     dayIndex: number,
     timeIndex: number
@@ -279,6 +284,21 @@ const App: React.FC = () => {
     };
 
     setBlocks((prev) => [...prev, newBlock]);
+
+    if (userId) {
+      try {
+        await syncBlockToCalendar(
+          userId,
+          newBlock,
+          dayIndex,
+          timeIndex,
+          habit.name,
+          hourlySlots
+        );
+      } catch (error) {
+        console.error('Failed to sync habit block to calendar:', error);
+      }
+    }
   };
 
   const handleDragStart = (blockId: string) => {
@@ -299,7 +319,7 @@ const App: React.FC = () => {
     setDragHabitId(null);
   };
 
-  const moveBlockToSlot = (
+  const moveBlockToSlot = async (
     blockId: string,
     dayIndex: number,
     timeIndex: number
@@ -311,18 +331,53 @@ const App: React.FC = () => {
           : b
       )
     );
+
+    if (userId) {
+      const block = blocks.find((b) => b.id === blockId);
+      if (block) {
+        const habit = block.habitId ? allHabits.find((h) => h.id === block.habitId) : undefined;
+        try {
+          await syncBlockToCalendar(
+            userId,
+            block,
+            dayIndex,
+            timeIndex,
+            habit?.name,
+            hourlySlots
+          );
+        } catch (error) {
+          console.error('Failed to sync block to calendar:', error);
+        }
+      }
+    }
   };
 
-  const moveBlockToUnscheduled = (blockId: string) => {
+  const moveBlockToUnscheduled = async (blockId: string) => {
     setBlocks((prev) =>
       prev.map((b) =>
         b.id === blockId ? { ...b, location: { type: "unscheduled" } } : b
       )
     );
+
+    if (userId) {
+      try {
+        await deleteBlockFromCalendar(userId, blockId);
+      } catch (error) {
+        console.error('Failed to delete block from calendar:', error);
+      }
+    }
   };
 
-  const deleteBlock = (blockId: string) => {
+  const deleteBlock = async (blockId: string) => {
     setBlocks((prev) => prev.filter((b) => b.id !== blockId));
+
+    if (userId) {
+      try {
+        await deleteBlockFromCalendar(userId, blockId);
+      } catch (error) {
+        console.error('Failed to delete block from calendar:', error);
+      }
+    }
   };
 
   const handleBlockDoubleClick = (blockId: string) => {
@@ -436,7 +491,7 @@ const App: React.FC = () => {
     );
   };
 
-  const handleSlotDrop = (
+  const handleSlotDrop = async (
     e: React.DragEvent<HTMLTableCellElement>,
     dayIndex: number,
     timeIndex: number
@@ -445,9 +500,9 @@ const App: React.FC = () => {
     e.currentTarget.classList.remove("drag-over");
 
     if (dragBlockId) {
-      moveBlockToSlot(dragBlockId, dayIndex, timeIndex);
+      await moveBlockToSlot(dragBlockId, dayIndex, timeIndex);
     } else if (dragHabitId) {
-      createHabitBlockAtSlot(dragHabitId, dayIndex, timeIndex);
+      await createHabitBlockAtSlot(dragHabitId, dayIndex, timeIndex);
     }
   };
 
@@ -461,9 +516,10 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="app">
-      {/* LEFT COLUMN: THEMES + HABITS + BLOCKS */}
-      <div className="left-column">
+    <>
+      <div className="app">
+        {/* LEFT COLUMN: THEMES + HABITS + BLOCKS */}
+        <div className="left-column">
         <div className="card">
           <div className="top-row">
             <h2>Habit themes</h2>
@@ -475,10 +531,6 @@ const App: React.FC = () => {
               New week (reset)
             </button>
           </div>
-          <p className="small-label">
-            Group habits by theme (Household, Creativity, etc). Each habit is
-            tracked with a weekly or monthly target.
-          </p>
 
           <div className="theme-list">
             {themes.map((theme) => (
@@ -498,10 +550,6 @@ const App: React.FC = () => {
                     Add habit
                   </button>
                 </div>
-
-                {theme.habits.length === 0 && (
-                  <p className="small-label">No habits yet in this theme.</p>
-                )}
 
                 <div className="habit-list theme-habit-list">
   {theme.habits.map((habit) => {
@@ -643,10 +691,6 @@ const App: React.FC = () => {
 
         <div className="card">
           <h3>Unscheduled blocks</h3>
-          <p className="small-label" style={{ marginBottom: 6 }}>
-            Create generic blocks (tasks, one-off plans), then drag them into
-            the weekly planner. For habits, drag directly from the habit list.
-          </p>
 
           <div className="blocks-panel">
             <div className="inline">
@@ -694,14 +738,7 @@ const App: React.FC = () => {
                   {block.hashtag && <span style={{ marginLeft: 8, opacity: 0.7, fontSize: 12 }}>#{block.hashtag}</span>}
                 </div>
               ))}
-              {unscheduledBlocks.length === 0 && (
-                <span className="small-label">No unscheduled blocks yet.</span>
-              )}
             </div>
-
-            <small className="small-label" style={{ marginTop: 4 }}>
-              Double-click a regular block in the grid to send it back here. Habit blocks are deleted on double-click.
-            </small>
           </div>
         </div>
       </div>
@@ -746,18 +783,8 @@ const App: React.FC = () => {
             )}
           </div>
 
-          <p className="small-label">
-            Drag habit handles from the left to schedule them, then check them
-            off from here when you’re done. This updates the habit counts on the
-            left.
-          </p>
-
           {viewMode === "buckets" && showBucketConfig && (
             <div className="bucket-config">
-              <p className="small-label">
-                Customize your time buckets (e.g. just “Morning” and
-                “Evening”). Blocks stay attached to their row by position.
-              </p>
               {bucketSlots.map((name, idx) => (
                 <div key={idx} className="bucket-row">
                   <input
@@ -863,7 +890,23 @@ const App: React.FC = () => {
           </table>
         </div>
       </div>
+
+      <button
+        className="settings-btn"
+        onClick={() => setShowCalendarSettings(true)}
+        title="Calendar Settings"
+      >
+        📅
+      </button>
+
+      {showCalendarSettings && (
+        <CalendarSettings
+          userId={userId}
+          onClose={() => setShowCalendarSettings(false)}
+        />
+      )}
     </div>
+    </>
   );
 };
 
