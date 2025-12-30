@@ -57,7 +57,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
       .then(() => setGapiReady(true))
       .catch((err) => {
         console.error('Failed to initialize Google Calendar API:', err);
-        setError('Failed to initialize Google Calendar');
+        setError(err.message || 'Failed to initialize Google Calendar');
       });
 
     if (userId) {
@@ -288,7 +288,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
               >
                 {loading ? 'Connecting...' : 'Connect Google Calendar'}
               </button>
-              {!gapiReady && <p className="small-text">Initializing...</p>}
+              {!gapiReady && !error && <p className="small-text">Initializing...</p>}
             </div>
           )}
         </div>

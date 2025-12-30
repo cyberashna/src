@@ -29,9 +29,16 @@ let gapiInited = false;
 let gisInited = false;
 
 export const initGoogleCalendar = async (): Promise<void> => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_API_KEY) {
+    throw new Error(
+      'Google Calendar credentials missing. Please add VITE_GOOGLE_CLIENT_ID and VITE_GOOGLE_API_KEY to your .env file. See GOOGLE_CALENDAR_SETUP.md for setup instructions.'
+    );
+  }
+
   return new Promise((resolve, reject) => {
     const script1 = document.createElement('script');
     script1.src = 'https://apis.google.com/js/api.js';
+    script1.onerror = () => reject(new Error('Failed to load Google API script'));
     script1.onload = () => {
       window.gapi.load('client', async () => {
         try {
@@ -50,6 +57,7 @@ export const initGoogleCalendar = async (): Promise<void> => {
 
     const script2 = document.createElement('script');
     script2.src = 'https://accounts.google.com/gsi/client';
+    script2.onerror = () => reject(new Error('Failed to load Google Identity Services script'));
     script2.onload = () => {
       tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
