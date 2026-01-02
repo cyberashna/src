@@ -36,6 +36,29 @@ export type Block = {
   updated_at: string;
 };
 
+export type ThemeGoal = {
+  id: string;
+  theme_id: string;
+  user_id: string;
+  goal_type: "total_completions" | "unique_daily_habits";
+  target_count: number;
+  frequency: "daily" | "weekly";
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ThemeGoalCompletion = {
+  id: string;
+  theme_goal_id: string;
+  user_id: string;
+  habit_id: string;
+  completed_date: string;
+  completed_at: string;
+  created_at: string;
+};
+
 export const database = {
   themes: {
     async getAll(userId: string) {
@@ -206,6 +229,107 @@ export const database = {
         .eq("user_id", userId);
 
       if (error) throw error;
+    },
+  },
+
+  themeGoals: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as ThemeGoal[];
+    },
+
+    async getByTheme(themeId: string) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .select("*")
+        .eq("theme_id", themeId)
+        .eq("is_active", true)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as ThemeGoal[];
+    },
+
+    async create(
+      userId: string,
+      themeId: string,
+      goalType: "total_completions" | "unique_daily_habits",
+      targetCount: number,
+      frequency: "daily" | "weekly",
+      description?: string
+    ) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .insert({
+          user_id: userId,
+          theme_id: themeId,
+          goal_type: goalType,
+          target_count: targetCount,
+          frequency: frequency,
+          description: description || null,
+          is_active: true,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as ThemeGoal;
+    },
+
+    async update(id: string, updates: Partial<ThemeGoal>) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as ThemeGoal;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase.from("theme_goals").delete().eq("id", id);
+
+      if (error) throw error;
+    },
+
+    async getCompletionCount(goalId: string, startDate: string) {
+      const { data, error } = await supabase
+        .from("theme_goal_completions")
+        .select("*")
+        .eq("theme_goal_id", goalId)
+        .gte("completed_date", startDate);
+
+      if (error) throw error;
+      return data as ThemeGoalCompletion[];
+    },
+
+    async recordCompletion(
+      userId: string,
+      goalId: string,
+      habitId: string,
+      completedDate: string
+    ) {
+      const { data, error } = await supabase
+        .from("theme_goal_completions")
+        .insert({
+          user_id: userId,
+          theme_goal_id: goalId,
+          habit_id: habitId,
+          completed_date: completedDate,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as ThemeGoalCompletion;
     },
   },
 };

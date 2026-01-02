@@ -3,6 +3,7 @@ import "./App.css";
 import { supabase } from "./lib/supabase";
 import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
+import { ThemeGoals } from "./components/ThemeGoals";
 import { database } from "./services/database";
 import type { User } from "@supabase/supabase-js";
 
@@ -224,7 +225,7 @@ const App: React.FC = () => {
 
   const incrementHabit = async (habitId: string) => {
     const habit = allHabits.find((h) => h.id === habitId);
-    if (!habit) return;
+    if (!habit || !user) return;
 
     const now = new Date().toISOString();
     const newCount = habit.doneCount + 1;
@@ -245,6 +246,25 @@ const App: React.FC = () => {
           ),
         }))
       );
+
+      const theme = themes.find((t) => t.habits.some((h) => h.id === habitId));
+      if (theme) {
+        const goals = await database.themeGoals.getByTheme(theme.id);
+        const completedDate = now.split('T')[0];
+
+        for (const goal of goals) {
+          try {
+            await database.themeGoals.recordCompletion(
+              user.id,
+              goal.id,
+              habitId,
+              completedDate
+            );
+          } catch (error) {
+            console.error("Error recording goal completion:", error);
+          }
+        }
+      }
     } catch (error) {
       console.error("Error updating habit:", error);
     }
@@ -538,6 +558,25 @@ const App: React.FC = () => {
             ),
           }))
         );
+
+        const theme = themes.find((t) => t.habits.some((h) => h.id === block.habitId));
+        if (theme && user) {
+          const goals = await database.themeGoals.getByTheme(theme.id);
+          const completedDate = now.split('T')[0];
+
+          for (const goal of goals) {
+            try {
+              await database.themeGoals.recordCompletion(
+                user.id,
+                goal.id,
+                block.habitId!,
+                completedDate
+              );
+            } catch (error) {
+              console.error("Error recording goal completion:", error);
+            }
+          }
+        }
       } else {
         await database.habits.update(block.habitId, {
           done_count: nextCount,
@@ -826,6 +865,11 @@ const App: React.FC = () => {
                           </div>
                         </div>
                       )}
+
+                      <ThemeGoals
+                        themeId={theme.id}
+                        userId={user.id}
+                      />
                     </div>
                   ))}
                 </div>
