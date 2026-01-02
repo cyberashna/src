@@ -84,6 +84,7 @@ const App: React.FC = () => {
   const [newThemeHabitName, setNewThemeHabitName] = useState("");
   const [newThemeHabitTarget, setNewThemeHabitTarget] = useState<number>(2);
   const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"weekly" | "monthly" | "none">("weekly");
+  const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
 
   const [newThemeName, setNewThemeName] = useState("");
 
@@ -337,6 +338,18 @@ const App: React.FC = () => {
       console.error("Error resetting habits:", error);
       alert("Failed to reset habits");
     }
+  };
+
+  const toggleHabitExpanded = (habitId: string) => {
+    setExpandedHabits((prev) => {
+      const next = new Set(prev);
+      if (next.has(habitId)) {
+        next.delete(habitId);
+      } else {
+        next.add(habitId);
+      }
+      return next;
+    });
   };
 
   const addTheme = async () => {
@@ -757,42 +770,94 @@ const App: React.FC = () => {
 
                       <div className="habit-list theme-habit-list">
                         {theme.habits.map((habit) => {
+                          const isExpanded = expandedHabits.has(habit.id);
                           return (
                             <div key={habit.id} className="habit-item">
                               <button
-                                className="habit-delete-x"
-                                onClick={() => deleteHabit(habit.id)}
-                                title="Delete habit"
+                                onClick={() => toggleHabitExpanded(habit.id)}
+                                style={{
+                                  position: "absolute",
+                                  left: "8px",
+                                  top: "50%",
+                                  transform: "translateY(-50%)",
+                                  background: "none",
+                                  border: "none",
+                                  cursor: "pointer",
+                                  fontSize: "16px",
+                                  color: "#999",
+                                  padding: "4px",
+                                  lineHeight: 1,
+                                  transition: "transform 0.2s ease"
+                                }}
+                                title={isExpanded ? "Collapse" : "Expand"}
                               >
-                                ×
+                                <span style={{
+                                  display: "inline-block",
+                                  transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                                  transition: "transform 0.2s ease"
+                                }}>
+                                  ▶
+                                </span>
                               </button>
 
-                              <div className="habit-main">
-                                <div
-                                  className="habit-drag-area"
-                                  draggable
-                                  onDragStart={() => handleHabitDragStart(habit.id)}
-                                  onDragEnd={handleHabitDragEnd}
-                                  title="Drag to schedule this habit"
-                                >
-                                  <span className="habit-name-draggable">{habit.name}</span>
+                              {!isExpanded && (
+                                <div style={{
+                                  paddingLeft: "28px",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  width: "100%",
+                                  minHeight: "48px"
+                                }}>
+                                  <div>
+                                    <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px" }}>
+                                      {habit.name}
+                                    </div>
+                                    <div className="habit-meta">
+                                      {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
+                                    </div>
+                                  </div>
                                 </div>
+                              )}
 
-                                <div className="habit-meta">
-                                  {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
-                                </div>
+                              {isExpanded && (
+                                <>
+                                  <button
+                                    className="habit-delete-x"
+                                    onClick={() => deleteHabit(habit.id)}
+                                    title="Delete habit"
+                                  >
+                                    ×
+                                  </button>
 
-                                <span className="pill">Done: {habit.doneCount}</span>
-                              </div>
+                                  <div className="habit-main" style={{ paddingLeft: "24px" }}>
+                                    <div
+                                      className="habit-drag-area"
+                                      draggable
+                                      onDragStart={() => handleHabitDragStart(habit.id)}
+                                      onDragEnd={handleHabitDragEnd}
+                                      title="Drag to schedule this habit"
+                                    >
+                                      <span className="habit-name-draggable">{habit.name}</span>
+                                    </div>
 
-                              <div className="habit-actions">
-                                <button
-                                  style={{ fontSize: 12 }}
-                                  onClick={() => incrementHabit(habit.id)}
-                                >
-                                  Done
-                                </button>
-                              </div>
+                                    <div className="habit-meta">
+                                      {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
+                                    </div>
+
+                                    <span className="pill">Done: {habit.doneCount}</span>
+                                  </div>
+
+                                  <div className="habit-actions">
+                                    <button
+                                      style={{ fontSize: 12 }}
+                                      onClick={() => incrementHabit(habit.id)}
+                                    >
+                                      Done
+                                    </button>
+                                  </div>
+                                </>
+                              )}
                             </div>
                           );
                         })}
