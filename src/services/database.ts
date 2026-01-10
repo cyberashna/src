@@ -173,6 +173,18 @@ export const database = {
 
       if (error) throw error;
     },
+
+    async clearLastDoneAt(id: string) {
+      const { error } = await supabase
+        .from("habits")
+        .update({
+          last_done_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+    },
   },
 
   blocks: {

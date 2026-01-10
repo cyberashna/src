@@ -38,6 +38,22 @@ export type Block = {
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+const formatTimeSince = (timestamp: string): string => {
+  const now = new Date();
+  const then = new Date(timestamp);
+  const diffMs = now.getTime() - then.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins} min${diffMins !== 1 ? "s" : ""} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
+  if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
+
+  return then.toLocaleDateString();
+};
+
 const hourlySlots = [
   "6:00 AM",
   "7:00 AM",
@@ -268,6 +284,25 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error("Error updating habit:", error);
+    }
+  };
+
+  const clearLastDoneAt = async (habitId: string) => {
+    if (!user) return;
+
+    try {
+      await database.habits.clearLastDoneAt(habitId);
+
+      setThemes((prevThemes) =>
+        prevThemes.map((theme) => ({
+          ...theme,
+          habits: theme.habits.map((h) =>
+            h.id === habitId ? { ...h, lastDoneAt: undefined } : h
+          ),
+        }))
+      );
+    } catch (error) {
+      console.error("Error clearing last done timestamp:", error);
     }
   };
 
@@ -845,7 +880,31 @@ const App: React.FC = () => {
                                       {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
                                     </div>
 
-                                    <span className="pill">Done: {habit.doneCount}</span>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                                      <span className="pill">Done: {habit.doneCount}</span>
+                                      {habit.lastDoneAt && (
+                                        <>
+                                          <span style={{ fontSize: "12px", color: "#666" }}>
+                                            Last: {formatTimeSince(habit.lastDoneAt)}
+                                          </span>
+                                          <button
+                                            onClick={() => clearLastDoneAt(habit.id)}
+                                            style={{
+                                              fontSize: "11px",
+                                              padding: "2px 6px",
+                                              background: "#f0f0f0",
+                                              border: "1px solid #ddd",
+                                              borderRadius: "3px",
+                                              cursor: "pointer",
+                                              color: "#666"
+                                            }}
+                                            title="Clear last done timestamp"
+                                          >
+                                            Clear
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
                                   </div>
 
                                   <div className="habit-actions">
