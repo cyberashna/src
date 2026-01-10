@@ -54,6 +54,26 @@ const formatTimeSince = (timestamp: string): string => {
   return then.toLocaleDateString();
 };
 
+const getCurrentWeekRange = (): string => {
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diff);
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+
+  const formatDate = (date: Date) => {
+    const month = date.toLocaleDateString('en-US', { month: 'short' });
+    const day = date.getDate();
+    return `${month} ${day}`;
+  };
+
+  return `${formatDate(monday)} - ${formatDate(sunday)}`;
+};
+
 const hourlySlots = [
   "6:00 AM",
   "7:00 AM",
@@ -343,35 +363,6 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error deleting habit:", error);
       alert("Failed to delete habit");
-    }
-  };
-
-  const resetHabitsForNewWeek = async () => {
-    if (!window.confirm("Reset all habit counts for a new week?")) return;
-    if (!user) return;
-
-    try {
-      await Promise.all([
-        database.habits.resetAll(user.id),
-        database.blocks.resetCompletion(user.id),
-      ]);
-
-      setThemes((prevThemes) =>
-        prevThemes.map((theme) => ({
-          ...theme,
-          habits: theme.habits.map((h) => ({
-            ...h,
-            doneCount: 0,
-          })),
-        }))
-      );
-
-      setBlocks((prevBlocks) =>
-        prevBlocks.map((b) => ({ ...b, completed: false }))
-      );
-    } catch (error) {
-      console.error("Error resetting habits:", error);
-      alert("Failed to reset habits");
     }
   };
 
@@ -759,23 +750,13 @@ const App: React.FC = () => {
           <div className="card">
             <div className="top-row">
               <h2>Habit themes</h2>
-              <div style={{ display: "flex", gap: "8px" }}>
-                <button
-                  type="button"
-                  className="secondary small-btn"
-                  onClick={resetHabitsForNewWeek}
-                  disabled={dataLoading}
-                >
-                  New week (reset)
-                </button>
-                <button
-                  type="button"
-                  className="secondary small-btn"
-                  onClick={handleSignOut}
-                >
-                  Sign out
-                </button>
-              </div>
+              <button
+                type="button"
+                className="secondary small-btn"
+                onClick={handleSignOut}
+              >
+                Sign out
+              </button>
             </div>
 
             {dataLoading ? (
@@ -1079,7 +1060,7 @@ const App: React.FC = () => {
           <div className="card">
             <div className="top-row">
               <h2>Weekly Planner</h2>
-              <span className="weekly-label">Drag blocks into time slots</span>
+              <span className="weekly-label">{getCurrentWeekRange()}</span>
             </div>
 
             <div className="view-toggle">
