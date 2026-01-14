@@ -32,6 +32,7 @@ export type Block = {
   time_index: number | null;
   completed: boolean;
   hashtag: string | null;
+  week_start_date: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -193,6 +194,18 @@ export const database = {
         .from("blocks")
         .select("*")
         .eq("user_id", userId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as Block[];
+    },
+
+    async getForWeek(userId: string, weekStartDate: string) {
+      const { data, error } = await supabase
+        .from("blocks")
+        .select("*")
+        .eq("user_id", userId)
+        .or(`week_start_date.eq.${weekStartDate},week_start_date.is.null`)
         .order("created_at", { ascending: true });
 
       if (error) throw error;

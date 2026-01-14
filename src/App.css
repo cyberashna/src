@@ -153,11 +153,47 @@ button:disabled {
   cursor: grab;
   user-select: none;
   white-space: nowrap;
+  position: relative;
 }
 
 .block.habit-block {
   background: #e7f7ff;
   border-color: #b4e2ff;
+}
+
+.slot-inner .block {
+  padding-right: 24px;
+}
+
+.block-delete-btn {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  color: #999;
+  transition: all 0.2s ease;
+}
+
+.slot-inner .block:hover .block-delete-btn {
+  display: flex;
+}
+
+.block-delete-btn:hover {
+  background: rgba(255, 0, 0, 0.1);
+  color: #d11;
 }
 
 .planner-wrapper {

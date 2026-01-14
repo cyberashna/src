@@ -54,13 +54,25 @@ const formatTimeSince = (timestamp: string): string => {
   return then.toLocaleDateString();
 };
 
-const getCurrentWeekRange = (): string => {
+const getMondayOfWeek = (weekOffset: number = 0): Date => {
   const now = new Date();
   const dayOfWeek = now.getDay();
   const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
 
   const monday = new Date(now);
-  monday.setDate(now.getDate() + diff);
+  monday.setDate(now.getDate() + diff + (weekOffset * 7));
+  monday.setHours(0, 0, 0, 0);
+
+  return monday;
+};
+
+const getWeekStartDateString = (weekOffset: number = 0): string => {
+  const monday = getMondayOfWeek(weekOffset);
+  return monday.toISOString().split('T')[0];
+};
+
+const getCurrentWeekRange = (weekOffset: number = 0): string => {
+  const monday = getMondayOfWeek(weekOffset);
 
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
@@ -100,6 +112,8 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
+
+  const [weekOffset, setWeekOffset] = useState<number>(0);
 
   const [themes, setThemes] = useState<Theme[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -148,17 +162,18 @@ const App: React.FC = () => {
     if (user) {
       loadUserData();
     }
-  }, [user]);
+  }, [user, weekOffset]);
 
   const loadUserData = async () => {
     if (!user) return;
 
     setDataLoading(true);
     try {
+      const weekStartDate = getWeekStartDateString(weekOffset);
       const [themesData, habitsData, blocksData] = await Promise.all([
         database.themes.getAll(user.id),
         database.habits.getAll(user.id),
-        database.blocks.getAll(user.id),
+        database.blocks.getForWeek(user.id, weekStartDate),
       ]);
 
       const themesWithHabits: Theme[] = themesData.map((theme) => ({
@@ -205,6 +220,19 @@ const App: React.FC = () => {
       themeName: theme.name,
     }))
   );
+
+  const getHabitDoneCount = (habitId: string, frequency: "weekly" | "monthly" | "none"): number => {
+    if (frequency === "none") {
+      const habit = allHabits.find((h) => h.id === habitId);
+      return habit?.doneCount ?? 0;
+    }
+
+    const habitBlocks = blocks.filter(
+      (b) => b.habitId === habitId && b.completed && b.location.type === "slot"
+    );
+
+    return habitBlocks.length;
+  };
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -428,6 +456,7 @@ const App: React.FC = () => {
         time_index: null,
         completed: false,
         hashtag: hashtag?.trim() || null,
+        week_start_date: null,
       });
 
       const newBlock: Block = {
@@ -458,6 +487,7 @@ const App: React.FC = () => {
     if (!habit || !user) return;
 
     try {
+      const weekStartDate = getWeekStartDateString(weekOffset);
       const blockData = await database.blocks.create(user.id, {
         label: `Habit: ${habit.name}`,
         is_habit_block: true,
@@ -467,6 +497,7 @@ const App: React.FC = () => {
         time_index: timeIndex,
         completed: false,
         hashtag: habit.themeName,
+        week_start_date: weekStartDate,
       });
 
       const newBlock: Block = {
@@ -509,10 +540,12 @@ const App: React.FC = () => {
     timeIndex: number
   ) => {
     try {
+      const weekStartDate = getWeekStartDateString(weekOffset);
       await database.blocks.update(blockId, {
         location_type: "slot",
         day_index: dayIndex,
         time_index: timeIndex,
+        week_start_date: weekStartDate,
       });
 
       setBlocks((prev) =>
@@ -533,6 +566,7 @@ const App: React.FC = () => {
         location_type: "unscheduled",
         day_index: null,
         time_index: null,
+        week_start_date: null,
       });
 
       setBlocks((prev) =>
@@ -862,7 +896,10 @@ const App: React.FC = () => {
                                     </div>
 
                                     <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                                      <span className="pill">Done: {habit.doneCount}</span>
+                                      <span className="pill">
+                                        Done: {getHabitDoneCount(habit.id, habit.frequency)}
+                                        {habit.frequency !== "none" && ` / ${habit.targetPerWeek}`}
+                                      </span>
                                       {habit.lastDoneAt && (
                                         <>
                                           <span style={{ fontSize: "12px", color: "#666" }}>
@@ -1060,7 +1097,39 @@ const App: React.FC = () => {
           <div className="card">
             <div className="top-row">
               <h2>Weekly Planner</h2>
-              <span className="weekly-label">{getCurrentWeekRange()}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button
+                  type="button"
+                  className="secondary small-btn"
+                  onClick={() => setWeekOffset(weekOffset - 1)}
+                  title="Previous week"
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  className="secondary small-btn"
+                  onClick={() => setWeekOffset(0)}
+                  title="Go to current week"
+                  disabled={weekOffset === 0}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  className="secondary small-btn"
+                  onClick={() => setWeekOffset(weekOffset + 1)}
+                  title="Next week"
+                >
+                  →
+                </button>
+                <span className="weekly-label">{getCurrentWeekRange(weekOffset)}</span>
+                {weekOffset !== 0 && (
+                  <span style={{ fontSize: "12px", color: "#666" }}>
+                    ({weekOffset > 0 ? `+${weekOffset}` : weekOffset} week{Math.abs(weekOffset) !== 1 ? 's' : ''})
+                  </span>
+                )}
+              </div>
             </div>
 
             <div className="view-toggle">
@@ -1190,6 +1259,16 @@ const App: React.FC = () => {
                                     {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
                                   </>
                                 )}
+                                <button
+                                  className="block-delete-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteBlock(block.id);
+                                  }}
+                                  title="Delete block"
+                                >
+                                  ×
+                                </button>
                               </div>
                             ))}
                           </div>
