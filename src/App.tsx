@@ -589,7 +589,13 @@ const App: React.FC = () => {
     dayIndex: number,
     timeIndex: number
   ) => {
+    console.log("========== createHabitBlockAtSlot called ==========", { habitId, dayIndex, timeIndex });
     const habit = allHabits.find((h) => h.id === habitId);
+    console.log("Habit details:", {
+      found: !!habit,
+      name: habit?.name,
+      groupId: habit?.habitGroupId
+    });
     if (!habit || !user) return;
 
     try {
@@ -620,7 +626,18 @@ const App: React.FC = () => {
         isLinkedGroup: blockData.is_linked_group,
       };
 
+      console.log("New block created:", newBlock);
+      console.log("About to call checkAdjacentLinkable for newly created block...");
+
+      const adjacentBlockId = checkAdjacentLinkable(blockData.id, dayIndex, timeIndex);
+      console.log("checkAdjacentLinkable returned:", adjacentBlockId);
+
       setBlocks((prev) => [...prev, newBlock]);
+
+      if (adjacentBlockId) {
+        console.log("Setting link confirmation!");
+        setLinkConfirmation({ blockId1: blockData.id, blockId2: adjacentBlockId });
+      }
     } catch (error) {
       console.error("Error creating habit block:", error);
     }
@@ -649,36 +666,48 @@ const App: React.FC = () => {
     dayIndex: number,
     timeIndex: number
   ): string | null => {
+    console.log("===== checkAdjacentLinkable called =====", { blockId, dayIndex, timeIndex });
+
     const block = blocks.find((b) => b.id === blockId);
+    console.log("1. Block lookup:", { found: !!block, isHabitBlock: block?.isHabitBlock, habitId: block?.habitId });
     if (!block || !block.habitId) {
-      console.log("Block not found or no habitId", { blockId, block });
+      console.log("EARLY EXIT: Block not found or no habitId");
       return null;
     }
 
     const habit = allHabits.find((h) => h.id === block.habitId);
+    console.log("2. Habit lookup:", {
+      found: !!habit,
+      habitName: habit?.name,
+      habitGroupId: habit?.habitGroupId,
+      allHabitsCount: allHabits.length
+    });
     if (!habit || !habit.habitGroupId) {
-      console.log("Habit not found or no habitGroupId", { habitId: block.habitId, habit });
+      console.log("EARLY EXIT: Habit not found or no habitGroupId");
       return null;
     }
 
     const theme = themes.find((t) => t.habits.some((h) => h.id === habit.id));
+    console.log("3. Theme lookup:", { found: !!theme, themeName: theme?.name, groupsCount: theme?.groups.length });
     if (!theme) {
-      console.log("Theme not found for habit", { habitId: habit.id });
+      console.log("EARLY EXIT: Theme not found for habit");
       return null;
     }
 
     const group = theme.groups.find((g) => g.id === habit.habitGroupId);
+    console.log("4. Group lookup:", {
+      found: !!group,
+      groupName: group?.name,
+      linkBehavior: group?.linkBehavior,
+      searchingForId: habit.habitGroupId,
+      availableGroups: theme.groups.map(g => ({ id: g.id, name: g.name, behavior: g.linkBehavior }))
+    });
     if (!group || group.linkBehavior !== "adjacent_merge") {
-      console.log("Group not found or wrong behavior", { groupId: habit.habitGroupId, group });
+      console.log("EARLY EXIT: Group not found or wrong behavior");
       return null;
     }
 
-    console.log("Checking for adjacent linkable blocks", {
-      blockId,
-      habitName: habit.name,
-      groupName: group.name,
-      position: { dayIndex, timeIndex }
-    });
+    console.log("5. All checks passed! Searching for adjacent blocks...");
 
     const adjacentPositions = [
       { day: dayIndex - 1, time: timeIndex },
@@ -698,22 +727,28 @@ const App: React.FC = () => {
           !b.isLinkedGroup
       );
 
+      console.log(`6. Checking position (${pos.day}, ${pos.time}):`, {
+        found: !!adjacentBlock,
+        blockId: adjacentBlock?.id,
+        hasHabitId: !!adjacentBlock?.habitId
+      });
+
       if (adjacentBlock && adjacentBlock.habitId) {
         const adjacentHabit = allHabits.find((h) => h.id === adjacentBlock.habitId);
-        console.log("Found adjacent habit block", {
+        console.log("7. Adjacent habit details:", {
           adjacentHabitName: adjacentHabit?.name,
           adjacentGroupId: adjacentHabit?.habitGroupId,
           currentGroupId: habit.habitGroupId,
           matches: adjacentHabit?.habitGroupId === habit.habitGroupId
         });
         if (adjacentHabit && adjacentHabit.habitGroupId === habit.habitGroupId) {
-          console.log("MATCH! Returning adjacent block id");
+          console.log("8. MATCH FOUND! Returning adjacent block id:", adjacentBlock.id);
           return adjacentBlock.id;
         }
       }
     }
 
-    console.log("No adjacent linkable blocks found");
+    console.log("9. No matching adjacent blocks found");
     return null;
   };
 
@@ -769,8 +804,15 @@ const App: React.FC = () => {
     dayIndex: number,
     timeIndex: number
   ) => {
+    console.log("========== moveBlockToSlot called ==========", { blockId, dayIndex, timeIndex });
     try {
       const block = blocks.find((b) => b.id === blockId);
+      console.log("Block being moved:", {
+        found: !!block,
+        label: block?.label,
+        isHabitBlock: block?.isHabitBlock,
+        habitId: block?.habitId
+      });
 
       if (block?.linkedBlockId) {
         await database.blocks.update(block.linkedBlockId, {
@@ -791,8 +833,10 @@ const App: React.FC = () => {
 
       const weekStartDate = getWeekStartDateString(weekOffset);
       const originalHabit = allHabits.find((h) => h.id === block?.habitId);
+      console.log("About to call checkAdjacentLinkable...");
 
       const adjacentBlockId = checkAdjacentLinkable(blockId, dayIndex, timeIndex);
+      console.log("checkAdjacentLinkable returned:", adjacentBlockId);
 
       await database.blocks.update(blockId, {
         location_type: "slot",
@@ -1291,6 +1335,14 @@ const App: React.FC = () => {
                                   <div>
                                     <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px" }}>
                                       {habit.name}
+                                      {habit.habitGroupId && (() => {
+                                        const group = theme.groups.find(g => g.id === habit.habitGroupId);
+                                        return group ? (
+                                          <span style={{ marginLeft: "6px", fontSize: "11px", color: "#666", background: "#f0f0f0", padding: "2px 6px", borderRadius: "3px" }}>
+                                            {group.name}
+                                          </span>
+                                        ) : null;
+                                      })()}
                                     </div>
                                     <div className="habit-meta">
                                       {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
