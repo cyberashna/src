@@ -629,10 +629,11 @@ const App: React.FC = () => {
       console.log("New block created:", newBlock);
       console.log("About to call checkAdjacentLinkable for newly created block...");
 
-      const adjacentBlockId = checkAdjacentLinkable(blockData.id, dayIndex, timeIndex);
+      const updatedBlocks = [...blocks, newBlock];
+      const adjacentBlockId = checkAdjacentLinkable(blockData.id, dayIndex, timeIndex, updatedBlocks);
       console.log("checkAdjacentLinkable returned:", adjacentBlockId);
 
-      setBlocks((prev) => [...prev, newBlock]);
+      setBlocks(updatedBlocks);
 
       if (adjacentBlockId) {
         console.log("Setting link confirmation!");
@@ -664,11 +665,13 @@ const App: React.FC = () => {
   const checkAdjacentLinkable = (
     blockId: string,
     dayIndex: number,
-    timeIndex: number
+    timeIndex: number,
+    blocksToSearch?: Block[]
   ): string | null => {
-    console.log("===== checkAdjacentLinkable called =====", { blockId, dayIndex, timeIndex });
+    const searchBlocks = blocksToSearch || blocks;
+    console.log("===== checkAdjacentLinkable called =====", { blockId, dayIndex, timeIndex, searchingInCount: searchBlocks.length });
 
-    const block = blocks.find((b) => b.id === blockId);
+    const block = searchBlocks.find((b) => b.id === blockId);
     console.log("1. Block lookup:", { found: !!block, isHabitBlock: block?.isHabitBlock, habitId: block?.habitId });
     if (!block || !block.habitId) {
       console.log("EARLY EXIT: Block not found or no habitId");
@@ -717,7 +720,7 @@ const App: React.FC = () => {
     ];
 
     for (const pos of adjacentPositions) {
-      const adjacentBlock = blocks.find(
+      const adjacentBlock = searchBlocks.find(
         (b) =>
           b.location.type === "slot" &&
           b.location.dayIndex === pos.day &&
