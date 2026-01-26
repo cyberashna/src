@@ -836,10 +836,6 @@ const App: React.FC = () => {
 
       const weekStartDate = getWeekStartDateString(weekOffset);
       const originalHabit = allHabits.find((h) => h.id === block?.habitId);
-      console.log("About to call checkAdjacentLinkable...");
-
-      const adjacentBlockId = checkAdjacentLinkable(blockId, dayIndex, timeIndex);
-      console.log("checkAdjacentLinkable returned:", adjacentBlockId);
 
       await database.blocks.update(blockId, {
         location_type: "slot",
@@ -856,29 +852,33 @@ const App: React.FC = () => {
         });
       }
 
-      setBlocks((prev) =>
-        prev.map((b) => {
-          if (b.id === blockId) {
-            return {
-              ...b,
-              location: { type: "slot", dayIndex, timeIndex },
-              linkedBlockId: undefined,
-              isLinkedGroup: false,
-              label: originalHabit ? `Habit: ${originalHabit.name}` : b.label,
-            };
-          }
-          if (b.id === block?.linkedBlockId) {
-            const habit = allHabits.find((h) => h.id === b.habitId);
-            return {
-              ...b,
-              linkedBlockId: undefined,
-              isLinkedGroup: false,
-              label: habit ? `Habit: ${habit.name}` : b.label,
-            };
-          }
-          return b;
-        })
-      );
+      const updatedBlocks = blocks.map((b) => {
+        if (b.id === blockId) {
+          return {
+            ...b,
+            location: { type: "slot" as const, dayIndex, timeIndex },
+            linkedBlockId: undefined,
+            isLinkedGroup: false,
+            label: originalHabit ? `Habit: ${originalHabit.name}` : b.label,
+          };
+        }
+        if (b.id === block?.linkedBlockId) {
+          const habit = allHabits.find((h) => h.id === b.habitId);
+          return {
+            ...b,
+            linkedBlockId: undefined,
+            isLinkedGroup: false,
+            label: habit ? `Habit: ${habit.name}` : b.label,
+          };
+        }
+        return b;
+      });
+
+      console.log("About to call checkAdjacentLinkable...");
+      const adjacentBlockId = checkAdjacentLinkable(blockId, dayIndex, timeIndex, updatedBlocks);
+      console.log("checkAdjacentLinkable returned:", adjacentBlockId);
+
+      setBlocks(updatedBlocks);
 
       if (adjacentBlockId) {
         setLinkConfirmation({ blockId1: blockId, blockId2: adjacentBlockId });
