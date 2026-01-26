@@ -7,6 +7,13 @@ import { ThemeGoals } from "./components/ThemeGoals";
 import { database } from "./services/database";
 import type { User } from "@supabase/supabase-js";
 
+type HabitGroup = {
+  id: string;
+  name: string;
+  groupType: "strength_training" | "custom";
+  linkBehavior: "adjacent_merge" | "none";
+};
+
 type Habit = {
   id: string;
   name: string;
@@ -14,12 +21,14 @@ type Habit = {
   doneCount: number;
   lastDoneAt?: string;
   frequency: "weekly" | "monthly" | "none";
+  habitGroupId?: string;
 };
 
 type Theme = {
   id: string;
   name: string;
   habits: Habit[];
+  groups: HabitGroup[];
 };
 
 type BlockLocation =
@@ -34,6 +43,8 @@ export type Block = {
   habitId?: string;
   completed?: boolean;
   hashtag?: string;
+  linkedBlockId?: string;
+  isLinkedGroup?: boolean;
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -134,7 +145,17 @@ const App: React.FC = () => {
   const [newThemeHabitName, setNewThemeHabitName] = useState("");
   const [newThemeHabitTarget, setNewThemeHabitTarget] = useState<number>(2);
   const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"weekly" | "monthly" | "none">("weekly");
+  const [newThemeHabitGroupId, setNewThemeHabitGroupId] = useState<string>("");
   const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
+
+  const [managingGroupsForTheme, setManagingGroupsForTheme] = useState<string | null>(null);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupType, setNewGroupType] = useState<"strength_training" | "custom">("custom");
+
+  const [linkConfirmation, setLinkConfirmation] = useState<{
+    blockId1: string;
+    blockId2: string;
+  } | null>(null);
 
   const [newThemeName, setNewThemeName] = useState("");
 
@@ -170,10 +191,11 @@ const App: React.FC = () => {
     setDataLoading(true);
     try {
       const weekStartDate = getWeekStartDateString(weekOffset);
-      const [themesData, habitsData, blocksData] = await Promise.all([
+      const [themesData, habitsData, blocksData, groupsData] = await Promise.all([
         database.themes.getAll(user.id),
         database.habits.getAll(user.id),
         database.blocks.getForWeek(user.id, weekStartDate),
+        database.habitGroups.getAll(user.id),
       ]);
 
       const themesWithHabits: Theme[] = themesData.map((theme) => ({
@@ -188,6 +210,15 @@ const App: React.FC = () => {
             doneCount: h.done_count,
             lastDoneAt: h.last_done_at ?? undefined,
             frequency: h.frequency,
+            habitGroupId: h.habit_group_id ?? undefined,
+          })),
+        groups: groupsData
+          .filter((g) => g.theme_id === theme.id)
+          .map((g) => ({
+            id: g.id,
+            name: g.name,
+            groupType: g.group_type,
+            linkBehavior: g.link_behavior,
           })),
       }));
 
@@ -200,6 +231,8 @@ const App: React.FC = () => {
         habitId: b.habit_id ?? undefined,
         completed: b.completed,
         hashtag: b.hashtag ?? undefined,
+        linkedBlockId: b.linked_block_id ?? undefined,
+        isLinkedGroup: b.is_linked_group,
         location:
           b.location_type === "slot" && b.day_index !== null && b.time_index !== null
             ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
@@ -244,7 +277,8 @@ const App: React.FC = () => {
     themeId: string,
     name: string,
     targetPerWeek: number,
-    frequency: "weekly" | "monthly" | "none"
+    frequency: "weekly" | "monthly" | "none",
+    habitGroupId?: string
   ) => {
     const trimmed = name.trim();
     if (!trimmed) {
@@ -264,7 +298,8 @@ const App: React.FC = () => {
         themeId,
         trimmed,
         targetPerWeek,
-        frequency
+        frequency,
+        habitGroupId
       );
 
       const newHabit: Habit = {
@@ -273,6 +308,7 @@ const App: React.FC = () => {
         targetPerWeek: habitData.target_per_week,
         doneCount: habitData.done_count,
         frequency: habitData.frequency,
+        habitGroupId: habitData.habit_group_id ?? undefined,
       };
 
       setThemes((prevThemes) =>
@@ -285,6 +321,71 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error creating habit:", error);
       alert("Failed to create habit");
+    }
+  };
+
+  const addGroupToTheme = async (themeId: string, name: string, groupType: "strength_training" | "custom") => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      alert("Enter a group name.");
+      return;
+    }
+
+    if (!user) return;
+
+    try {
+      const linkBehavior = groupType === "strength_training" ? "adjacent_merge" : "none";
+      const groupData = await database.habitGroups.create(
+        user.id,
+        themeId,
+        trimmed,
+        groupType,
+        linkBehavior
+      );
+
+      const newGroup: HabitGroup = {
+        id: groupData.id,
+        name: groupData.name,
+        groupType: groupData.group_type,
+        linkBehavior: groupData.link_behavior,
+      };
+
+      setThemes((prevThemes) =>
+        prevThemes.map((theme) =>
+          theme.id === themeId
+            ? { ...theme, groups: [...theme.groups, newGroup] }
+            : theme
+        )
+      );
+
+      setNewGroupName("");
+      setNewGroupType("custom");
+    } catch (error) {
+      console.error("Error creating group:", error);
+      alert("Failed to create group");
+    }
+  };
+
+  const deleteGroup = async (groupId: string) => {
+    if (!window.confirm("Delete this group? Habits in this group will not be deleted.")) {
+      return;
+    }
+
+    try {
+      await database.habitGroups.delete(groupId);
+
+      setThemes((prevThemes) =>
+        prevThemes.map((theme) => ({
+          ...theme,
+          groups: theme.groups.filter((g) => g.id !== groupId),
+          habits: theme.habits.map((h) =>
+            h.habitGroupId === groupId ? { ...h, habitGroupId: undefined } : h
+          ),
+        }))
+      );
+    } catch (error) {
+      console.error("Error deleting group:", error);
+      alert("Failed to delete group");
     }
   };
 
@@ -422,6 +523,7 @@ const App: React.FC = () => {
         id: themeData.id,
         name: themeData.name,
         habits: [],
+        groups: [],
       };
 
       setThemes((prev) => [...prev, newTheme]);
@@ -457,6 +559,8 @@ const App: React.FC = () => {
         completed: false,
         hashtag: hashtag?.trim() || null,
         week_start_date: null,
+        linked_block_id: null,
+        is_linked_group: false,
       });
 
       const newBlock: Block = {
@@ -467,6 +571,8 @@ const App: React.FC = () => {
         habitId: blockData.habit_id ?? undefined,
         completed: blockData.completed,
         hashtag: blockData.hashtag ?? undefined,
+        linkedBlockId: blockData.linked_block_id ?? undefined,
+        isLinkedGroup: blockData.is_linked_group,
       };
 
       setBlocks((prev) => [...prev, newBlock]);
@@ -498,6 +604,8 @@ const App: React.FC = () => {
         completed: false,
         hashtag: habit.themeName,
         week_start_date: weekStartDate,
+        linked_block_id: null,
+        is_linked_group: false,
       });
 
       const newBlock: Block = {
@@ -508,6 +616,8 @@ const App: React.FC = () => {
         habitId: habitId,
         completed: false,
         hashtag: habit.themeName,
+        linkedBlockId: blockData.linked_block_id ?? undefined,
+        isLinkedGroup: blockData.is_linked_group,
       };
 
       setBlocks((prev) => [...prev, newBlock]);
@@ -534,27 +644,170 @@ const App: React.FC = () => {
     setDragHabitId(null);
   };
 
+  const checkAdjacentLinkable = (
+    blockId: string,
+    dayIndex: number,
+    timeIndex: number
+  ): string | null => {
+    const block = blocks.find((b) => b.id === blockId);
+    if (!block || !block.habitId) return null;
+
+    const habit = allHabits.find((h) => h.id === block.habitId);
+    if (!habit || !habit.habitGroupId) return null;
+
+    const theme = themes.find((t) => t.habits.some((h) => h.id === habit.id));
+    if (!theme) return null;
+
+    const group = theme.groups.find((g) => g.id === habit.habitGroupId);
+    if (!group || group.linkBehavior !== "adjacent_merge") return null;
+
+    const adjacentPositions = [
+      { day: dayIndex - 1, time: timeIndex },
+      { day: dayIndex + 1, time: timeIndex },
+      { day: dayIndex, time: timeIndex - 1 },
+      { day: dayIndex, time: timeIndex + 1 },
+    ];
+
+    for (const pos of adjacentPositions) {
+      const adjacentBlock = blocks.find(
+        (b) =>
+          b.location.type === "slot" &&
+          b.location.dayIndex === pos.day &&
+          b.location.timeIndex === pos.time &&
+          b.id !== blockId &&
+          !b.linkedBlockId &&
+          !b.isLinkedGroup
+      );
+
+      if (adjacentBlock && adjacentBlock.habitId) {
+        const adjacentHabit = allHabits.find((h) => h.id === adjacentBlock.habitId);
+        if (adjacentHabit && adjacentHabit.habitGroupId === habit.habitGroupId) {
+          return adjacentBlock.id;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const linkBlocks = async (blockId1: string, blockId2: string) => {
+    const block1 = blocks.find((b) => b.id === blockId1);
+    const block2 = blocks.find((b) => b.id === blockId2);
+    if (!block1 || !block2 || !user) return;
+
+    try {
+      const habit1 = allHabits.find((h) => h.id === block1.habitId);
+      const habit2 = allHabits.find((h) => h.id === block2.habitId);
+      if (!habit1 || !habit2) return;
+
+      const theme = themes.find((t) => t.habits.some((h) => h.id === habit1.id));
+      if (!theme) return;
+
+      const group = theme.groups.find((g) => g.id === habit1.habitGroupId);
+      if (!group) return;
+
+      const groupLabel = `${group.name} Session: ${habit1.name} + ${habit2.name}`;
+
+      await database.blocks.update(blockId1, {
+        linked_block_id: blockId2,
+        is_linked_group: true,
+        label: groupLabel,
+      });
+
+      await database.blocks.update(blockId2, {
+        linked_block_id: blockId1,
+      });
+
+      setBlocks((prev) =>
+        prev.map((b) => {
+          if (b.id === blockId1) {
+            return { ...b, linkedBlockId: blockId2, isLinkedGroup: true, label: groupLabel };
+          }
+          if (b.id === blockId2) {
+            return { ...b, linkedBlockId: blockId1 };
+          }
+          return b;
+        })
+      );
+
+      setLinkConfirmation(null);
+    } catch (error) {
+      console.error("Error linking blocks:", error);
+      alert("Failed to link blocks");
+    }
+  };
+
   const moveBlockToSlot = async (
     blockId: string,
     dayIndex: number,
     timeIndex: number
   ) => {
     try {
+      const block = blocks.find((b) => b.id === blockId);
+
+      if (block?.linkedBlockId) {
+        await database.blocks.update(block.linkedBlockId, {
+          linked_block_id: null,
+          is_linked_group: false,
+        });
+
+        const linkedBlock = blocks.find((b) => b.id === block.linkedBlockId);
+        if (linkedBlock?.habitId) {
+          const habit = allHabits.find((h) => h.id === linkedBlock.habitId);
+          if (habit) {
+            await database.blocks.update(block.linkedBlockId, {
+              label: `Habit: ${habit.name}`,
+            });
+          }
+        }
+      }
+
       const weekStartDate = getWeekStartDateString(weekOffset);
+      const originalHabit = allHabits.find((h) => h.id === block?.habitId);
+
       await database.blocks.update(blockId, {
         location_type: "slot",
         day_index: dayIndex,
         time_index: timeIndex,
         week_start_date: weekStartDate,
+        linked_block_id: null,
+        is_linked_group: false,
       });
 
+      if (originalHabit && block?.isHabitBlock) {
+        await database.blocks.update(blockId, {
+          label: `Habit: ${originalHabit.name}`,
+        });
+      }
+
       setBlocks((prev) =>
-        prev.map((b) =>
-          b.id === blockId
-            ? { ...b, location: { type: "slot", dayIndex, timeIndex } }
-            : b
-        )
+        prev.map((b) => {
+          if (b.id === blockId) {
+            return {
+              ...b,
+              location: { type: "slot", dayIndex, timeIndex },
+              linkedBlockId: undefined,
+              isLinkedGroup: false,
+              label: originalHabit ? `Habit: ${originalHabit.name}` : b.label,
+            };
+          }
+          if (b.id === block?.linkedBlockId) {
+            const habit = allHabits.find((h) => h.id === b.habitId);
+            return {
+              ...b,
+              linkedBlockId: undefined,
+              isLinkedGroup: false,
+              label: habit ? `Habit: ${habit.name}` : b.label,
+            };
+          }
+          return b;
+        })
       );
+
+      const adjacentBlockId = checkAdjacentLinkable(blockId, dayIndex, timeIndex);
+      if (adjacentBlockId) {
+        setLinkConfirmation({ blockId1: blockId, blockId2: adjacentBlockId });
+      }
     } catch (error) {
       console.error("Error moving block:", error);
     }
@@ -562,17 +815,58 @@ const App: React.FC = () => {
 
   const moveBlockToUnscheduled = async (blockId: string) => {
     try {
+      const block = blocks.find((b) => b.id === blockId);
+
+      if (block?.linkedBlockId) {
+        await database.blocks.update(block.linkedBlockId, {
+          linked_block_id: null,
+          is_linked_group: false,
+        });
+
+        const linkedBlock = blocks.find((b) => b.id === block.linkedBlockId);
+        if (linkedBlock?.habitId) {
+          const habit = allHabits.find((h) => h.id === linkedBlock.habitId);
+          if (habit) {
+            await database.blocks.update(block.linkedBlockId, {
+              label: `Habit: ${habit.name}`,
+            });
+          }
+        }
+      }
+
       await database.blocks.update(blockId, {
         location_type: "unscheduled",
         day_index: null,
         time_index: null,
         week_start_date: null,
+        linked_block_id: null,
+        is_linked_group: false,
       });
 
+      const originalHabit = allHabits.find((h) => h.id === block?.habitId);
+
       setBlocks((prev) =>
-        prev.map((b) =>
-          b.id === blockId ? { ...b, location: { type: "unscheduled" } } : b
-        )
+        prev.map((b) => {
+          if (b.id === blockId) {
+            return {
+              ...b,
+              location: { type: "unscheduled" },
+              linkedBlockId: undefined,
+              isLinkedGroup: false,
+              label: originalHabit ? `Habit: ${originalHabit.name}` : b.label,
+            };
+          }
+          if (b.id === block?.linkedBlockId) {
+            const habit = allHabits.find((h) => h.id === b.habitId);
+            return {
+              ...b,
+              linkedBlockId: undefined,
+              isLinkedGroup: false,
+              label: habit ? `Habit: ${habit.name}` : b.label,
+            };
+          }
+          return b;
+        })
       );
     } catch (error) {
       console.error("Error moving block:", error);
@@ -581,8 +875,41 @@ const App: React.FC = () => {
 
   const deleteBlock = async (blockId: string) => {
     try {
+      const block = blocks.find((b) => b.id === blockId);
+      if (block?.linkedBlockId) {
+        await database.blocks.update(block.linkedBlockId, {
+          linked_block_id: null,
+          is_linked_group: false,
+        });
+
+        const linkedBlock = blocks.find((b) => b.id === block.linkedBlockId);
+        if (linkedBlock?.habitId) {
+          const habit = allHabits.find((h) => h.id === linkedBlock.habitId);
+          if (habit) {
+            await database.blocks.update(block.linkedBlockId, {
+              label: `Habit: ${habit.name}`,
+            });
+          }
+        }
+      }
+
       await database.blocks.delete(blockId);
-      setBlocks((prev) => prev.filter((b) => b.id !== blockId));
+      setBlocks((prev) =>
+        prev
+          .filter((b) => b.id !== blockId)
+          .map((b) => {
+            if (b.id === block?.linkedBlockId) {
+              const habit = allHabits.find((h) => h.id === b.habitId);
+              return {
+                ...b,
+                linkedBlockId: undefined,
+                isLinkedGroup: false,
+                label: habit ? `Habit: ${habit.name}` : b.label,
+              };
+            }
+            return b;
+          })
+      );
     } catch (error) {
       console.error("Error deleting block:", error);
     }
@@ -730,7 +1057,8 @@ const App: React.FC = () => {
       (b) =>
         b.location.type === "slot" &&
         b.location.dayIndex === dayIndex &&
-        b.location.timeIndex === timeIndex
+        b.location.timeIndex === timeIndex &&
+        !(b.linkedBlockId && !b.isLinkedGroup)
     );
   };
 
@@ -804,19 +1132,92 @@ const App: React.FC = () => {
                     <div key={theme.id} className="theme-card">
                       <div className="theme-title-row">
                         <div className="theme-name">{theme.name}</div>
-                        <button
-                          type="button"
-                          className="secondary small-btn"
-                          onClick={() => {
-                            setAddingThemeId(theme.id);
-                            setNewThemeHabitName("");
-                            setNewThemeHabitTarget(2);
-                            setNewThemeHabitFrequency("weekly");
-                          }}
-                        >
-                          Add habit
-                        </button>
+                        <div style={{ display: "flex", gap: "4px" }}>
+                          <button
+                            type="button"
+                            className="secondary small-btn"
+                            onClick={() => {
+                              setAddingThemeId(theme.id);
+                              setNewThemeHabitName("");
+                              setNewThemeHabitTarget(2);
+                              setNewThemeHabitFrequency("weekly");
+                              setNewThemeHabitGroupId("");
+                            }}
+                          >
+                            Add habit
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary small-btn"
+                            onClick={() => {
+                              if (managingGroupsForTheme === theme.id) {
+                                setManagingGroupsForTheme(null);
+                              } else {
+                                setManagingGroupsForTheme(theme.id);
+                                setNewGroupName("");
+                                setNewGroupType("custom");
+                              }
+                            }}
+                          >
+                            {managingGroupsForTheme === theme.id ? "Hide" : "Groups"}
+                          </button>
+                        </div>
                       </div>
+
+                      {managingGroupsForTheme === theme.id && (
+                        <div className="add-habit-form" style={{ marginBottom: "8px" }}>
+                          <label className="small-label">Groups in this theme</label>
+                          {theme.groups.length === 0 ? (
+                            <div style={{ fontSize: "12px", color: "#666", padding: "4px 0" }}>
+                              No groups yet
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "8px" }}>
+                              {theme.groups.map((group) => (
+                                <div key={group.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#f8f8ff", borderRadius: "4px", fontSize: "12px" }}>
+                                  <span>
+                                    {group.name}
+                                    {group.groupType === "strength_training" && " 🏋️"}
+                                    {group.linkBehavior === "adjacent_merge" && " (Links adjacent)"}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="secondary small-btn"
+                                    onClick={() => deleteGroup(group.id)}
+                                    style={{ fontSize: "10px", padding: "2px 6px" }}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <label className="small-label">Add new group</label>
+                          <input
+                            type="text"
+                            value={newGroupName}
+                            onChange={(e) => setNewGroupName(e.target.value)}
+                            placeholder="e.g. Strength Training"
+                          />
+                          <label className="small-label">Group type</label>
+                          <select
+                            value={newGroupType}
+                            onChange={(e) => setNewGroupType(e.target.value as "strength_training" | "custom")}
+                          >
+                            <option value="custom">Custom</option>
+                            <option value="strength_training">Strength Training (auto-link)</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              addGroupToTheme(theme.id, newGroupName, newGroupType);
+                            }}
+                            style={{ marginTop: "4px" }}
+                          >
+                            Add group
+                          </button>
+                        </div>
+                      )}
 
                       <div className="habit-list theme-habit-list">
                         {theme.habits.map((habit) => {
@@ -949,6 +1350,23 @@ const App: React.FC = () => {
                             onChange={(e) => setNewThemeHabitName(e.target.value)}
                             placeholder="e.g. Clean kitchen"
                           />
+                          {theme.groups.length > 0 && (
+                            <>
+                              <label className="small-label">Group (optional)</label>
+                              <select
+                                value={newThemeHabitGroupId}
+                                onChange={(e) => setNewThemeHabitGroupId(e.target.value)}
+                              >
+                                <option value="">None</option>
+                                {theme.groups.map((group) => (
+                                  <option key={group.id} value={group.id}>
+                                    {group.name}
+                                    {group.groupType === "strength_training" ? " 🏋️" : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </>
+                          )}
                           <label className="small-label">Frequency</label>
                           <select
                             value={newThemeHabitFrequency}
@@ -982,12 +1400,14 @@ const App: React.FC = () => {
                                   theme.id,
                                   newThemeHabitName,
                                   newThemeHabitTarget,
-                                  newThemeHabitFrequency
+                                  newThemeHabitFrequency,
+                                  newThemeHabitGroupId || undefined
                                 );
                                 setAddingThemeId(null);
                                 setNewThemeHabitName("");
                                 setNewThemeHabitTarget(2);
                                 setNewThemeHabitFrequency("weekly");
+                                setNewThemeHabitGroupId("");
                               }}
                             >
                               Save habit
@@ -1000,6 +1420,7 @@ const App: React.FC = () => {
                                 setNewThemeHabitName("");
                                 setNewThemeHabitTarget(2);
                                 setNewThemeHabitFrequency("weekly");
+                                setNewThemeHabitGroupId("");
                               }}
                             >
                               Cancel
@@ -1227,6 +1648,7 @@ const App: React.FC = () => {
                                 className={
                                   "block" +
                                   (block.isHabitBlock ? " habit-block" : "") +
+                                  (block.isLinkedGroup ? " linked-group" : "") +
                                   (block.completed ? " block-done" : "")
                                 }
                                 draggable
@@ -1298,6 +1720,43 @@ const App: React.FC = () => {
               setBlocks((prev) => [...prev, ...importedBlocks]);
             }}
           />
+        )}
+
+        {linkConfirmation && (
+          <div className="modal-overlay" onClick={() => setLinkConfirmation(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>Link Habit Blocks?</h2>
+                <button
+                  className="modal-close"
+                  onClick={() => setLinkConfirmation(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="modal-body">
+                <div className="info-message">
+                  These two habit blocks are from the same group and placed next to each other.
+                  Would you like to link them together to form a combined session?
+                </div>
+                <div style={{ display: "flex", gap: "8px", marginTop: "16px" }}>
+                  <button
+                    onClick={() => {
+                      linkBlocks(linkConfirmation.blockId1, linkConfirmation.blockId2);
+                    }}
+                  >
+                    Link them
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() => setLinkConfirmation(null)}
+                  >
+                    Keep separate
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </>

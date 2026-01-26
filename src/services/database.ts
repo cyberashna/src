@@ -8,6 +8,17 @@ export type Theme = {
   updated_at: string;
 };
 
+export type HabitGroup = {
+  id: string;
+  theme_id: string;
+  user_id: string;
+  name: string;
+  group_type: "strength_training" | "custom";
+  link_behavior: "adjacent_merge" | "none";
+  created_at: string;
+  updated_at: string;
+};
+
 export type Habit = {
   id: string;
   theme_id: string;
@@ -17,6 +28,7 @@ export type Habit = {
   done_count: number;
   last_done_at: string | null;
   frequency: "weekly" | "monthly" | "none";
+  habit_group_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -33,6 +45,8 @@ export type Block = {
   completed: boolean;
   hashtag: string | null;
   week_start_date: string | null;
+  linked_block_id: string | null;
+  is_linked_group: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -61,6 +75,74 @@ export type ThemeGoalCompletion = {
 };
 
 export const database = {
+  habitGroups: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as HabitGroup[];
+    },
+
+    async getByTheme(themeId: string) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .select("*")
+        .eq("theme_id", themeId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as HabitGroup[];
+    },
+
+    async create(
+      userId: string,
+      themeId: string,
+      name: string,
+      groupType: "strength_training" | "custom",
+      linkBehavior: "adjacent_merge" | "none"
+    ) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .insert({
+          user_id: userId,
+          theme_id: themeId,
+          name,
+          group_type: groupType,
+          link_behavior: linkBehavior,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as HabitGroup;
+    },
+
+    async update(id: string, updates: Partial<HabitGroup>) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as HabitGroup;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("habit_groups")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+  },
+
   themes: {
     async getAll(userId: string) {
       const { data, error } = await supabase
@@ -123,7 +205,8 @@ export const database = {
       themeId: string,
       name: string,
       targetPerWeek: number,
-      frequency: "weekly" | "monthly" | "none"
+      frequency: "weekly" | "monthly" | "none",
+      habitGroupId?: string
     ) {
       const { data, error } = await supabase
         .from("habits")
@@ -134,6 +217,7 @@ export const database = {
           target_per_week: targetPerWeek,
           frequency,
           done_count: 0,
+          habit_group_id: habitGroupId ?? null,
         })
         .select()
         .single();
