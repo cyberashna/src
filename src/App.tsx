@@ -650,16 +650,35 @@ const App: React.FC = () => {
     timeIndex: number
   ): string | null => {
     const block = blocks.find((b) => b.id === blockId);
-    if (!block || !block.habitId) return null;
+    if (!block || !block.habitId) {
+      console.log("Block not found or no habitId", { blockId, block });
+      return null;
+    }
 
     const habit = allHabits.find((h) => h.id === block.habitId);
-    if (!habit || !habit.habitGroupId) return null;
+    if (!habit || !habit.habitGroupId) {
+      console.log("Habit not found or no habitGroupId", { habitId: block.habitId, habit });
+      return null;
+    }
 
     const theme = themes.find((t) => t.habits.some((h) => h.id === habit.id));
-    if (!theme) return null;
+    if (!theme) {
+      console.log("Theme not found for habit", { habitId: habit.id });
+      return null;
+    }
 
     const group = theme.groups.find((g) => g.id === habit.habitGroupId);
-    if (!group || group.linkBehavior !== "adjacent_merge") return null;
+    if (!group || group.linkBehavior !== "adjacent_merge") {
+      console.log("Group not found or wrong behavior", { groupId: habit.habitGroupId, group });
+      return null;
+    }
+
+    console.log("Checking for adjacent linkable blocks", {
+      blockId,
+      habitName: habit.name,
+      groupName: group.name,
+      position: { dayIndex, timeIndex }
+    });
 
     const adjacentPositions = [
       { day: dayIndex - 1, time: timeIndex },
@@ -681,12 +700,20 @@ const App: React.FC = () => {
 
       if (adjacentBlock && adjacentBlock.habitId) {
         const adjacentHabit = allHabits.find((h) => h.id === adjacentBlock.habitId);
+        console.log("Found adjacent habit block", {
+          adjacentHabitName: adjacentHabit?.name,
+          adjacentGroupId: adjacentHabit?.habitGroupId,
+          currentGroupId: habit.habitGroupId,
+          matches: adjacentHabit?.habitGroupId === habit.habitGroupId
+        });
         if (adjacentHabit && adjacentHabit.habitGroupId === habit.habitGroupId) {
+          console.log("MATCH! Returning adjacent block id");
           return adjacentBlock.id;
         }
       }
     }
 
+    console.log("No adjacent linkable blocks found");
     return null;
   };
 
@@ -765,6 +792,8 @@ const App: React.FC = () => {
       const weekStartDate = getWeekStartDateString(weekOffset);
       const originalHabit = allHabits.find((h) => h.id === block?.habitId);
 
+      const adjacentBlockId = checkAdjacentLinkable(blockId, dayIndex, timeIndex);
+
       await database.blocks.update(blockId, {
         location_type: "slot",
         day_index: dayIndex,
@@ -804,7 +833,6 @@ const App: React.FC = () => {
         })
       );
 
-      const adjacentBlockId = checkAdjacentLinkable(blockId, dayIndex, timeIndex);
       if (adjacentBlockId) {
         setLinkConfirmation({ blockId1: blockId, blockId2: adjacentBlockId });
       }
