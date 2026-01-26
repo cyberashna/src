@@ -723,6 +723,7 @@ const App: React.FC = () => {
     console.log("5. All checks passed! Searching for adjacent blocks...");
 
     const adjacentPositions = [
+      { day: dayIndex, time: timeIndex },
       { day: dayIndex - 1, time: timeIndex },
       { day: dayIndex + 1, time: timeIndex },
       { day: dayIndex, time: timeIndex - 1 },
