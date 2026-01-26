@@ -48,6 +48,7 @@ export type Block = {
   linked_block_id: string | null;
   is_linked_group: boolean;
   workout_submitted: boolean;
+  session_group_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -85,6 +86,16 @@ export type WorkoutData = {
   user_id: string;
   created_at: string;
   updated_at: string;
+};
+
+export type SessionGroup = {
+  id: string;
+  user_id: string;
+  week_start_date: string;
+  session_number: number;
+  custom_name: string | null;
+  accent_color: string;
+  created_at: string;
 };
 
 export const database = {
@@ -515,6 +526,90 @@ export const database = {
         .eq("block_id", blockId);
 
       if (error) throw error;
+    },
+  },
+
+  sessionGroups: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .select("*")
+        .eq("user_id", userId)
+        .order("week_start_date", { ascending: false })
+        .order("session_number", { ascending: true });
+
+      if (error) throw error;
+      return data as SessionGroup[];
+    },
+
+    async getForWeek(userId: string, weekStartDate: string) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("week_start_date", weekStartDate)
+        .order("session_number", { ascending: true });
+
+      if (error) throw error;
+      return data as SessionGroup[];
+    },
+
+    async create(
+      userId: string,
+      weekStartDate: string,
+      sessionNumber: number,
+      accentColor: string,
+      customName?: string
+    ) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .insert({
+          user_id: userId,
+          week_start_date: weekStartDate,
+          session_number: sessionNumber,
+          accent_color: accentColor,
+          custom_name: customName || null,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as SessionGroup;
+    },
+
+    async update(id: string, updates: Partial<SessionGroup>) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .update(updates)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as SessionGroup;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("session_groups")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+
+    async getNextSessionNumber(userId: string, weekStartDate: string) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .select("session_number")
+        .eq("user_id", userId)
+        .eq("week_start_date", weekStartDate)
+        .order("session_number", { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) return 1;
+      return data[0].session_number + 1;
     },
   },
 };

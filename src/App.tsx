@@ -5,7 +5,8 @@ import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
 import { ThemeGoals } from "./components/ThemeGoals";
 import { WorkoutInputs } from "./components/WorkoutInputs";
-import { database } from "./services/database";
+import { database, SessionGroup, Habit as DBHabit, Block as DBBlock } from "./services/database";
+import { updateSessionGroups, getSessionDisplayName } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
 
 type HabitGroup = {
@@ -55,6 +56,8 @@ export type Block = {
   isLinkedGroup?: boolean;
   workoutData?: WorkoutData;
   workoutSubmitted?: boolean;
+  sessionGroupId?: string;
+  sessionGroup?: SessionGroup;
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -167,6 +170,9 @@ const App: React.FC = () => {
     blockId2: string;
   } | null>(null);
 
+  const [renamingSession, setRenamingSession] = useState<SessionGroup | null>(null);
+  const [sessionRenameValue, setSessionRenameValue] = useState("");
+
   const [newThemeName, setNewThemeName] = useState("");
 
   const [blockLabel, setBlockLabel] = useState("");
@@ -201,11 +207,12 @@ const App: React.FC = () => {
     setDataLoading(true);
     try {
       const weekStartDate = getWeekStartDateString(weekOffset);
-      const [themesData, habitsData, blocksData, groupsData] = await Promise.all([
+      const [themesData, habitsData, blocksData, groupsData, sessionGroupsData] = await Promise.all([
         database.themes.getAll(user.id),
         database.habits.getAll(user.id),
         database.blocks.getForWeek(user.id, weekStartDate),
         database.habitGroups.getAll(user.id),
+        database.sessionGroups.getForWeek(user.id, weekStartDate),
       ]);
 
       const themesWithHabits: Theme[] = themesData.map((theme) => ({
@@ -251,6 +258,8 @@ const App: React.FC = () => {
         ])
       );
 
+      const sessionGroupMap = new Map(sessionGroupsData.map((sg) => [sg.id, sg]));
+
       const convertedBlocks: Block[] = blocksData.map((b) => ({
         id: b.id,
         label: b.label,
@@ -262,6 +271,8 @@ const App: React.FC = () => {
         isLinkedGroup: b.is_linked_group,
         workoutData: workoutDataMap.get(b.id),
         workoutSubmitted: b.workout_submitted,
+        sessionGroupId: b.session_group_id ?? undefined,
+        sessionGroup: b.session_group_id ? sessionGroupMap.get(b.session_group_id) : undefined,
         location:
           b.location_type === "slot" && b.day_index !== null && b.time_index !== null
             ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
@@ -282,6 +293,49 @@ const App: React.FC = () => {
       themeName: theme.name,
     }))
   );
+
+  const refreshSessionGroups = async () => {
+    if (!user) return;
+
+    try {
+      const weekStartDate = getWeekStartDateString(weekOffset);
+      const [blocksData, habitsData] = await Promise.all([
+        database.blocks.getForWeek(user.id, weekStartDate),
+        database.habits.getAll(user.id),
+      ]);
+
+      const dbBlocks: DBBlock[] = blocksData;
+      const dbHabits: DBHabit[] = habitsData;
+
+      await updateSessionGroups(user.id, dbBlocks, dbHabits);
+
+      await loadUserData();
+    } catch (error) {
+      console.error("Error refreshing session groups:", error);
+    }
+  };
+
+  const renameSession = async (sessionId: string, newName: string) => {
+    try {
+      await database.sessionGroups.update(sessionId, {
+        custom_name: newName.trim() || null,
+      });
+
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.sessionGroupId === sessionId && b.sessionGroup
+            ? { ...b, sessionGroup: { ...b.sessionGroup, custom_name: newName.trim() || null } }
+            : b
+        )
+      );
+
+      setRenamingSession(null);
+      setSessionRenameValue("");
+    } catch (error) {
+      console.error("Error renaming session:", error);
+      alert("Failed to rename session");
+    }
+  };
 
   const getHabitDoneCount = (habitId: string, frequency: "weekly" | "monthly" | "none"): number => {
     if (frequency === "none") {
@@ -591,6 +645,7 @@ const App: React.FC = () => {
         linked_block_id: null,
         is_linked_group: false,
         workout_submitted: false,
+        session_group_id: null,
       });
 
       const newBlock: Block = {
@@ -644,6 +699,7 @@ const App: React.FC = () => {
         linked_block_id: null,
         is_linked_group: false,
         workout_submitted: false,
+        session_group_id: null,
       });
 
       const newBlock: Block = {
@@ -662,6 +718,8 @@ const App: React.FC = () => {
       console.log("New block created:", newBlock);
 
       setBlocks((currentBlocks) => [...currentBlocks, newBlock]);
+
+      await refreshSessionGroups();
     } catch (error) {
       console.error("Error creating habit block:", error);
     }
@@ -805,6 +863,8 @@ const App: React.FC = () => {
       });
 
       setBlocks(updatedBlocks);
+
+      await refreshSessionGroups();
     } catch (error) {
       console.error("Error moving block:", error);
     }
@@ -865,6 +925,8 @@ const App: React.FC = () => {
           return b;
         })
       );
+
+      await refreshSessionGroups();
     } catch (error) {
       console.error("Error moving block:", error);
     }
@@ -907,6 +969,8 @@ const App: React.FC = () => {
             return b;
           })
       );
+
+      await refreshSessionGroups();
     } catch (error) {
       console.error("Error deleting block:", error);
     }
@@ -1111,6 +1175,23 @@ const App: React.FC = () => {
         b.location.timeIndex === timeIndex &&
         !(b.linkedBlockId && !b.isLinkedGroup)
     );
+  };
+
+  const hasAdjacentBlockBelow = (block: Block): boolean => {
+    if (block.location.type !== "slot" || !block.sessionGroupId) return false;
+
+    const currentDayIndex = block.location.dayIndex;
+    const currentTimeIndex = block.location.timeIndex;
+
+    const belowBlocks = blocks.filter(
+      (b) =>
+        b.location.type === "slot" &&
+        b.location.dayIndex === currentDayIndex &&
+        b.location.timeIndex === currentTimeIndex + 1 &&
+        b.sessionGroupId === block.sessionGroupId
+    );
+
+    return belowBlocks.length > 0;
   };
 
   const handleSlotDrop = (
@@ -1711,14 +1792,20 @@ const App: React.FC = () => {
                           }
                         >
                           <div className="slot-inner">
-                            {slotBlocks.map((block) => (
+                            {slotBlocks.map((block) => {
+                              const hasSessionGroup = !!block.sessionGroup;
+                              const sessionColor = block.sessionGroup?.accent_color || "";
+                              const showConnector = hasAdjacentBlockBelow(block);
+
+                              return (
                               <div
                                 key={block.id}
                                 className={
                                   "block" +
                                   (block.isHabitBlock ? " habit-block" : "") +
                                   (block.isLinkedGroup ? " linked-group" : "") +
-                                  (block.completed ? " block-done" : "")
+                                  (block.completed ? " block-done" : "") +
+                                  (hasSessionGroup ? ` session-group session-${sessionColor}` : "")
                                 }
                                 draggable
                                 onDragStart={() => handleDragStart(block.id)}
@@ -1727,6 +1814,24 @@ const App: React.FC = () => {
                                   handleBlockDoubleClick(block.id)
                                 }
                               >
+                                {hasSessionGroup && block.sessionGroup && (
+                                  <div
+                                    className={`session-badge session-${sessionColor}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setRenamingSession(block.sessionGroup!);
+                                      setSessionRenameValue(
+                                        block.sessionGroup!.custom_name || ""
+                                      );
+                                    }}
+                                    title="Click to rename session"
+                                  >
+                                    {getSessionDisplayName(block.sessionGroup)}
+                                  </div>
+                                )}
+                                {showConnector && (
+                                  <div className={`session-connector session-${sessionColor}`} />
+                                )}
                                 <div>
                                   {block.isHabitBlock ? (
                                     <label
@@ -1771,7 +1876,8 @@ const App: React.FC = () => {
                                   ×
                                 </button>
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </td>
                       );
@@ -1831,6 +1937,59 @@ const App: React.FC = () => {
                     onClick={() => setLinkConfirmation(null)}
                   >
                     Keep separate
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {renamingSession && (
+          <div className="modal-overlay" onClick={() => {
+            setRenamingSession(null);
+            setSessionRenameValue("");
+          }}>
+            <div className="modal-content session-rename-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>Rename Session</h2>
+                <button
+                  className="modal-close"
+                  onClick={() => {
+                    setRenamingSession(null);
+                    setSessionRenameValue("");
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="modal-body">
+                <label className="small-label">Session name (leave empty to use auto-generated name)</label>
+                <input
+                  type="text"
+                  value={sessionRenameValue}
+                  onChange={(e) => setSessionRenameValue(e.target.value)}
+                  placeholder={`Session ${renamingSession.session_number}`}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      renameSession(renamingSession.id, sessionRenameValue);
+                    }
+                  }}
+                />
+                <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                  <button
+                    onClick={() => renameSession(renamingSession.id, sessionRenameValue)}
+                  >
+                    Save
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      setRenamingSession(null);
+                      setSessionRenameValue("");
+                    }}
+                  >
+                    Cancel
                   </button>
                 </div>
               </div>

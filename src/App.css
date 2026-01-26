@@ -748,3 +748,169 @@ table.planner td.slot.drag-over {
   position: relative;
   top: -1px;
 }
+
+:root {
+  --session-blue: #3b82f6;
+  --session-teal: #14b8a6;
+  --session-green: #10b981;
+  --session-orange: #f97316;
+  --session-coral: #f43f5e;
+  --session-amber: #f59e0b;
+}
+
+.block.session-group {
+  position: relative;
+}
+
+.block.session-group.session-blue {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.block.session-group.session-teal {
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.3);
+}
+
+.block.session-group.session-green {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+}
+
+.block.session-group.session-orange {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.3);
+}
+
+.block.session-group.session-coral {
+  box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.3);
+}
+
+.block.session-group.session-amber {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.3);
+}
+
+.block.session-group:hover.session-blue {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+}
+
+.block.session-group:hover.session-teal {
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.5);
+}
+
+.block.session-group:hover.session-green {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.5);
+}
+
+.block.session-group:hover.session-orange {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.5);
+}
+
+.block.session-group:hover.session-coral {
+  box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.5);
+}
+
+.block.session-group:hover.session-amber {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.5);
+}
+
+.session-connector {
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 6px;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.session-connector.session-blue {
+  background: #3b82f6;
+}
+
+.session-connector.session-teal {
+  background: #14b8a6;
+}
+
+.session-connector.session-green {
+  background: #10b981;
+}
+
+.session-connector.session-orange {
+  background: #f97316;
+}
+
+.session-connector.session-coral {
+  background: #f43f5e;
+}
+
+.session-connector.session-amber {
+  background: #f59e0b;
+}
+
+.session-badge {
+  position: absolute;
+  top: -6px;
+  left: 4px;
+  font-size: 9px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  color: white;
+  cursor: pointer;
+  user-select: none;
+  z-index: 2;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.session-badge:hover {
+  transform: scale(1.05);
+}
+
+.session-badge.session-blue {
+  background: #3b82f6;
+}
+
+.session-badge.session-teal {
+  background: #14b8a6;
+}
+
+.session-badge.session-green {
+  background: #10b981;
+}
+
+.session-badge.session-orange {
+  background: #f97316;
+}
+
+.session-badge.session-coral {
+  background: #f43f5e;
+}
+
+.session-badge.session-amber {
+  background: #f59e0b;
+}
+
+.session-rename-modal input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.habit-drag-area {
+  cursor: grab;
+  user-select: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+.habit-drag-area:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.habit-drag-area:active {
+  cursor: grabbing;
+}
