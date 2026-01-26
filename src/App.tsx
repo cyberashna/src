@@ -672,6 +672,14 @@ const App: React.FC = () => {
   ): string | null => {
     const searchBlocks = blocksToSearch || blocks;
     console.log("===== checkAdjacentLinkable called =====", { blockId, dayIndex, timeIndex, searchingInCount: searchBlocks.length });
+    console.log("All blocks being searched:", searchBlocks.map(b => ({
+      id: b.id,
+      label: b.label,
+      location: b.location,
+      habitId: b.habitId,
+      linkedBlockId: b.linkedBlockId,
+      isLinkedGroup: b.isLinkedGroup
+    })));
 
     const block = searchBlocks.find((b) => b.id === blockId);
     console.log("1. Block lookup:", { found: !!block, isHabitBlock: block?.isHabitBlock, habitId: block?.habitId });
@@ -722,6 +730,24 @@ const App: React.FC = () => {
     ];
 
     for (const pos of adjacentPositions) {
+      const blocksAtPosition = searchBlocks.filter(
+        (b) =>
+          b.location.type === "slot" &&
+          b.location.dayIndex === pos.day &&
+          b.location.timeIndex === pos.time
+      );
+
+      console.log(`6a. Blocks at position (${pos.day}, ${pos.time}):`, blocksAtPosition.map(b => ({
+        id: b.id,
+        label: b.label,
+        habitId: b.habitId,
+        linkedBlockId: b.linkedBlockId,
+        isLinkedGroup: b.isLinkedGroup,
+        matchesId: b.id !== blockId,
+        notLinked: !b.linkedBlockId,
+        notGroup: !b.isLinkedGroup
+      })));
+
       const adjacentBlock = searchBlocks.find(
         (b) =>
           b.location.type === "slot" &&
@@ -732,7 +758,7 @@ const App: React.FC = () => {
           !b.isLinkedGroup
       );
 
-      console.log(`6. Checking position (${pos.day}, ${pos.time}):`, {
+      console.log(`6b. Checking position (${pos.day}, ${pos.time}):`, {
         found: !!adjacentBlock,
         blockId: adjacentBlock?.id,
         hasHabitId: !!adjacentBlock?.habitId
