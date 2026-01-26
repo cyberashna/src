@@ -45,15 +45,10 @@ function areBlocksAdjacent(
     return false;
   }
 
-  const verticallyAdjacent =
+  return (
     block1.day_index === block2.day_index &&
-    Math.abs(block1.time_index - block2.time_index) === 1;
-
-  const horizontallyAdjacent =
-    block1.time_index === block2.time_index &&
-    Math.abs(block1.day_index - block2.day_index) === 1;
-
-  return verticallyAdjacent || horizontallyAdjacent;
+    Math.abs(block1.time_index - block2.time_index) === 1
+  );
 }
 
 function isStrengthTrainingBlock(
