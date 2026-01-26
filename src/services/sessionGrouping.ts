@@ -45,10 +45,15 @@ function areBlocksAdjacent(
     return false;
   }
 
-  return (
+  const verticallyAdjacent =
     block1.day_index === block2.day_index &&
-    Math.abs(block1.time_index - block2.time_index) === 1
-  );
+    Math.abs(block1.time_index - block2.time_index) === 1;
+
+  const horizontallyAdjacent =
+    block1.time_index === block2.time_index &&
+    Math.abs(block1.day_index - block2.day_index) === 1;
+
+  return verticallyAdjacent || horizontallyAdjacent;
 }
 
 function isStrengthTrainingBlock(
@@ -133,6 +138,7 @@ function findAdjacentGroups(
 
         for (const groupBlock of group) {
           if (areBlocksAdjacent(candidate, groupBlock)) {
+            console.log(`✓ Adjacent: ${candidate.label} (Day ${candidate.day_index}, Time ${candidate.time_index}) ← → ${groupBlock.label} (Day ${groupBlock.day_index}, Time ${groupBlock.time_index})`);
             group.push(candidate);
             visited.add(candidate.id);
             changed = true;
