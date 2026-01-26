@@ -47,6 +47,7 @@ export type Block = {
   week_start_date: string | null;
   linked_block_id: string | null;
   is_linked_group: boolean;
+  workout_submitted: boolean;
   created_at: string;
   updated_at: string;
 };

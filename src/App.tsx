@@ -54,6 +54,7 @@ export type Block = {
   linkedBlockId?: string;
   isLinkedGroup?: boolean;
   workoutData?: WorkoutData;
+  workoutSubmitted?: boolean;
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -260,6 +261,7 @@ const App: React.FC = () => {
         linkedBlockId: b.linked_block_id ?? undefined,
         isLinkedGroup: b.is_linked_group,
         workoutData: workoutDataMap.get(b.id),
+        workoutSubmitted: b.workout_submitted,
         location:
           b.location_type === "slot" && b.day_index !== null && b.time_index !== null
             ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
@@ -361,7 +363,7 @@ const App: React.FC = () => {
     if (!user) return;
 
     try {
-      const linkBehavior = groupType === "strength_training" ? "adjacent_merge" : "none";
+      const linkBehavior = "none"; // Keep all blocks separate, including strength training
       const groupData = await database.habitGroups.create(
         user.id,
         themeId,
@@ -588,6 +590,7 @@ const App: React.FC = () => {
         week_start_date: null,
         linked_block_id: null,
         is_linked_group: false,
+        workout_submitted: false,
       });
 
       const newBlock: Block = {
@@ -600,6 +603,7 @@ const App: React.FC = () => {
         hashtag: blockData.hashtag ?? undefined,
         linkedBlockId: blockData.linked_block_id ?? undefined,
         isLinkedGroup: blockData.is_linked_group,
+        workoutSubmitted: blockData.workout_submitted,
       };
 
       setBlocks((prev) => [...prev, newBlock]);
@@ -639,6 +643,7 @@ const App: React.FC = () => {
         week_start_date: weekStartDate,
         linked_block_id: null,
         is_linked_group: false,
+        workout_submitted: false,
       });
 
       const newBlock: Block = {
@@ -651,23 +656,12 @@ const App: React.FC = () => {
         hashtag: habit.themeName,
         linkedBlockId: blockData.linked_block_id ?? undefined,
         isLinkedGroup: blockData.is_linked_group,
+        workoutSubmitted: blockData.workout_submitted,
       };
 
       console.log("New block created:", newBlock);
-      console.log("About to call checkAdjacentLinkable for newly created block...");
 
-      setBlocks((currentBlocks) => {
-        const updatedBlocks = [...currentBlocks, newBlock];
-        const adjacentBlockId = checkAdjacentLinkable(blockData.id, dayIndex, timeIndex, updatedBlocks);
-        console.log("checkAdjacentLinkable returned:", adjacentBlockId);
-
-        if (adjacentBlockId) {
-          console.log("Setting link confirmation!");
-          setLinkConfirmation({ blockId1: blockData.id, blockId2: adjacentBlockId });
-        }
-
-        return updatedBlocks;
-      });
+      setBlocks((currentBlocks) => [...currentBlocks, newBlock]);
     } catch (error) {
       console.error("Error creating habit block:", error);
     }
@@ -689,126 +683,6 @@ const App: React.FC = () => {
 
   const handleHabitDragEnd = () => {
     setDragHabitId(null);
-  };
-
-  const checkAdjacentLinkable = (
-    blockId: string,
-    dayIndex: number,
-    timeIndex: number,
-    blocksToSearch?: Block[]
-  ): string | null => {
-    const searchBlocks = blocksToSearch || blocks;
-    console.log("===== checkAdjacentLinkable called =====", { blockId, dayIndex, timeIndex, searchingInCount: searchBlocks.length });
-    console.log("All blocks being searched:", searchBlocks.map(b => ({
-      id: b.id,
-      label: b.label,
-      location: b.location,
-      habitId: b.habitId,
-      linkedBlockId: b.linkedBlockId,
-      isLinkedGroup: b.isLinkedGroup
-    })));
-
-    const block = searchBlocks.find((b) => b.id === blockId);
-    console.log("1. Block lookup:", { found: !!block, isHabitBlock: block?.isHabitBlock, habitId: block?.habitId });
-    if (!block || !block.habitId) {
-      console.log("EARLY EXIT: Block not found or no habitId");
-      return null;
-    }
-
-    const habit = allHabits.find((h) => h.id === block.habitId);
-    console.log("2. Habit lookup:", {
-      found: !!habit,
-      habitName: habit?.name,
-      habitGroupId: habit?.habitGroupId,
-      allHabitsCount: allHabits.length
-    });
-    if (!habit || !habit.habitGroupId) {
-      console.log("EARLY EXIT: Habit not found or no habitGroupId");
-      return null;
-    }
-
-    const theme = themes.find((t) => t.habits.some((h) => h.id === habit.id));
-    console.log("3. Theme lookup:", { found: !!theme, themeName: theme?.name, groupsCount: theme?.groups.length });
-    if (!theme) {
-      console.log("EARLY EXIT: Theme not found for habit");
-      return null;
-    }
-
-    const group = theme.groups.find((g) => g.id === habit.habitGroupId);
-    console.log("4. Group lookup:", {
-      found: !!group,
-      groupName: group?.name,
-      linkBehavior: group?.linkBehavior,
-      searchingForId: habit.habitGroupId,
-      availableGroups: theme.groups.map(g => ({ id: g.id, name: g.name, behavior: g.linkBehavior }))
-    });
-    if (!group || group.linkBehavior !== "adjacent_merge") {
-      console.log("EARLY EXIT: Group not found or wrong behavior");
-      return null;
-    }
-
-    console.log("5. All checks passed! Searching for adjacent blocks...");
-
-    const adjacentPositions = [
-      { day: dayIndex, time: timeIndex },
-      { day: dayIndex - 1, time: timeIndex },
-      { day: dayIndex + 1, time: timeIndex },
-      { day: dayIndex, time: timeIndex - 1 },
-      { day: dayIndex, time: timeIndex + 1 },
-    ];
-
-    for (const pos of adjacentPositions) {
-      const blocksAtPosition = searchBlocks.filter(
-        (b) =>
-          b.location.type === "slot" &&
-          b.location.dayIndex === pos.day &&
-          b.location.timeIndex === pos.time
-      );
-
-      console.log(`6a. Blocks at position (${pos.day}, ${pos.time}):`, blocksAtPosition.map(b => ({
-        id: b.id,
-        label: b.label,
-        habitId: b.habitId,
-        linkedBlockId: b.linkedBlockId,
-        isLinkedGroup: b.isLinkedGroup,
-        matchesId: b.id !== blockId,
-        notLinked: !b.linkedBlockId,
-        notGroup: !b.isLinkedGroup
-      })));
-
-      const adjacentBlock = searchBlocks.find(
-        (b) =>
-          b.location.type === "slot" &&
-          b.location.dayIndex === pos.day &&
-          b.location.timeIndex === pos.time &&
-          b.id !== blockId &&
-          !b.linkedBlockId &&
-          !b.isLinkedGroup
-      );
-
-      console.log(`6b. Checking position (${pos.day}, ${pos.time}):`, {
-        found: !!adjacentBlock,
-        blockId: adjacentBlock?.id,
-        hasHabitId: !!adjacentBlock?.habitId
-      });
-
-      if (adjacentBlock && adjacentBlock.habitId) {
-        const adjacentHabit = allHabits.find((h) => h.id === adjacentBlock.habitId);
-        console.log("7. Adjacent habit details:", {
-          adjacentHabitName: adjacentHabit?.name,
-          adjacentGroupId: adjacentHabit?.habitGroupId,
-          currentGroupId: habit.habitGroupId,
-          matches: adjacentHabit?.habitGroupId === habit.habitGroupId
-        });
-        if (adjacentHabit && adjacentHabit.habitGroupId === habit.habitGroupId) {
-          console.log("8. MATCH FOUND! Returning adjacent block id:", adjacentBlock.id);
-          return adjacentBlock.id;
-        }
-      }
-    }
-
-    console.log("9. No matching adjacent blocks found");
-    return null;
   };
 
   const linkBlocks = async (blockId1: string, blockId2: string) => {
@@ -930,15 +804,7 @@ const App: React.FC = () => {
         return b;
       });
 
-      console.log("About to call checkAdjacentLinkable...");
-      const adjacentBlockId = checkAdjacentLinkable(blockId, dayIndex, timeIndex, updatedBlocks);
-      console.log("checkAdjacentLinkable returned:", adjacentBlockId);
-
       setBlocks(updatedBlocks);
-
-      if (adjacentBlockId) {
-        setLinkConfirmation({ blockId1: blockId, blockId2: adjacentBlockId });
-      }
     } catch (error) {
       console.error("Error moving block:", error);
     }
@@ -1153,6 +1019,24 @@ const App: React.FC = () => {
       );
     } catch (error) {
       console.error("Error updating workout data:", error);
+    }
+  };
+
+  const submitWorkout = async (blockId: string) => {
+    if (!user) return;
+
+    try {
+      await database.blocks.update(blockId, {
+        workout_submitted: true,
+      });
+
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId ? { ...b, workoutSubmitted: true } : b
+        )
+      );
+    } catch (error) {
+      console.error("Error submitting workout:", error);
     }
   };
 
@@ -1687,7 +1571,9 @@ const App: React.FC = () => {
                     {isStrengthTrainingBlock(block) && (
                       <WorkoutInputs
                         workoutData={block.workoutData}
+                        workoutSubmitted={block.workoutSubmitted}
                         onUpdate={(data) => updateWorkoutData(block.id, data)}
+                        onSubmit={() => submitWorkout(block.id)}
                       />
                     )}
                   </div>
@@ -1868,7 +1754,9 @@ const App: React.FC = () => {
                                   {isStrengthTrainingBlock(block) && (
                                     <WorkoutInputs
                                       workoutData={block.workoutData}
+                                      workoutSubmitted={block.workoutSubmitted}
                                       onUpdate={(data) => updateWorkoutData(block.id, data)}
+                                      onSubmit={() => submitWorkout(block.id)}
                                     />
                                   )}
                                 </div>
