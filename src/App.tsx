@@ -629,16 +629,18 @@ const App: React.FC = () => {
       console.log("New block created:", newBlock);
       console.log("About to call checkAdjacentLinkable for newly created block...");
 
-      const updatedBlocks = [...blocks, newBlock];
-      const adjacentBlockId = checkAdjacentLinkable(blockData.id, dayIndex, timeIndex, updatedBlocks);
-      console.log("checkAdjacentLinkable returned:", adjacentBlockId);
+      setBlocks((currentBlocks) => {
+        const updatedBlocks = [...currentBlocks, newBlock];
+        const adjacentBlockId = checkAdjacentLinkable(blockData.id, dayIndex, timeIndex, updatedBlocks);
+        console.log("checkAdjacentLinkable returned:", adjacentBlockId);
 
-      setBlocks(updatedBlocks);
+        if (adjacentBlockId) {
+          console.log("Setting link confirmation!");
+          setLinkConfirmation({ blockId1: blockData.id, blockId2: adjacentBlockId });
+        }
 
-      if (adjacentBlockId) {
-        console.log("Setting link confirmation!");
-        setLinkConfirmation({ blockId1: blockData.id, blockId2: adjacentBlockId });
-      }
+        return updatedBlocks;
+      });
     } catch (error) {
       console.error("Error creating habit block:", error);
     }
