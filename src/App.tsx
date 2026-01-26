@@ -4,6 +4,7 @@ import { supabase } from "./lib/supabase";
 import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
 import { ThemeGoals } from "./components/ThemeGoals";
+import { WorkoutInputs } from "./components/WorkoutInputs";
 import { database } from "./services/database";
 import type { User } from "@supabase/supabase-js";
 
@@ -35,6 +36,13 @@ type BlockLocation =
   | { type: "unscheduled" }
   | { type: "slot"; dayIndex: number; timeIndex: number };
 
+export type WorkoutData = {
+  sets: number | null;
+  reps: number | null;
+  weight: number | null;
+  unit: "lbs" | "kg" | null;
+};
+
 export type Block = {
   id: string;
   label: string;
@@ -45,6 +53,7 @@ export type Block = {
   hashtag?: string;
   linkedBlockId?: string;
   isLinkedGroup?: boolean;
+  workoutData?: WorkoutData;
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -224,6 +233,23 @@ const App: React.FC = () => {
 
       setThemes(themesWithHabits);
 
+      const blockIds = blocksData.map((b) => b.id);
+      const workoutDataArray = blockIds.length > 0
+        ? await database.workoutData.getByBlockIds(blockIds)
+        : [];
+
+      const workoutDataMap = new Map(
+        workoutDataArray.map((wd) => [
+          wd.block_id,
+          {
+            sets: wd.sets,
+            reps: wd.reps,
+            weight: wd.weight,
+            unit: wd.unit,
+          },
+        ])
+      );
+
       const convertedBlocks: Block[] = blocksData.map((b) => ({
         id: b.id,
         label: b.label,
@@ -233,6 +259,7 @@ const App: React.FC = () => {
         hashtag: b.hashtag ?? undefined,
         linkedBlockId: b.linked_block_id ?? undefined,
         isLinkedGroup: b.is_linked_group,
+        workoutData: workoutDataMap.get(b.id),
         location:
           b.location_type === "slot" && b.day_index !== null && b.time_index !== null
             ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
@@ -1106,6 +1133,42 @@ const App: React.FC = () => {
     }
   };
 
+  const updateWorkoutData = async (blockId: string, workoutData: WorkoutData) => {
+    if (!user) return;
+
+    try {
+      await database.workoutData.upsert(
+        user.id,
+        blockId,
+        workoutData.sets,
+        workoutData.reps,
+        workoutData.weight,
+        workoutData.unit
+      );
+
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId ? { ...b, workoutData } : b
+        )
+      );
+    } catch (error) {
+      console.error("Error updating workout data:", error);
+    }
+  };
+
+  const isStrengthTrainingBlock = (block: Block): boolean => {
+    if (!block.isHabitBlock || !block.habitId) return false;
+
+    const habit = allHabits.find((h) => h.id === block.habitId);
+    if (!habit || !habit.habitGroupId) return false;
+
+    const habitGroup = themes
+      .flatMap((t) => t.groups)
+      .find((g) => g.id === habit.habitGroupId);
+
+    return habitGroup?.groupType === "strength_training";
+  };
+
   const handleViewModeChange = (mode: ViewMode) => {
     setViewMode(mode);
     setShowBucketConfig(false);
@@ -1617,8 +1680,16 @@ const App: React.FC = () => {
                     onDragStart={() => handleDragStart(block.id)}
                     onDragEnd={handleDragEnd}
                   >
-                    {block.label}
-                    {block.hashtag && <span style={{ marginLeft: 8, opacity: 0.7, fontSize: 12 }}>#{block.hashtag}</span>}
+                    <div>
+                      {block.label}
+                      {block.hashtag && <span style={{ marginLeft: 8, opacity: 0.7, fontSize: 12 }}>#{block.hashtag}</span>}
+                    </div>
+                    {isStrengthTrainingBlock(block) && (
+                      <WorkoutInputs
+                        workoutData={block.workoutData}
+                        onUpdate={(data) => updateWorkoutData(block.id, data)}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
@@ -1770,29 +1841,37 @@ const App: React.FC = () => {
                                   handleBlockDoubleClick(block.id)
                                 }
                               >
-                                {block.isHabitBlock ? (
-                                  <label
-                                    className="block-label-with-check"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={!!block.completed}
-                                      onChange={() =>
-                                        toggleBlockCompletion(block.id)
-                                      }
-                                    />
-                                    <span>
+                                <div>
+                                  {block.isHabitBlock ? (
+                                    <label
+                                      className="block-label-with-check"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={!!block.completed}
+                                        onChange={() =>
+                                          toggleBlockCompletion(block.id)
+                                        }
+                                      />
+                                      <span>
+                                        {block.label}
+                                        {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
+                                      </span>
+                                    </label>
+                                  ) : (
+                                    <>
                                       {block.label}
                                       {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
-                                    </span>
-                                  </label>
-                                ) : (
-                                  <>
-                                    {block.label}
-                                    {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
-                                  </>
-                                )}
+                                    </>
+                                  )}
+                                  {isStrengthTrainingBlock(block) && (
+                                    <WorkoutInputs
+                                      workoutData={block.workoutData}
+                                      onUpdate={(data) => updateWorkoutData(block.id, data)}
+                                    />
+                                  )}
+                                </div>
                                 <button
                                   className="block-delete-btn"
                                   onClick={(e) => {

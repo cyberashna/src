@@ -74,6 +74,18 @@ export type ThemeGoalCompletion = {
   created_at: string;
 };
 
+export type WorkoutData = {
+  id: string;
+  block_id: string;
+  sets: number | null;
+  reps: number | null;
+  weight: number | null;
+  unit: "lbs" | "kg" | null;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export const database = {
   habitGroups: {
     async getAll(userId: string) {
@@ -439,6 +451,69 @@ export const database = {
 
       if (error) throw error;
       return data as ThemeGoalCompletion;
+    },
+  },
+
+  workoutData: {
+    async getByBlockId(blockId: string) {
+      const { data, error } = await supabase
+        .from("workout_data")
+        .select("*")
+        .eq("block_id", blockId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as WorkoutData | null;
+    },
+
+    async getByBlockIds(blockIds: string[]) {
+      if (blockIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("workout_data")
+        .select("*")
+        .in("block_id", blockIds);
+
+      if (error) throw error;
+      return data as WorkoutData[];
+    },
+
+    async upsert(
+      userId: string,
+      blockId: string,
+      sets: number | null,
+      reps: number | null,
+      weight: number | null,
+      unit: "lbs" | "kg" | null
+    ) {
+      const { data, error } = await supabase
+        .from("workout_data")
+        .upsert(
+          {
+            block_id: blockId,
+            user_id: userId,
+            sets,
+            reps,
+            weight,
+            unit,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "block_id" }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as WorkoutData;
+    },
+
+    async delete(blockId: string) {
+      const { error } = await supabase
+        .from("workout_data")
+        .delete()
+        .eq("block_id", blockId);
+
+      if (error) throw error;
     },
   },
 };
