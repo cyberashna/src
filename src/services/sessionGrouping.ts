@@ -1,4 +1,4 @@
-import { database, Block, SessionGroup, Habit } from "./database";
+import { database, Block, SessionGroup, Habit, HabitGroup } from "./database";
 
 const ACCENT_COLORS = ["blue", "teal", "green", "orange", "coral", "amber"];
 
@@ -51,26 +51,70 @@ function areBlocksAdjacent(
   );
 }
 
-function isStrengthTrainingBlock(block: Block, habits: Habit[]): boolean {
-  if (!block.is_habit_block || !block.habit_id) return false;
+function isStrengthTrainingBlock(
+  block: Block,
+  habits: Habit[],
+  habitGroups: HabitGroup[]
+): boolean {
+  if (!block.is_habit_block || !block.habit_id) {
+    return false;
+  }
+
   const habit = habits.find((h) => h.id === block.habit_id);
-  if (!habit || !habit.habit_group_id) return false;
+  if (!habit) {
+    console.log(`Block ${block.label}: No habit found for habit_id ${block.habit_id}`);
+    return false;
+  }
+
+  if (!habit.habit_group_id) {
+    console.log(`Block ${block.label}: Habit ${habit.name} has no habit_group_id`);
+    return false;
+  }
+
+  const group = habitGroups.find((g) => g.id === habit.habit_group_id);
+  if (!group) {
+    console.log(`Block ${block.label}: No group found for habit_group_id ${habit.habit_group_id}`);
+    return false;
+  }
+
+  if (group.group_type !== "strength_training") {
+    console.log(`Block ${block.label}: Group ${group.name} is type ${group.group_type}, not strength_training`);
+    return false;
+  }
+
+  console.log(`✓ Block ${block.label}: IS strength training (group: ${group.name})`);
   return true;
 }
 
 function findAdjacentGroups(
   blocks: Block[],
-  habits: Habit[]
+  habits: Habit[],
+  habitGroups: HabitGroup[]
 ): AdjacentGroup[] {
+  console.log("=== findAdjacentGroups called ===");
+  console.log("Total blocks:", blocks.length);
+  console.log("Total habits:", habits.length);
+  console.log("Total habit groups:", habitGroups.length);
+  console.log("Strength training groups:", habitGroups.filter(g => g.group_type === "strength_training"));
+
   const strengthBlocks = blocks.filter(
     (b) =>
       b.location_type === "slot" &&
       b.day_index !== null &&
       b.time_index !== null &&
-      isStrengthTrainingBlock(b, habits)
+      isStrengthTrainingBlock(b, habits, habitGroups)
   );
 
-  if (strengthBlocks.length < 2) return [];
+  console.log("Found strength training blocks:", strengthBlocks.length);
+  strengthBlocks.forEach(b => {
+    const habit = habits.find(h => h.id === b.habit_id);
+    console.log(`Block: ${b.label}, Day: ${b.day_index}, Time: ${b.time_index}, Habit: ${habit?.name}`);
+  });
+
+  if (strengthBlocks.length < 2) {
+    console.log("Not enough strength blocks to form groups (need at least 2)");
+    return [];
+  }
 
   const visited = new Set<string>();
   const groups: AdjacentGroup[] = [];
@@ -103,20 +147,26 @@ function findAdjacentGroups(
         dayIndex: b.day_index!,
         timeIndex: b.time_index!,
       }));
+      console.log(`Found adjacent group with ${group.length} blocks:`, group.map(b => b.label));
       groups.push({ blocks: group, positions });
     }
   }
 
+  console.log(`Total adjacent groups found: ${groups.length}`);
   return groups;
 }
 
 export async function updateSessionGroups(
   userId: string,
   blocks: Block[],
-  habits: Habit[]
+  habits: Habit[],
+  habitGroups: HabitGroup[]
 ): Promise<void> {
+  console.log("=== updateSessionGroups called ===");
   const weekStartDate = getWeekStartDate(new Date());
-  const adjacentGroups = findAdjacentGroups(blocks, habits);
+  console.log("Week start date:", weekStartDate);
+  const adjacentGroups = findAdjacentGroups(blocks, habits, habitGroups);
+  console.log("Adjacent groups to process:", adjacentGroups.length);
 
   const existingSessions = await database.sessionGroups.getForWeek(
     userId,
@@ -163,6 +213,7 @@ export async function updateSessionGroups(
     }
 
     if (matchingSessionId) {
+      console.log(`Updating existing session ${matchingSessionId} with ${group.blocks.length} blocks`);
       for (const block of group.blocks) {
         if (block.session_group_id !== matchingSessionId) {
           await database.blocks.update(block.id, {
@@ -177,6 +228,8 @@ export async function updateSessionGroups(
       );
       const accentColor = getNextColor(existingSessions);
 
+      console.log(`Creating new session #${sessionNumber} with color ${accentColor} for ${group.blocks.length} blocks`);
+
       const newSession = await database.sessionGroups.create(
         userId,
         weekStartDate,
@@ -184,7 +237,10 @@ export async function updateSessionGroups(
         accentColor
       );
 
+      console.log(`Created session with ID: ${newSession.id}`);
+
       for (const block of group.blocks) {
+        console.log(`Assigning block ${block.label} to session ${newSession.id}`);
         await database.blocks.update(block.id, {
           session_group_id: newSession.id,
         });

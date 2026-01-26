@@ -299,15 +299,16 @@ const App: React.FC = () => {
 
     try {
       const weekStartDate = getWeekStartDateString(weekOffset);
-      const [blocksData, habitsData] = await Promise.all([
+      const [blocksData, habitsData, habitGroupsData] = await Promise.all([
         database.blocks.getForWeek(user.id, weekStartDate),
         database.habits.getAll(user.id),
+        database.habitGroups.getAll(user.id),
       ]);
 
       const dbBlocks: DBBlock[] = blocksData;
       const dbHabits: DBHabit[] = habitsData;
 
-      await updateSessionGroups(user.id, dbBlocks, dbHabits);
+      await updateSessionGroups(user.id, dbBlocks, dbHabits, habitGroupsData);
 
       await loadUserData();
     } catch (error) {
