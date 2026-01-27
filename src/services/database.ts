@@ -27,7 +27,7 @@ export type Habit = {
   target_per_week: number;
   done_count: number;
   last_done_at: string | null;
-  frequency: "weekly" | "monthly" | "none";
+  frequency: "daily" | "weekly" | "monthly" | "none";
   habit_group_id: string | null;
   created_at: string;
   updated_at: string;
@@ -229,7 +229,7 @@ export const database = {
       themeId: string,
       name: string,
       targetPerWeek: number,
-      frequency: "weekly" | "monthly" | "none",
+      frequency: "daily" | "weekly" | "monthly" | "none",
       habitGroupId?: string
     ) {
       const { data, error } = await supabase

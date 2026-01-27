@@ -22,7 +22,7 @@ type Habit = {
   targetPerWeek: number;
   doneCount: number;
   lastDoneAt?: string;
-  frequency: "weekly" | "monthly" | "none";
+  frequency: "daily" | "weekly" | "monthly" | "none";
   habitGroupId?: string;
 };
 
@@ -157,7 +157,7 @@ const App: React.FC = () => {
   const [addingThemeId, setAddingThemeId] = useState<string | null>(null);
   const [newThemeHabitName, setNewThemeHabitName] = useState("");
   const [newThemeHabitTarget, setNewThemeHabitTarget] = useState<number>(2);
-  const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"weekly" | "monthly" | "none">("weekly");
+  const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"daily" | "weekly" | "monthly" | "none">("weekly");
   const [newThemeHabitGroupId, setNewThemeHabitGroupId] = useState<string>("");
   const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
 
@@ -338,7 +338,7 @@ const App: React.FC = () => {
     }
   };
 
-  const getHabitDoneCount = (habitId: string, frequency: "weekly" | "monthly" | "none"): number => {
+  const getHabitDoneCount = (habitId: string, frequency: "daily" | "weekly" | "monthly" | "none"): number => {
     if (frequency === "none") {
       const habit = allHabits.find((h) => h.id === habitId);
       return habit?.doneCount ?? 0;
@@ -361,7 +361,7 @@ const App: React.FC = () => {
     themeId: string,
     name: string,
     targetPerWeek: number,
-    frequency: "weekly" | "monthly" | "none",
+    frequency: "daily" | "weekly" | "monthly" | "none",
     habitGroupId?: string
   ) => {
     const trimmed = name.trim();
@@ -1511,8 +1511,9 @@ const App: React.FC = () => {
                           <label className="small-label">Frequency</label>
                           <select
                             value={newThemeHabitFrequency}
-                            onChange={(e) => setNewThemeHabitFrequency(e.target.value as "weekly" | "monthly" | "none")}
+                            onChange={(e) => setNewThemeHabitFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
                           >
+                            <option value="daily">Daily</option>
                             <option value="weekly">Weekly</option>
                             <option value="monthly">Monthly</option>
                             <option value="none">No Target</option>
@@ -1523,7 +1524,7 @@ const App: React.FC = () => {
                               <input
                                 type="number"
                                 min={1}
-                                max={newThemeHabitFrequency === "weekly" ? 14 : 28}
+                                max={newThemeHabitFrequency === "daily" ? 7 : newThemeHabitFrequency === "weekly" ? 14 : 28}
                                 value={newThemeHabitTarget}
                                 onChange={(e) =>
                                   setNewThemeHabitTarget(
