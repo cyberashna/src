@@ -768,38 +768,7 @@ const App: React.FC = () => {
       const weekStartDate = getWeekStartDateString(weekOffset);
 
       if (timeIndex === -1) {
-        const templateBlockData = await database.blocks.create(user.id, {
-          label: `Habit: ${habit.name}`,
-          is_habit_block: true,
-          habit_id: habitId,
-          location_type: "slot",
-          day_index: dayIndex,
-          time_index: -1,
-          completed: false,
-          hashtag: habit.themeName,
-          week_start_date: weekStartDate,
-          linked_block_id: null,
-          is_linked_group: false,
-          workout_submitted: false,
-          session_group_id: null,
-          is_daily_template: true,
-          daily_template_id: null,
-        });
-
-        const templateBlock: Block = {
-          id: templateBlockData.id,
-          label: templateBlockData.label,
-          isHabitBlock: true,
-          location: { type: "slot", dayIndex, timeIndex: -1 },
-          habitId: habitId,
-          completed: false,
-          hashtag: habit.themeName,
-          linkedBlockId: templateBlockData.linked_block_id ?? undefined,
-          isLinkedGroup: templateBlockData.is_linked_group,
-          workoutSubmitted: templateBlockData.workout_submitted,
-        };
-
-        const newBlocks: Block[] = [templateBlock];
+        const newBlocks: Block[] = [];
 
         for (let day = 0; day < 7; day++) {
           const instanceBlockData = await database.blocks.create(user.id, {
@@ -808,7 +777,7 @@ const App: React.FC = () => {
             habit_id: habitId,
             location_type: "slot",
             day_index: day,
-            time_index: 0,
+            time_index: -1,
             completed: false,
             hashtag: habit.themeName,
             week_start_date: weekStartDate,
@@ -817,14 +786,14 @@ const App: React.FC = () => {
             workout_submitted: false,
             session_group_id: null,
             is_daily_template: false,
-            daily_template_id: templateBlockData.id,
+            daily_template_id: null,
           });
 
           const instanceBlock: Block = {
             id: instanceBlockData.id,
             label: instanceBlockData.label,
             isHabitBlock: true,
-            location: { type: "slot", dayIndex: day, timeIndex: 0 },
+            location: { type: "slot", dayIndex: day, timeIndex: -1 },
             habitId: habitId,
             completed: false,
             hashtag: habit.themeName,
@@ -1094,32 +1063,6 @@ const App: React.FC = () => {
   const deleteBlock = async (blockId: string) => {
     try {
       const block = blocks.find((b) => b.id === blockId);
-
-      const blockData = await database.blocks.getAll(user!.id);
-      const dbBlock = blockData.find((b) => b.id === blockId);
-
-      if (dbBlock?.is_daily_template) {
-        const instanceBlocks = blocks.filter((b) => {
-          const dbB = blockData.find((db) => db.id === b.id);
-          return dbB?.daily_template_id === blockId;
-        });
-
-        for (const instanceBlock of instanceBlocks) {
-          await database.blocks.delete(instanceBlock.id);
-        }
-
-        await database.blocks.delete(blockId);
-
-        setBlocks((prev) =>
-          prev.filter((b) => {
-            const dbB = blockData.find((db) => db.id === b.id);
-            return b.id !== blockId && dbB?.daily_template_id !== blockId;
-          })
-        );
-
-        await refreshSessionGroups();
-        return;
-      }
 
       if (block?.linkedBlockId) {
         await database.blocks.update(block.linkedBlockId, {
