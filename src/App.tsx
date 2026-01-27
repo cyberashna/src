@@ -161,6 +161,12 @@ const App: React.FC = () => {
   const [newThemeHabitGroupId, setNewThemeHabitGroupId] = useState<string>("");
   const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
 
+  const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
+  const [editHabitName, setEditHabitName] = useState("");
+  const [editHabitTarget, setEditHabitTarget] = useState<number>(2);
+  const [editHabitFrequency, setEditHabitFrequency] = useState<"daily" | "weekly" | "monthly" | "none">("weekly");
+  const [editHabitGroupId, setEditHabitGroupId] = useState<string>("");
+
   const [managingGroupsForTheme, setManagingGroupsForTheme] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupType, setNewGroupType] = useState<"strength_training" | "custom">("custom");
@@ -408,6 +414,61 @@ const App: React.FC = () => {
     }
   };
 
+  const updateHabit = async (
+    habitId: string,
+    name: string,
+    targetPerWeek: number,
+    frequency: "daily" | "weekly" | "monthly" | "none",
+    habitGroupId?: string
+  ) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      alert("Enter a habit name.");
+      return;
+    }
+    if (frequency !== "none" && (!targetPerWeek || targetPerWeek <= 0)) {
+      alert("Enter a valid target.");
+      return;
+    }
+
+    if (!user) return;
+
+    try {
+      await database.habits.update(habitId, {
+        name: trimmed,
+        target_per_week: targetPerWeek,
+        frequency,
+        habit_group_id: habitGroupId || null,
+      });
+
+      setThemes((prevThemes) =>
+        prevThemes.map((theme) => ({
+          ...theme,
+          habits: theme.habits.map((h) =>
+            h.id === habitId
+              ? {
+                  ...h,
+                  name: trimmed,
+                  targetPerWeek,
+                  frequency,
+                  habitGroupId: habitGroupId || undefined,
+                }
+              : h
+          ),
+        }))
+      );
+
+      setEditingHabitId(null);
+      setEditHabitName("");
+      setEditHabitTarget(2);
+      setEditHabitFrequency("weekly");
+      setEditHabitGroupId("");
+    } catch (error) {
+      console.error("Error updating habit:", error);
+      alert("Failed to update habit");
+    }
+  };
+
   const addGroupToTheme = async (themeId: string, name: string, groupType: "strength_training" | "custom") => {
     const trimmed = name.trim();
     if (!trimmed) {
@@ -589,6 +650,22 @@ const App: React.FC = () => {
       }
       return next;
     });
+  };
+
+  const startEditingHabit = (habit: Habit) => {
+    setEditingHabitId(habit.id);
+    setEditHabitName(habit.name);
+    setEditHabitTarget(habit.targetPerWeek);
+    setEditHabitFrequency(habit.frequency);
+    setEditHabitGroupId(habit.habitGroupId || "");
+  };
+
+  const cancelEditingHabit = () => {
+    setEditingHabitId(null);
+    setEditHabitName("");
+    setEditHabitTarget(2);
+    setEditHabitFrequency("weekly");
+    setEditHabitGroupId("");
   };
 
   const addTheme = async () => {
@@ -1412,7 +1489,95 @@ const App: React.FC = () => {
                                 </div>
                               )}
 
-                              {isExpanded && (
+                              {isExpanded && editingHabitId === habit.id && (
+                                <>
+                                  <button
+                                    className="habit-delete-x"
+                                    onClick={cancelEditingHabit}
+                                    title="Cancel editing"
+                                  >
+                                    ×
+                                  </button>
+
+                                  <div className="add-habit-form" style={{ paddingLeft: "24px", paddingRight: "24px" }}>
+                                    <label className="small-label">Habit name</label>
+                                    <input
+                                      type="text"
+                                      value={editHabitName}
+                                      onChange={(e) => setEditHabitName(e.target.value)}
+                                      placeholder="e.g. Clean kitchen"
+                                    />
+                                    {theme.groups.length > 0 && (
+                                      <>
+                                        <label className="small-label">Group (optional)</label>
+                                        <select
+                                          value={editHabitGroupId}
+                                          onChange={(e) => setEditHabitGroupId(e.target.value)}
+                                        >
+                                          <option value="">None</option>
+                                          {theme.groups.map((group) => (
+                                            <option key={group.id} value={group.id}>
+                                              {group.name}
+                                              {group.groupType === "strength_training" ? " 🏋️" : ""}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </>
+                                    )}
+                                    <label className="small-label">Frequency</label>
+                                    <select
+                                      value={editHabitFrequency}
+                                      onChange={(e) => setEditHabitFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
+                                    >
+                                      <option value="daily">Daily</option>
+                                      <option value="weekly">Weekly</option>
+                                      <option value="monthly">Monthly</option>
+                                      <option value="none">No Target</option>
+                                    </select>
+                                    {editHabitFrequency !== "none" && (
+                                      <>
+                                        <label className="small-label">Target</label>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          max={editHabitFrequency === "daily" ? 7 : editHabitFrequency === "weekly" ? 14 : 28}
+                                          value={editHabitTarget}
+                                          onChange={(e) =>
+                                            setEditHabitTarget(
+                                              parseInt(e.target.value || "0", 10)
+                                            )
+                                          }
+                                        />
+                                      </>
+                                    )}
+                                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          updateHabit(
+                                            habit.id,
+                                            editHabitName,
+                                            editHabitTarget,
+                                            editHabitFrequency,
+                                            editHabitGroupId || undefined
+                                          );
+                                        }}
+                                      >
+                                        Save changes
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="secondary"
+                                        onClick={cancelEditingHabit}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+
+                              {isExpanded && editingHabitId !== habit.id && (
                                 <>
                                   <button
                                     className="habit-delete-x"
@@ -1473,6 +1638,13 @@ const App: React.FC = () => {
                                       onClick={() => incrementHabit(habit.id)}
                                     >
                                       Done
+                                    </button>
+                                    <button
+                                      style={{ fontSize: 12 }}
+                                      className="secondary"
+                                      onClick={() => startEditingHabit(habit)}
+                                    >
+                                      Edit
                                     </button>
                                   </div>
                                 </>
