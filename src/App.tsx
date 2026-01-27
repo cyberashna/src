@@ -724,6 +724,8 @@ const App: React.FC = () => {
         is_linked_group: false,
         workout_submitted: false,
         session_group_id: null,
+        is_daily_template: false,
+        daily_template_id: null,
       });
 
       const newBlock: Block = {
@@ -764,6 +766,81 @@ const App: React.FC = () => {
 
     try {
       const weekStartDate = getWeekStartDateString(weekOffset);
+
+      if (timeIndex === -1) {
+        const templateBlockData = await database.blocks.create(user.id, {
+          label: `Habit: ${habit.name}`,
+          is_habit_block: true,
+          habit_id: habitId,
+          location_type: "slot",
+          day_index: dayIndex,
+          time_index: -1,
+          completed: false,
+          hashtag: habit.themeName,
+          week_start_date: weekStartDate,
+          linked_block_id: null,
+          is_linked_group: false,
+          workout_submitted: false,
+          session_group_id: null,
+          is_daily_template: true,
+          daily_template_id: null,
+        });
+
+        const templateBlock: Block = {
+          id: templateBlockData.id,
+          label: templateBlockData.label,
+          isHabitBlock: true,
+          location: { type: "slot", dayIndex, timeIndex: -1 },
+          habitId: habitId,
+          completed: false,
+          hashtag: habit.themeName,
+          linkedBlockId: templateBlockData.linked_block_id ?? undefined,
+          isLinkedGroup: templateBlockData.is_linked_group,
+          workoutSubmitted: templateBlockData.workout_submitted,
+        };
+
+        const newBlocks: Block[] = [templateBlock];
+
+        for (let day = 0; day < 7; day++) {
+          const instanceBlockData = await database.blocks.create(user.id, {
+            label: `Habit: ${habit.name}`,
+            is_habit_block: true,
+            habit_id: habitId,
+            location_type: "slot",
+            day_index: day,
+            time_index: 0,
+            completed: false,
+            hashtag: habit.themeName,
+            week_start_date: weekStartDate,
+            linked_block_id: null,
+            is_linked_group: false,
+            workout_submitted: false,
+            session_group_id: null,
+            is_daily_template: false,
+            daily_template_id: templateBlockData.id,
+          });
+
+          const instanceBlock: Block = {
+            id: instanceBlockData.id,
+            label: instanceBlockData.label,
+            isHabitBlock: true,
+            location: { type: "slot", dayIndex: day, timeIndex: 0 },
+            habitId: habitId,
+            completed: false,
+            hashtag: habit.themeName,
+            linkedBlockId: instanceBlockData.linked_block_id ?? undefined,
+            isLinkedGroup: instanceBlockData.is_linked_group,
+            workoutSubmitted: instanceBlockData.workout_submitted,
+          };
+
+          newBlocks.push(instanceBlock);
+        }
+
+        setBlocks((currentBlocks) => [...currentBlocks, ...newBlocks]);
+        await refreshSessionGroups();
+        return;
+      }
+
       const blockData = await database.blocks.create(user.id, {
         label: `Habit: ${habit.name}`,
         is_habit_block: true,
@@ -778,6 +855,8 @@ const App: React.FC = () => {
         is_linked_group: false,
         workout_submitted: false,
         session_group_id: null,
+        is_daily_template: false,
+        daily_template_id: null,
       });
 
       const newBlock: Block = {
@@ -910,6 +989,7 @@ const App: React.FC = () => {
         week_start_date: weekStartDate,
         linked_block_id: null,
         is_linked_group: false,
+        daily_template_id: null,
       });
 
       if (originalHabit && block?.isHabitBlock) {
@@ -976,6 +1056,7 @@ const App: React.FC = () => {
         week_start_date: null,
         linked_block_id: null,
         is_linked_group: false,
+        daily_template_id: null,
       });
 
       const originalHabit = allHabits.find((h) => h.id === block?.habitId);
@@ -1013,6 +1094,33 @@ const App: React.FC = () => {
   const deleteBlock = async (blockId: string) => {
     try {
       const block = blocks.find((b) => b.id === blockId);
+
+      const blockData = await database.blocks.getAll(user!.id);
+      const dbBlock = blockData.find((b) => b.id === blockId);
+
+      if (dbBlock?.is_daily_template) {
+        const instanceBlocks = blocks.filter((b) => {
+          const dbB = blockData.find((db) => db.id === b.id);
+          return dbB?.daily_template_id === blockId;
+        });
+
+        for (const instanceBlock of instanceBlocks) {
+          await database.blocks.delete(instanceBlock.id);
+        }
+
+        await database.blocks.delete(blockId);
+
+        setBlocks((prev) =>
+          prev.filter((b) => {
+            const dbB = blockData.find((db) => db.id === b.id);
+            return b.id !== blockId && dbB?.daily_template_id !== blockId;
+          })
+        );
+
+        await refreshSessionGroups();
+        return;
+      }
+
       if (block?.linkedBlockId) {
         await database.blocks.update(block.linkedBlockId, {
           linked_block_id: null,
@@ -1471,12 +1579,24 @@ const App: React.FC = () => {
                                   minHeight: "48px"
                                 }}>
                                   <div>
-                                    <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px" }}>
+                                    <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px", display: "flex", alignItems: "center", gap: "6px" }}>
                                       {habit.name}
+                                      <span style={{
+                                        fontSize: "9px",
+                                        fontWeight: 600,
+                                        padding: "2px 5px",
+                                        borderRadius: "3px",
+                                        background: habit.frequency === "daily" ? "#fef08a" : habit.frequency === "weekly" ? "#bfdbfe" : habit.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
+                                        color: habit.frequency === "daily" ? "#713f12" : habit.frequency === "weekly" ? "#1e3a8a" : habit.frequency === "monthly" ? "#581c87" : "#374151",
+                                        textTransform: "uppercase",
+                                        letterSpacing: "0.5px"
+                                      }}>
+                                        {habit.frequency === "daily" ? "D" : habit.frequency === "weekly" ? "W" : habit.frequency === "monthly" ? "M" : "N"}
+                                      </span>
                                       {habit.habitGroupId && (() => {
                                         const group = theme.groups.find(g => g.id === habit.habitGroupId);
                                         return group ? (
-                                          <span style={{ marginLeft: "6px", fontSize: "11px", color: "#666", background: "#f0f0f0", padding: "2px 6px", borderRadius: "3px" }}>
+                                          <span style={{ marginLeft: "0px", fontSize: "11px", color: "#666", background: "#f0f0f0", padding: "2px 6px", borderRadius: "3px" }}>
                                             {group.name}
                                           </span>
                                         ) : null;
@@ -1594,8 +1714,21 @@ const App: React.FC = () => {
                                       onDragStart={() => handleHabitDragStart(habit.id)}
                                       onDragEnd={handleHabitDragEnd}
                                       title="Drag to schedule this habit"
+                                      style={{ display: "flex", alignItems: "center", gap: "6px" }}
                                     >
                                       <span className="habit-name-draggable">{habit.name}</span>
+                                      <span style={{
+                                        fontSize: "9px",
+                                        fontWeight: 600,
+                                        padding: "2px 5px",
+                                        borderRadius: "3px",
+                                        background: habit.frequency === "daily" ? "#fef08a" : habit.frequency === "weekly" ? "#bfdbfe" : habit.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
+                                        color: habit.frequency === "daily" ? "#713f12" : habit.frequency === "weekly" ? "#1e3a8a" : habit.frequency === "monthly" ? "#581c87" : "#374151",
+                                        textTransform: "uppercase",
+                                        letterSpacing: "0.5px"
+                                      }}>
+                                        {habit.frequency === "daily" ? "D" : habit.frequency === "weekly" ? "W" : habit.frequency === "monthly" ? "M" : "N"}
+                                      </span>
                                     </div>
 
                                     <div className="habit-meta">
@@ -1950,6 +2083,119 @@ const App: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
+                <tr className="daily-row">
+                  <th className="time-col daily-label" style={{ background: "#fff3cd", fontWeight: 600, fontSize: "11px", color: "#856404" }}>
+                    Daily
+                  </th>
+                  {days.map((_, dayIndex) => {
+                    const dailyBlocks = blocks.filter(
+                      (b) =>
+                        b.location.type === "slot" &&
+                        b.location.dayIndex === dayIndex &&
+                        b.location.timeIndex === -1 &&
+                        !(b.linkedBlockId && !b.isLinkedGroup)
+                    );
+                    return (
+                      <td
+                        key={`daily-${dayIndex}`}
+                        className="slot daily-slot"
+                        style={{ background: "#fffef0", borderTop: "2px solid #ffc107" }}
+                        onDragOver={handleSlotDragOver}
+                        onDragLeave={handleSlotDragLeave}
+                        onDrop={(e) => handleSlotDrop(e, dayIndex, -1)}
+                      >
+                        <div className="slot-inner">
+                          {dailyBlocks.map((block) => {
+                            const hasSessionGroup = !!block.sessionGroup;
+                            const sessionColor = block.sessionGroup?.accent_color || "";
+                            const showConnector = hasAdjacentBlockBelow(block);
+
+                            return (
+                            <div
+                              key={block.id}
+                              className={
+                                "block" +
+                                (block.isHabitBlock ? " habit-block" : "") +
+                                (block.isLinkedGroup ? " linked-group" : "") +
+                                (block.completed ? " block-done" : "") +
+                                (hasSessionGroup ? ` session-group session-${sessionColor}` : "")
+                              }
+                              draggable
+                              onDragStart={() => handleDragStart(block.id)}
+                              onDragEnd={handleDragEnd}
+                              onDoubleClick={() =>
+                                handleBlockDoubleClick(block.id)
+                              }
+                            >
+                              {hasSessionGroup && block.sessionGroup && (
+                                <div
+                                  className={`session-badge session-${sessionColor}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRenamingSession(block.sessionGroup!);
+                                    setSessionRenameValue(
+                                      block.sessionGroup!.custom_name || ""
+                                    );
+                                  }}
+                                  title="Click to rename session"
+                                >
+                                  {getSessionDisplayName(block.sessionGroup)}
+                                </div>
+                              )}
+                              {showConnector && (
+                                <div className={`session-connector session-${sessionColor}`} />
+                              )}
+                              <div>
+                                {block.isHabitBlock ? (
+                                  <label
+                                    className="block-label-with-check"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={!!block.completed}
+                                      onChange={() =>
+                                        toggleBlockCompletion(block.id)
+                                      }
+                                    />
+                                    <span>
+                                      {block.label}
+                                      {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
+                                    </span>
+                                  </label>
+                                ) : (
+                                  <>
+                                    {block.label}
+                                    {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
+                                  </>
+                                )}
+                                {isStrengthTrainingBlock(block) && (
+                                  <WorkoutInputs
+                                    workoutData={block.workoutData}
+                                    workoutSubmitted={block.workoutSubmitted}
+                                    onUpdate={(data) => updateWorkoutData(block.id, data)}
+                                    onSubmit={() => submitWorkout(block.id)}
+                                  />
+                                )}
+                              </div>
+                              <button
+                                className="block-delete-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteBlock(block.id);
+                                }}
+                                title="Delete block"
+                              >
+                                ×
+                              </button>
+                            </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
                 {slotLabels.map((slotLabel, slotIndex) => (
                   <tr key={slotLabel + slotIndex}>
                     <th className="time-col">{slotLabel}</th>

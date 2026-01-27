@@ -49,6 +49,8 @@ export type Block = {
   is_linked_group: boolean;
   workout_submitted: boolean;
   session_group_id: string | null;
+  is_daily_template: boolean;
+  daily_template_id: string | null;
   created_at: string;
   updated_at: string;
 };
