@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import "./App.css";
 import { supabase } from "./lib/supabase";
 import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
 import { ThemeGoals } from "./components/ThemeGoals";
 import { WorkoutInputs } from "./components/WorkoutInputs";
+import { ToastContainer, createToastId } from "./components/Toast";
+import type { ToastItem } from "./components/Toast";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { WeekSummary } from "./components/WeekSummary";
 import { database, SessionGroup, Habit as DBHabit, Block as DBBlock } from "./services/database";
 import { updateSessionGroups, getSessionDisplayName } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
@@ -186,6 +190,22 @@ const App: React.FC = () => {
 
   const [showCalendarSettings, setShowCalendarSettings] = useState(false);
 
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    message: string;
+    confirmLabel?: string;
+    destructive?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
+
+  const [expandedThemes, setExpandedThemes] = useState<Set<string>>(new Set());
+  const [renamingThemeId, setRenamingThemeId] = useState<string | null>(null);
+  const [renameThemeValue, setRenameThemeValue] = useState("");
+
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [editBlockLabel, setEditBlockLabel] = useState("");
+
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -199,6 +219,19 @@ const App: React.FC = () => {
     });
 
     return () => subscription.unsubscribe();
+  }, []);
+
+  const showToast = useCallback((message: string, type: ToastItem["type"] = "info", action?: ToastItem["action"]) => {
+    const id = createToastId();
+    setToasts((prev) => [...prev, { id, message, type, action }]);
+  }, []);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const showConfirm = useCallback((message: string, onConfirm: () => void, options?: { confirmLabel?: string; destructive?: boolean }) => {
+    setConfirmDialog({ message, onConfirm, confirmLabel: options?.confirmLabel, destructive: options?.destructive });
   }, []);
 
   useEffect(() => {
@@ -246,6 +279,12 @@ const App: React.FC = () => {
       }));
 
       setThemes(themesWithHabits);
+
+      setExpandedThemes((prev) => {
+        const next = new Set(prev);
+        themesWithHabits.forEach((t) => { if (!next.has(t.id)) next.add(t.id); });
+        return next;
+      });
 
       const blockIds = blocksData.map((b) => b.id);
       const workoutDataArray = blockIds.length > 0
@@ -340,7 +379,7 @@ const App: React.FC = () => {
       setSessionRenameValue("");
     } catch (error) {
       console.error("Error renaming session:", error);
-      alert("Failed to rename session");
+      showToast("Failed to rename session", "error");
     }
   };
 
@@ -372,11 +411,11 @@ const App: React.FC = () => {
   ) => {
     const trimmed = name.trim();
     if (!trimmed) {
-      alert("Enter a habit name.");
+      showToast("Enter a habit name.", "error");
       return;
     }
     if (frequency !== "none" && (!targetPerWeek || targetPerWeek <= 0)) {
-      alert("Enter a valid target.");
+      showToast("Enter a valid target.", "error");
       return;
     }
 
@@ -408,9 +447,10 @@ const App: React.FC = () => {
             : theme
         )
       );
+      showToast("Habit added", "success");
     } catch (error) {
       console.error("Error creating habit:", error);
-      alert("Failed to create habit");
+      showToast("Failed to create habit", "error");
     }
   };
 
@@ -423,11 +463,11 @@ const App: React.FC = () => {
   ) => {
     const trimmed = name.trim();
     if (!trimmed) {
-      alert("Enter a habit name.");
+      showToast("Enter a habit name.", "error");
       return;
     }
     if (frequency !== "none" && (!targetPerWeek || targetPerWeek <= 0)) {
-      alert("Enter a valid target.");
+      showToast("Enter a valid target.", "error");
       return;
     }
 
@@ -465,14 +505,14 @@ const App: React.FC = () => {
       setEditHabitGroupId("");
     } catch (error) {
       console.error("Error updating habit:", error);
-      alert("Failed to update habit");
+      showToast("Failed to update habit", "error");
     }
   };
 
   const addGroupToTheme = async (themeId: string, name: string, groupType: "strength_training" | "custom") => {
     const trimmed = name.trim();
     if (!trimmed) {
-      alert("Enter a group name.");
+      showToast("Enter a group name.", "error");
       return;
     }
 
@@ -507,31 +547,30 @@ const App: React.FC = () => {
       setNewGroupType("custom");
     } catch (error) {
       console.error("Error creating group:", error);
-      alert("Failed to create group");
+      showToast("Failed to create group", "error");
     }
   };
 
-  const deleteGroup = async (groupId: string) => {
-    if (!window.confirm("Delete this group? Habits in this group will not be deleted.")) {
-      return;
-    }
-
-    try {
-      await database.habitGroups.delete(groupId);
-
-      setThemes((prevThemes) =>
-        prevThemes.map((theme) => ({
-          ...theme,
-          groups: theme.groups.filter((g) => g.id !== groupId),
-          habits: theme.habits.map((h) =>
-            h.habitGroupId === groupId ? { ...h, habitGroupId: undefined } : h
-          ),
-        }))
-      );
-    } catch (error) {
-      console.error("Error deleting group:", error);
-      alert("Failed to delete group");
-    }
+  const deleteGroup = (groupId: string) => {
+    showConfirm("Delete this group? Habits in this group will not be deleted.", async () => {
+      try {
+        await database.habitGroups.delete(groupId);
+        setThemes((prevThemes) =>
+          prevThemes.map((theme) => ({
+            ...theme,
+            groups: theme.groups.filter((g) => g.id !== groupId),
+            habits: theme.habits.map((h) =>
+              h.habitGroupId === groupId ? { ...h, habitGroupId: undefined } : h
+            ),
+          }))
+        );
+        showToast("Group deleted", "success");
+      } catch (error) {
+        console.error("Error deleting group:", error);
+        showToast("Failed to delete group", "error");
+      }
+      setConfirmDialog(null);
+    }, { confirmLabel: "Delete", destructive: true });
   };
 
   const incrementHabit = async (habitId: string) => {
@@ -600,44 +639,38 @@ const App: React.FC = () => {
     }
   };
 
-  const deleteHabit = async (habitId: string) => {
-    if (
-      !window.confirm(
-        "Delete this habit? Any linked habit blocks will become normal blocks."
-      )
-    )
-      return;
-
-    try {
-      await database.habits.delete(habitId);
-
-      setThemes((prevThemes) =>
-        prevThemes.map((theme) => ({
-          ...theme,
-          habits: theme.habits.filter((h) => h.id !== habitId),
-        }))
-      );
-
-      setBlocks((prevBlocks) =>
-        prevBlocks.map((b) =>
-          b.habitId === habitId
-            ? { ...b, isHabitBlock: false, habitId: undefined, completed: false }
-            : b
-        )
-      );
-
-      const affectedBlocks = blocks.filter((b) => b.habitId === habitId);
-      for (const block of affectedBlocks) {
-        await database.blocks.update(block.id, {
-          is_habit_block: false,
-          habit_id: null,
-          completed: false,
-        });
+  const deleteHabit = (habitId: string) => {
+    showConfirm("Delete this habit? Any linked habit blocks will become normal blocks.", async () => {
+      try {
+        await database.habits.delete(habitId);
+        setThemes((prevThemes) =>
+          prevThemes.map((theme) => ({
+            ...theme,
+            habits: theme.habits.filter((h) => h.id !== habitId),
+          }))
+        );
+        setBlocks((prevBlocks) =>
+          prevBlocks.map((b) =>
+            b.habitId === habitId
+              ? { ...b, isHabitBlock: false, habitId: undefined, completed: false }
+              : b
+          )
+        );
+        const affectedBlocks = blocks.filter((b) => b.habitId === habitId);
+        for (const block of affectedBlocks) {
+          await database.blocks.update(block.id, {
+            is_habit_block: false,
+            habit_id: null,
+            completed: false,
+          });
+        }
+        showToast("Habit deleted", "success");
+      } catch (error) {
+        console.error("Error deleting habit:", error);
+        showToast("Failed to delete habit", "error");
       }
-    } catch (error) {
-      console.error("Error deleting habit:", error);
-      alert("Failed to delete habit");
-    }
+      setConfirmDialog(null);
+    }, { confirmLabel: "Delete", destructive: true });
   };
 
   const toggleHabitExpanded = (habitId: string) => {
@@ -671,7 +704,7 @@ const App: React.FC = () => {
   const addTheme = async () => {
     const trimmed = newThemeName.trim();
     if (!trimmed) {
-      alert("Enter a theme name.");
+      showToast("Enter a theme name.", "error");
       return;
     }
 
@@ -688,10 +721,12 @@ const App: React.FC = () => {
       };
 
       setThemes((prev) => [...prev, newTheme]);
+      setExpandedThemes((prev) => new Set([...prev, themeData.id]));
       setNewThemeName("");
+      showToast("Theme created", "success");
     } catch (error) {
       console.error("Error creating theme:", error);
-      alert("Failed to create theme");
+      showToast("Failed to create theme", "error");
     }
   };
 
@@ -703,7 +738,7 @@ const App: React.FC = () => {
   ) => {
     const trimmed = label.trim();
     if (!trimmed) {
-      alert("Enter a label for the block.");
+      showToast("Enter a label for the block.", "error");
       return;
     }
 
@@ -746,7 +781,7 @@ const App: React.FC = () => {
       setBlockHashtag("");
     } catch (error) {
       console.error("Error creating block:", error);
-      alert("Failed to create block");
+      showToast("Failed to create block", "error");
     }
   };
 
@@ -912,7 +947,7 @@ const App: React.FC = () => {
       setLinkConfirmation(null);
     } catch (error) {
       console.error("Error linking blocks:", error);
-      alert("Failed to link blocks");
+      showToast("Failed to link blocks", "error");
     }
   };
 
@@ -1057,62 +1092,6 @@ const App: React.FC = () => {
       await refreshSessionGroups();
     } catch (error) {
       console.error("Error moving block:", error);
-    }
-  };
-
-  const deleteBlock = async (blockId: string) => {
-    try {
-      const block = blocks.find((b) => b.id === blockId);
-
-      if (block?.linkedBlockId) {
-        await database.blocks.update(block.linkedBlockId, {
-          linked_block_id: null,
-          is_linked_group: false,
-        });
-
-        const linkedBlock = blocks.find((b) => b.id === block.linkedBlockId);
-        if (linkedBlock?.habitId) {
-          const habit = allHabits.find((h) => h.id === linkedBlock.habitId);
-          if (habit) {
-            await database.blocks.update(block.linkedBlockId, {
-              label: `Habit: ${habit.name}`,
-            });
-          }
-        }
-      }
-
-      await database.blocks.delete(blockId);
-      setBlocks((prev) =>
-        prev
-          .filter((b) => b.id !== blockId)
-          .map((b) => {
-            if (b.id === block?.linkedBlockId) {
-              const habit = allHabits.find((h) => h.id === b.habitId);
-              return {
-                ...b,
-                linkedBlockId: undefined,
-                isLinkedGroup: false,
-                label: habit ? `Habit: ${habit.name}` : b.label,
-              };
-            }
-            return b;
-          })
-      );
-
-      await refreshSessionGroups();
-    } catch (error) {
-      console.error("Error deleting block:", error);
-    }
-  };
-
-  const handleBlockDoubleClick = (blockId: string) => {
-    const block = blocks.find((b) => b.id === blockId);
-    if (!block) return;
-
-    if (block.isHabitBlock) {
-      deleteBlock(blockId);
-    } else {
-      moveBlockToUnscheduled(blockId);
     }
   };
 
@@ -1347,6 +1326,257 @@ const App: React.FC = () => {
     e.currentTarget.classList.remove("drag-over");
   };
 
+  const deleteBlockWithUndo = async (blockId: string) => {
+    const block = blocks.find((b) => b.id === blockId);
+    if (!block) return;
+
+    try {
+      if (block.linkedBlockId) {
+        await database.blocks.update(block.linkedBlockId, {
+          linked_block_id: null,
+          is_linked_group: false,
+        });
+        const linkedBlock = blocks.find((b) => b.id === block.linkedBlockId);
+        if (linkedBlock?.habitId) {
+          const habit = allHabits.find((h) => h.id === linkedBlock.habitId);
+          if (habit) {
+            await database.blocks.update(block.linkedBlockId, {
+              label: `Habit: ${habit.name}`,
+            });
+          }
+        }
+      }
+
+      await database.blocks.delete(blockId);
+      setBlocks((prev) =>
+        prev
+          .filter((b) => b.id !== blockId)
+          .map((b) => {
+            if (b.id === block.linkedBlockId) {
+              const habit = allHabits.find((h) => h.id === b.habitId);
+              return {
+                ...b,
+                linkedBlockId: undefined,
+                isLinkedGroup: false,
+                label: habit ? `Habit: ${habit.name}` : b.label,
+              };
+            }
+            return b;
+          })
+      );
+      await refreshSessionGroups();
+
+      showToast("Block removed", "info", {
+        label: "Undo",
+        onClick: async () => {
+          if (!user) return;
+          try {
+            const restored = await database.blocks.create(user.id, {
+              label: block.label,
+              is_habit_block: block.isHabitBlock,
+              habit_id: block.habitId ?? null,
+              location_type: block.location.type === "slot" ? "slot" : "unscheduled",
+              day_index: block.location.type === "slot" ? block.location.dayIndex : null,
+              time_index: block.location.type === "slot" ? block.location.timeIndex : null,
+              completed: block.completed || false,
+              hashtag: block.hashtag ?? null,
+              week_start_date: block.location.type === "slot" ? getWeekStartDateString(weekOffset) : null,
+              linked_block_id: null,
+              is_linked_group: false,
+              workout_submitted: block.workoutSubmitted || false,
+              session_group_id: null,
+              is_daily_template: false,
+              daily_template_id: null,
+            });
+            const restoredBlock: Block = {
+              id: restored.id,
+              label: restored.label,
+              isHabitBlock: restored.is_habit_block,
+              location: block.location,
+              habitId: restored.habit_id ?? undefined,
+              completed: restored.completed,
+              hashtag: restored.hashtag ?? undefined,
+              workoutSubmitted: restored.workout_submitted,
+            };
+            setBlocks((prev) => [...prev, restoredBlock]);
+            showToast("Block restored", "success");
+          } catch (err) {
+            console.error("Error restoring block:", err);
+            showToast("Failed to restore block", "error");
+          }
+        },
+      });
+    } catch (error) {
+      console.error("Error deleting block:", error);
+    }
+  };
+
+  const handleBlockDoubleClickWithUndo = (blockId: string) => {
+    const block = blocks.find((b) => b.id === blockId);
+    if (!block) return;
+    if (block.isHabitBlock) {
+      deleteBlockWithUndo(blockId);
+    } else {
+      moveBlockToUnscheduled(blockId);
+    }
+  };
+
+  const toggleThemeExpanded = (themeId: string) => {
+    setExpandedThemes((prev) => {
+      const next = new Set(prev);
+      if (next.has(themeId)) next.delete(themeId);
+      else next.add(themeId);
+      return next;
+    });
+  };
+
+  const startRenamingTheme = (themeId: string, currentName: string) => {
+    setRenamingThemeId(themeId);
+    setRenameThemeValue(currentName);
+  };
+
+  const saveThemeRename = async (themeId: string) => {
+    const trimmed = renameThemeValue.trim();
+    if (!trimmed) {
+      showToast("Theme name cannot be empty.", "error");
+      return;
+    }
+    try {
+      await database.themes.update(themeId, trimmed);
+      setThemes((prev) =>
+        prev.map((t) => (t.id === themeId ? { ...t, name: trimmed } : t))
+      );
+      setRenamingThemeId(null);
+      setRenameThemeValue("");
+    } catch (error) {
+      console.error("Error renaming theme:", error);
+      showToast("Failed to rename theme", "error");
+    }
+  };
+
+  const deleteTheme = (themeId: string) => {
+    const theme = themes.find((t) => t.id === themeId);
+    const habitCount = theme?.habits.length || 0;
+    const msg = habitCount > 0
+      ? `Delete "${theme?.name}" and its ${habitCount} habit(s)? This cannot be undone.`
+      : `Delete "${theme?.name}"? This cannot be undone.`;
+
+    showConfirm(msg, async () => {
+      try {
+        const themeHabitIds = theme?.habits.map((h) => h.id) || [];
+        for (const hId of themeHabitIds) {
+          await database.habits.delete(hId);
+        }
+        const themeGroupIds = theme?.groups.map((g) => g.id) || [];
+        for (const gId of themeGroupIds) {
+          await database.habitGroups.delete(gId);
+        }
+        await database.themes.delete(themeId);
+        setThemes((prev) => prev.filter((t) => t.id !== themeId));
+        setBlocks((prev) =>
+          prev.map((b) =>
+            themeHabitIds.includes(b.habitId || "")
+              ? { ...b, isHabitBlock: false, habitId: undefined, completed: false }
+              : b
+          )
+        );
+        showToast("Theme deleted", "success");
+      } catch (error) {
+        console.error("Error deleting theme:", error);
+        showToast("Failed to delete theme", "error");
+      }
+      setConfirmDialog(null);
+    }, { confirmLabel: "Delete", destructive: true });
+  };
+
+  const saveBlockEdit = async (blockId: string) => {
+    const trimmed = editBlockLabel.trim();
+    if (!trimmed) {
+      showToast("Block label cannot be empty.", "error");
+      return;
+    }
+    try {
+      await database.blocks.update(blockId, { label: trimmed });
+      setBlocks((prev) =>
+        prev.map((b) => (b.id === blockId ? { ...b, label: trimmed } : b))
+      );
+      setEditingBlockId(null);
+      setEditBlockLabel("");
+    } catch (error) {
+      console.error("Error editing block:", error);
+      showToast("Failed to update block", "error");
+    }
+  };
+
+  const copyLastWeek = async () => {
+    if (!user) return;
+
+    const prevWeekStart = getWeekStartDateString(weekOffset - 1);
+    const currentWeekStart = getWeekStartDateString(weekOffset);
+
+    try {
+      const prevBlocks = await database.blocks.getForWeek(user.id, prevWeekStart);
+      const scheduledPrev = prevBlocks.filter(
+        (b) => b.location_type === "slot" && b.week_start_date === prevWeekStart
+      );
+
+      if (scheduledPrev.length === 0) {
+        showToast("No blocks found in previous week.", "info");
+        return;
+      }
+
+      let copied = 0;
+      for (const pb of scheduledPrev) {
+        if (pb.day_index === null || pb.time_index === null) continue;
+
+        const blockData = await database.blocks.create(user.id, {
+          label: pb.label,
+          is_habit_block: pb.is_habit_block,
+          habit_id: pb.habit_id,
+          location_type: "slot",
+          day_index: pb.day_index,
+          time_index: pb.time_index,
+          completed: false,
+          hashtag: pb.hashtag,
+          week_start_date: currentWeekStart,
+          linked_block_id: null,
+          is_linked_group: false,
+          workout_submitted: false,
+          session_group_id: null,
+          is_daily_template: false,
+          daily_template_id: null,
+        });
+
+        const newBlock: Block = {
+          id: blockData.id,
+          label: blockData.label,
+          isHabitBlock: blockData.is_habit_block,
+          location: { type: "slot", dayIndex: pb.day_index!, timeIndex: pb.time_index! },
+          habitId: blockData.habit_id ?? undefined,
+          completed: false,
+          hashtag: blockData.hashtag ?? undefined,
+          workoutSubmitted: false,
+        };
+        setBlocks((prev) => [...prev, newBlock]);
+        copied++;
+      }
+
+      showToast(`Copied ${copied} block(s) from last week`, "success");
+    } catch (error) {
+      console.error("Error copying last week:", error);
+      showToast("Failed to copy from last week", "error");
+    }
+  };
+
+  const getTodayDayIndex = (): number => {
+    if (weekOffset !== 0) return -1;
+    const now = new Date();
+    const day = now.getDay();
+    return day === 0 ? 6 : day - 1;
+  };
+
+  const todayDayIndex = getTodayDayIndex();
+
   if (loading) {
     return (
       <div style={{
@@ -1377,6 +1607,7 @@ const App: React.FC = () => {
                 type="button"
                 className="secondary small-btn"
                 onClick={handleSignOut}
+                aria-label="Sign out"
               >
                 Sign out
               </button>
@@ -1389,41 +1620,95 @@ const App: React.FC = () => {
             ) : (
               <>
                 <div className="theme-list">
-                  {themes.map((theme) => (
+                  {themes.map((theme) => {
+                    const isThemeExpanded = expandedThemes.has(theme.id);
+                    return (
                     <div key={theme.id} className="theme-card">
-                      <div className="theme-title-row">
-                        <div className="theme-name">{theme.name}</div>
-                        <div style={{ display: "flex", gap: "4px" }}>
+                      <div
+                        className="theme-title-row"
+                        onClick={() => toggleThemeExpanded(theme.id)}
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={isThemeExpanded}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleThemeExpanded(theme.id); } }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span
+                            className="theme-collapse-chevron"
+                            style={{ transform: isThemeExpanded ? "rotate(90deg)" : "rotate(0deg)" }}
+                          >
+                            &#9654;
+                          </span>
+                          {renamingThemeId === theme.id ? (
+                            <input
+                              className="theme-name-input"
+                              type="text"
+                              value={renameThemeValue}
+                              onChange={(e) => setRenameThemeValue(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveThemeRename(theme.id);
+                                if (e.key === "Escape") { setRenamingThemeId(null); setRenameThemeValue(""); }
+                              }}
+                              onBlur={() => saveThemeRename(theme.id)}
+                              autoFocus
+                            />
+                          ) : (
+                            <div
+                              className="theme-name"
+                              onDoubleClick={(e) => { e.stopPropagation(); startRenamingTheme(theme.id, theme.name); }}
+                              title="Double-click to rename"
+                            >
+                              {theme.name}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: "flex", gap: "4px", alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
+                          {isThemeExpanded && (
+                            <>
+                              <button
+                                type="button"
+                                className="secondary small-btn"
+                                onClick={() => {
+                                  setAddingThemeId(theme.id);
+                                  setNewThemeHabitName("");
+                                  setNewThemeHabitTarget(2);
+                                  setNewThemeHabitFrequency("weekly");
+                                  setNewThemeHabitGroupId("");
+                                }}
+                              >
+                                Add habit
+                              </button>
+                              <button
+                                type="button"
+                                className="secondary small-btn"
+                                onClick={() => {
+                                  if (managingGroupsForTheme === theme.id) {
+                                    setManagingGroupsForTheme(null);
+                                  } else {
+                                    setManagingGroupsForTheme(theme.id);
+                                    setNewGroupName("");
+                                    setNewGroupType("custom");
+                                  }
+                                }}
+                              >
+                                {managingGroupsForTheme === theme.id ? "Hide" : "Groups"}
+                              </button>
+                            </>
+                          )}
                           <button
                             type="button"
-                            className="secondary small-btn"
-                            onClick={() => {
-                              setAddingThemeId(theme.id);
-                              setNewThemeHabitName("");
-                              setNewThemeHabitTarget(2);
-                              setNewThemeHabitFrequency("weekly");
-                              setNewThemeHabitGroupId("");
-                            }}
+                            className="theme-delete-btn"
+                            onClick={() => deleteTheme(theme.id)}
+                            title="Delete theme"
+                            aria-label={`Delete theme ${theme.name}`}
                           >
-                            Add habit
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary small-btn"
-                            onClick={() => {
-                              if (managingGroupsForTheme === theme.id) {
-                                setManagingGroupsForTheme(null);
-                              } else {
-                                setManagingGroupsForTheme(theme.id);
-                                setNewGroupName("");
-                                setNewGroupType("custom");
-                              }
-                            }}
-                          >
-                            {managingGroupsForTheme === theme.id ? "Hide" : "Groups"}
+                            x
                           </button>
                         </div>
                       </div>
+
+                      <div className={`theme-body ${isThemeExpanded ? "expanded" : "collapsed"}`}>
 
                       {managingGroupsForTheme === theme.id && (
                         <div className="add-habit-form" style={{ marginBottom: "8px" }}>
@@ -1512,7 +1797,12 @@ const App: React.FC = () => {
                                 </span>
                               </button>
 
-                              {!isExpanded && (
+                              {!isExpanded && (() => {
+                                const done = getHabitDoneCount(habit.id, habit.frequency);
+                                const target = habit.targetPerWeek;
+                                const pct = habit.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
+                                const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
+                                return (
                                 <div style={{
                                   paddingLeft: "28px",
                                   display: "flex",
@@ -1521,7 +1811,7 @@ const App: React.FC = () => {
                                   width: "100%",
                                   minHeight: "48px"
                                 }}>
-                                  <div>
+                                  <div style={{ flex: 1 }}>
                                     <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px", display: "flex", alignItems: "center", gap: "6px" }}>
                                       {habit.name}
                                       <span style={{
@@ -1545,12 +1835,21 @@ const App: React.FC = () => {
                                         ) : null;
                                       })()}
                                     </div>
-                                    <div className="habit-meta">
-                                      {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
-                                    </div>
+                                    {habit.frequency !== "none" && (
+                                      <div className="habit-progress-row">
+                                        <span className="habit-progress-fraction">{done}/{target}</span>
+                                        <div className="habit-progress-bar-track">
+                                          <div className={`habit-progress-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
+                                        </div>
+                                      </div>
+                                    )}
+                                    {habit.frequency === "none" && (
+                                      <div className="habit-meta">Done: {done}</div>
+                                    )}
                                   </div>
                                 </div>
-                              )}
+                                );
+                              })()}
 
                               {isExpanded && editingHabitId === habit.id && (
                                 <>
@@ -1825,8 +2124,10 @@ const App: React.FC = () => {
                         groups={theme.groups}
                         habits={theme.habits.map(h => ({ id: h.id, habitGroupId: h.habitGroupId }))}
                       />
+                      </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <div className="add-theme-row">
@@ -1926,6 +2227,7 @@ const App: React.FC = () => {
                   className="secondary small-btn"
                   onClick={() => setWeekOffset(weekOffset - 1)}
                   title="Previous week"
+                  aria-label="Previous week"
                 >
                   ←
                 </button>
@@ -1934,6 +2236,7 @@ const App: React.FC = () => {
                   className="secondary small-btn"
                   onClick={() => setWeekOffset(0)}
                   title="Go to current week"
+                  aria-label="Go to current week"
                   disabled={weekOffset === 0}
                 >
                   Today
@@ -1943,6 +2246,7 @@ const App: React.FC = () => {
                   className="secondary small-btn"
                   onClick={() => setWeekOffset(weekOffset + 1)}
                   title="Next week"
+                  aria-label="Next week"
                 >
                   →
                 </button>
@@ -1952,6 +2256,14 @@ const App: React.FC = () => {
                     ({weekOffset > 0 ? `+${weekOffset}` : weekOffset} week{Math.abs(weekOffset) !== 1 ? 's' : ''})
                   </span>
                 )}
+                <button
+                  type="button"
+                  className="copy-week-btn"
+                  onClick={copyLastWeek}
+                  title="Copy blocks from previous week"
+                >
+                  Copy last week
+                </button>
               </div>
             </div>
 
@@ -2017,13 +2329,31 @@ const App: React.FC = () => {
             )}
           </div>
 
+          <WeekSummary
+            blocks={blocks.map((b) => ({
+              id: b.id,
+              isHabitBlock: b.isHabitBlock,
+              habitId: b.habitId,
+              completed: b.completed,
+              location: { type: b.location.type },
+            }))}
+            habits={allHabits.map((h) => ({
+              id: h.id,
+              name: h.name,
+              targetPerWeek: h.targetPerWeek,
+              frequency: h.frequency,
+            }))}
+          />
+
           <div className="planner-wrapper">
             <table className="planner">
               <thead>
                 <tr>
                   <th className="time-col">Time</th>
-                  {days.map((day) => (
-                    <th key={day}>{day}</th>
+                  {days.map((day, idx) => (
+                    <th key={day} className={idx === todayDayIndex ? "today-col" : ""}>
+                      {day}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -2043,8 +2373,8 @@ const App: React.FC = () => {
                     return (
                       <td
                         key={`daily-${dayIndex}`}
-                        className="slot daily-slot"
-                        style={{ background: "#fffef0", borderTop: "2px solid #ffc107" }}
+                        className={`slot daily-slot${dayIndex === todayDayIndex ? " today-col" : ""}`}
+                        style={{ background: dayIndex === todayDayIndex ? "#eef6fd" : "#fffef0", borderTop: "2px solid #ffc107" }}
                         onDragOver={handleSlotDragOver}
                         onDragLeave={handleSlotDragLeave}
                         onDrop={(e) => handleSlotDrop(e, dayIndex, -1)}
@@ -2069,7 +2399,7 @@ const App: React.FC = () => {
                               onDragStart={() => handleDragStart(block.id)}
                               onDragEnd={handleDragEnd}
                               onDoubleClick={() =>
-                                handleBlockDoubleClick(block.id)
+                                handleBlockDoubleClickWithUndo(block.id)
                               }
                             >
                               {hasSessionGroup && block.sessionGroup && (
@@ -2105,14 +2435,37 @@ const App: React.FC = () => {
                                     />
                                     <span>
                                       {block.label}
+                                      {block.completed && <span className="block-done-check"> &#10003;</span>}
                                       {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
                                     </span>
                                   </label>
+                                ) : editingBlockId === block.id ? (
+                                  <input
+                                    className="block-edit-input"
+                                    type="text"
+                                    value={editBlockLabel}
+                                    onChange={(e) => setEditBlockLabel(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") saveBlockEdit(block.id);
+                                      if (e.key === "Escape") { setEditingBlockId(null); setEditBlockLabel(""); }
+                                    }}
+                                    onBlur={() => saveBlockEdit(block.id)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    autoFocus
+                                  />
                                 ) : (
-                                  <>
+                                  <span
+                                    onDoubleClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingBlockId(block.id);
+                                      setEditBlockLabel(block.label);
+                                    }}
+                                    title="Double-click to edit"
+                                    style={{ cursor: "text" }}
+                                  >
                                     {block.label}
                                     {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
-                                  </>
+                                  </span>
                                 )}
                                 {isStrengthTrainingBlock(block) && (
                                   <WorkoutInputs
@@ -2127,9 +2480,10 @@ const App: React.FC = () => {
                                 className="block-delete-btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  deleteBlock(block.id);
+                                  deleteBlockWithUndo(block.id);
                                 }}
                                 title="Delete block"
+                                aria-label="Delete block"
                               >
                                 ×
                               </button>
@@ -2149,7 +2503,7 @@ const App: React.FC = () => {
                       return (
                         <td
                           key={`${dayIndex}-${slotIndex}`}
-                          className="slot"
+                          className={`slot${dayIndex === todayDayIndex ? " today-col" : ""}`}
                           onDragOver={handleSlotDragOver}
                           onDragLeave={handleSlotDragLeave}
                           onDrop={(e) =>
@@ -2176,7 +2530,7 @@ const App: React.FC = () => {
                                 onDragStart={() => handleDragStart(block.id)}
                                 onDragEnd={handleDragEnd}
                                 onDoubleClick={() =>
-                                  handleBlockDoubleClick(block.id)
+                                  handleBlockDoubleClickWithUndo(block.id)
                                 }
                               >
                                 {hasSessionGroup && block.sessionGroup && (
@@ -2212,14 +2566,37 @@ const App: React.FC = () => {
                                       />
                                       <span>
                                         {block.label}
+                                        {block.completed && <span className="block-done-check"> &#10003;</span>}
                                         {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
                                       </span>
                                     </label>
+                                  ) : editingBlockId === block.id ? (
+                                    <input
+                                      className="block-edit-input"
+                                      type="text"
+                                      value={editBlockLabel}
+                                      onChange={(e) => setEditBlockLabel(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") saveBlockEdit(block.id);
+                                        if (e.key === "Escape") { setEditingBlockId(null); setEditBlockLabel(""); }
+                                      }}
+                                      onBlur={() => saveBlockEdit(block.id)}
+                                      onClick={(e) => e.stopPropagation()}
+                                      autoFocus
+                                    />
                                   ) : (
-                                    <>
+                                    <span
+                                      onDoubleClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingBlockId(block.id);
+                                        setEditBlockLabel(block.label);
+                                      }}
+                                      title="Double-click to edit"
+                                      style={{ cursor: "text" }}
+                                    >
                                       {block.label}
                                       {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
-                                    </>
+                                    </span>
                                   )}
                                   {isStrengthTrainingBlock(block) && (
                                     <WorkoutInputs
@@ -2234,9 +2611,10 @@ const App: React.FC = () => {
                                   className="block-delete-btn"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    deleteBlock(block.id);
+                                    deleteBlockWithUndo(block.id);
                                   }}
                                   title="Delete block"
+                                  aria-label="Delete block"
                                 >
                                   ×
                                 </button>
@@ -2258,6 +2636,7 @@ const App: React.FC = () => {
           className="settings-btn"
           onClick={() => setShowCalendarSettings(true)}
           title="Calendar Settings"
+          aria-label="Calendar Settings"
         >
           📅
         </button>
@@ -2362,6 +2741,18 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          destructive={confirmDialog.destructive}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
+
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </>
   );
 };
