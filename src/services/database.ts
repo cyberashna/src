@@ -59,10 +59,11 @@ export type ThemeGoal = {
   id: string;
   theme_id: string;
   user_id: string;
-  goal_type: "total_completions" | "unique_daily_habits";
+  goal_type: "total_completions" | "unique_daily_habits" | "group_completion";
   target_count: number;
   frequency: "daily" | "weekly";
   description: string | null;
+  habit_group_id: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -394,10 +395,11 @@ export const database = {
     async create(
       userId: string,
       themeId: string,
-      goalType: "total_completions" | "unique_daily_habits",
+      goalType: "total_completions" | "unique_daily_habits" | "group_completion",
       targetCount: number,
       frequency: "daily" | "weekly",
-      description?: string
+      description?: string,
+      habitGroupId?: string
     ) {
       const { data, error } = await supabase
         .from("theme_goals")
@@ -408,6 +410,7 @@ export const database = {
           target_count: targetCount,
           frequency: frequency,
           description: description || null,
+          habit_group_id: habitGroupId ?? null,
           is_active: true,
         })
         .select()

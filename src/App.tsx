@@ -1822,6 +1822,8 @@ const App: React.FC = () => {
                       <ThemeGoals
                         themeId={theme.id}
                         userId={user.id}
+                        groups={theme.groups}
+                        habits={theme.habits.map(h => ({ id: h.id, habitGroupId: h.habitGroupId }))}
                       />
                     </div>
                   ))}

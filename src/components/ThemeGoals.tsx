@@ -1,20 +1,39 @@
 import React, { useState, useEffect } from "react";
-import { database, type ThemeGoal } from "../services/database";
+import { database, type ThemeGoal, type ThemeGoalCompletion } from "../services/database";
+
+type GoalType = "total_completions" | "unique_daily_habits" | "group_completion";
+
+interface HabitGroupInfo {
+  id: string;
+  name: string;
+}
+
+interface HabitInfo {
+  id: string;
+  habitGroupId?: string;
+}
 
 interface ThemeGoalsProps {
   themeId: string;
   userId: string;
+  groups: HabitGroupInfo[];
+  habits: HabitInfo[];
 }
 
-export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
+export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId, groups, habits }) => {
   const [goals, setGoals] = useState<ThemeGoal[]>([]);
   const [loading, setLoading] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [goalType, setGoalType] = useState<"total_completions" | "unique_daily_habits">("total_completions");
+  const [goalType, setGoalType] = useState<GoalType>("total_completions");
   const [targetCount, setTargetCount] = useState(1);
   const [frequency, setFrequency] = useState<"daily" | "weekly">("daily");
   const [description, setDescription] = useState("");
+  const [selectedGroupId, setSelectedGroupId] = useState("");
   const [completionCounts, setCompletionCounts] = useState<Record<string, number>>({});
+
+  const eligibleGroups = groups.filter(g =>
+    habits.some(h => h.habitGroupId === g.id)
+  );
 
   useEffect(() => {
     loadGoals();
@@ -32,13 +51,7 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
           ? new Date().toISOString().split('T')[0]
           : getWeekStart();
         const completions = await database.themeGoals.getCompletionCount(goal.id, startDate);
-
-        if (goal.goal_type === "unique_daily_habits") {
-          const uniqueHabits = new Set(completions.map(c => c.habit_id));
-          counts[goal.id] = uniqueHabits.size;
-        } else {
-          counts[goal.id] = completions.length;
-        }
+        counts[goal.id] = computeCount(goal, completions);
       }
       setCompletionCounts(counts);
     } catch (error) {
@@ -46,6 +59,22 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const computeCount = (goal: ThemeGoal, completions: ThemeGoalCompletion[]): number => {
+    if (goal.goal_type === "group_completion" && goal.habit_group_id) {
+      const groupHabitIds = new Set(
+        habits.filter(h => h.habitGroupId === goal.habit_group_id).map(h => h.id)
+      );
+      const uniqueGroupHabits = new Set(
+        completions.filter(c => groupHabitIds.has(c.habit_id)).map(c => c.habit_id)
+      );
+      return uniqueGroupHabits.size;
+    }
+    if (goal.goal_type === "unique_daily_habits") {
+      return new Set(completions.map(c => c.habit_id)).size;
+    }
+    return completions.length;
   };
 
   const getWeekStart = () => {
@@ -62,6 +91,10 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
       alert("Enter a valid target count.");
       return;
     }
+    if (goalType === "group_completion" && !selectedGroupId) {
+      alert("Select a group for this goal.");
+      return;
+    }
 
     try {
       await database.themeGoals.create(
@@ -70,7 +103,8 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
         goalType,
         targetCount,
         frequency,
-        description.trim() || undefined
+        description.trim() || undefined,
+        goalType === "group_completion" ? selectedGroupId : undefined
       );
 
       setShowAddForm(false);
@@ -78,6 +112,7 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
       setTargetCount(1);
       setFrequency("daily");
       setDescription("");
+      setSelectedGroupId("");
       await loadGoals();
     } catch (error) {
       console.error("Error creating goal:", error);
@@ -112,8 +147,12 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
     return { current, percentage };
   };
 
-  const getGoalTypeLabel = (type: string) => {
-    return type === "total_completions"
+  const getGoalTypeLabel = (goal: ThemeGoal) => {
+    if (goal.goal_type === "group_completion") {
+      const group = groups.find(g => g.id === goal.habit_group_id);
+      return group ? `Group: ${group.name}` : "Group Completion";
+    }
+    return goal.goal_type === "total_completions"
       ? "Total completions"
       : "Unique daily habits";
   };
@@ -156,7 +195,11 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
             </label>
             <select
               value={goalType}
-              onChange={(e) => setGoalType(e.target.value as "total_completions" | "unique_daily_habits")}
+              onChange={(e) => {
+                const val = e.target.value as GoalType;
+                setGoalType(val);
+                if (val !== "group_completion") setSelectedGroupId("");
+              }}
               style={{
                 width: "100%",
                 padding: "6px",
@@ -167,8 +210,35 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
             >
               <option value="total_completions">Total Completions</option>
               <option value="unique_daily_habits">Unique Daily Habits</option>
+              {eligibleGroups.length > 0 && (
+                <option value="group_completion">Group Completion</option>
+              )}
             </select>
           </div>
+
+          {goalType === "group_completion" && (
+            <div style={{ marginBottom: "8px" }}>
+              <label style={{ display: "block", fontSize: "11px", fontWeight: "600", marginBottom: "4px", color: "#666" }}>
+                Group
+              </label>
+              <select
+                value={selectedGroupId}
+                onChange={(e) => setSelectedGroupId(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "6px",
+                  fontSize: "12px",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px"
+                }}
+              >
+                <option value="">Select a group...</option>
+                {eligibleGroups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div style={{ marginBottom: "8px" }}>
             <label style={{ display: "block", fontSize: "11px", fontWeight: "600", marginBottom: "4px", color: "#666" }}>
@@ -235,7 +305,7 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
               width: "100%",
               padding: "8px",
               fontSize: "12px",
-              background: "#667eea",
+              background: "#2563eb",
               color: "white",
               border: "none",
               borderRadius: "4px",
@@ -272,7 +342,7 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "6px" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: "12px", fontWeight: "600", color: "#333", marginBottom: "2px" }}>
-                  {getGoalTypeLabel(goal.goal_type)}
+                  {getGoalTypeLabel(goal)}
                 </div>
                 <div style={{ fontSize: "11px", color: "#666" }}>
                   {goal.frequency === "daily" ? "Daily" : "Weekly"} target: {goal.target_count}
@@ -296,7 +366,7 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
                 }}
                 title="Delete goal"
               >
-                ×
+                x
               </button>
             </div>
 
@@ -323,7 +393,7 @@ export const ThemeGoals: React.FC<ThemeGoalsProps> = ({ themeId, userId }) => {
                 <div style={{
                   width: `${progress.percentage}%`,
                   height: "100%",
-                  background: isComplete ? "#4caf50" : "#667eea",
+                  background: isComplete ? "#4caf50" : "#2563eb",
                   transition: "width 0.3s ease"
                 }} />
               </div>
