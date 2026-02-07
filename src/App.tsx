@@ -4,6 +4,7 @@ import { supabase } from "./lib/supabase";
 import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
 import { ThemeGoals } from "./components/ThemeGoals";
+import { ThemeNotes } from "./components/ThemeNotes";
 import { WorkoutInputs } from "./components/WorkoutInputs";
 import { ToastContainer, createToastId } from "./components/Toast";
 import type { ToastItem } from "./components/Toast";
@@ -189,6 +190,7 @@ const App: React.FC = () => {
   const [blockHashtag, setBlockHashtag] = useState("");
 
   const [showCalendarSettings, setShowCalendarSettings] = useState(false);
+  const [notesThemeId, setNotesThemeId] = useState<string | null>(null);
 
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -1202,6 +1204,21 @@ const App: React.FC = () => {
         workout_submitted: true,
       });
 
+      const block = blocks.find((b) => b.id === blockId);
+      if (block?.habitId && block.workoutData) {
+        const today = new Date().toISOString().split("T")[0];
+        await database.workoutHistory.create(
+          user.id,
+          block.habitId,
+          blockId,
+          block.workoutData.sets,
+          block.workoutData.reps,
+          block.workoutData.weight,
+          block.workoutData.unit,
+          today
+        );
+      }
+
       setBlocks((prev) =>
         prev.map((b) =>
           b.id === blockId ? { ...b, workoutSubmitted: true } : b
@@ -1678,6 +1695,13 @@ const App: React.FC = () => {
                                 }}
                               >
                                 Add habit
+                              </button>
+                              <button
+                                type="button"
+                                className="secondary small-btn"
+                                onClick={() => setNotesThemeId(theme.id)}
+                              >
+                                Notes
                               </button>
                               <button
                                 type="button"
@@ -2753,6 +2777,22 @@ const App: React.FC = () => {
       )}
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      {notesThemeId && (() => {
+        const theme = themes.find((t) => t.id === notesThemeId);
+        if (!theme || !user) return null;
+        return (
+          <ThemeNotes
+            themeId={theme.id}
+            themeName={theme.name}
+            habits={theme.habits}
+            groups={theme.groups}
+            userId={user.id}
+            getHabitDoneCount={getHabitDoneCount}
+            onClose={() => setNotesThemeId(null)}
+          />
+        );
+      })()}
     </>
   );
 };

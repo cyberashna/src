@@ -1234,6 +1234,140 @@ table.planner td.slot.today-col.drag-over {
   color: var(--color-primary-hover);
 }
 
+/* -- Theme Notes Modal -- */
+.theme-notes-modal {
+  max-width: 640px;
+  width: 94%;
+  max-height: 85vh;
+}
+
+.theme-notes-habit-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+  transition: box-shadow 0.15s ease;
+}
+.theme-notes-habit-card:hover {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.theme-notes-habit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  gap: 8px;
+  transition: background 0.15s ease;
+}
+.theme-notes-habit-header:hover {
+  background: #f9fafb;
+}
+
+.theme-notes-habit-summary {
+  display: flex;
+  gap: 12px;
+  padding: 0 12px 8px 30px;
+  font-size: 12px;
+  color: #666;
+  flex-wrap: wrap;
+}
+
+.theme-notes-habit-body {
+  padding: 0 12px 14px 12px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.theme-notes-summary-bar {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+  font-size: 12px;
+  color: #555;
+  flex-wrap: wrap;
+}
+
+.theme-notes-textarea {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 60px;
+  transition: border-color 0.2s ease;
+  line-height: 1.5;
+  background: #fafbfc;
+}
+.theme-notes-textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: #fff;
+}
+
+.workout-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.workout-history-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 28px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid #f0f0f0;
+  transition: background 0.1s ease;
+}
+.workout-history-row:last-child {
+  border-bottom: none;
+}
+.workout-history-row:nth-child(even) {
+  background: #fafbfc;
+}
+.workout-history-row:hover {
+  background: #f0f4ff;
+}
+
+.workout-history-date {
+  color: #555;
+  font-weight: 500;
+}
+
+.workout-history-data {
+  color: #333;
+  font-weight: 600;
+}
+
+.workout-history-delete {
+  background: transparent;
+  border: none;
+  color: #ccc;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+.workout-history-delete:hover {
+  color: var(--color-danger);
+  background: #fee2e2;
+}
+
 /* -- Focus visible for keyboard nav -- */
 *:focus-visible {
   outline: 2px solid var(--color-primary);

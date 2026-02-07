@@ -101,6 +101,28 @@ export type SessionGroup = {
   created_at: string;
 };
 
+export type HabitNote = {
+  id: string;
+  habit_id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkoutHistoryEntry = {
+  id: string;
+  habit_id: string;
+  user_id: string;
+  block_id: string | null;
+  sets: number | null;
+  reps: number | null;
+  weight: number | null;
+  unit: "lbs" | "kg" | null;
+  completed_date: string;
+  created_at: string;
+};
+
 export const database = {
   habitGroups: {
     async getAll(userId: string) {
@@ -615,6 +637,102 @@ export const database = {
       if (error) throw error;
       if (!data || data.length === 0) return 1;
       return data[0].session_number + 1;
+    },
+  },
+
+  habitNotes: {
+    async getByHabit(habitId: string) {
+      const { data, error } = await supabase
+        .from("habit_notes")
+        .select("*")
+        .eq("habit_id", habitId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as HabitNote | null;
+    },
+
+    async getByHabitIds(habitIds: string[]) {
+      if (habitIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("habit_notes")
+        .select("*")
+        .in("habit_id", habitIds);
+
+      if (error) throw error;
+      return data as HabitNote[];
+    },
+
+    async upsert(userId: string, habitId: string, content: string) {
+      const { data, error } = await supabase
+        .from("habit_notes")
+        .upsert(
+          {
+            habit_id: habitId,
+            user_id: userId,
+            content,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "habit_id,user_id" }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as HabitNote;
+    },
+  },
+
+  workoutHistory: {
+    async getByHabit(habitId: string) {
+      const { data, error } = await supabase
+        .from("workout_history")
+        .select("*")
+        .eq("habit_id", habitId)
+        .order("completed_date", { ascending: false })
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      return data as WorkoutHistoryEntry[];
+    },
+
+    async create(
+      userId: string,
+      habitId: string,
+      blockId: string | null,
+      sets: number | null,
+      reps: number | null,
+      weight: number | null,
+      unit: "lbs" | "kg" | null,
+      completedDate: string
+    ) {
+      const { data, error } = await supabase
+        .from("workout_history")
+        .insert({
+          user_id: userId,
+          habit_id: habitId,
+          block_id: blockId,
+          sets,
+          reps,
+          weight,
+          unit,
+          completed_date: completedDate,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as WorkoutHistoryEntry;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("workout_history")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
     },
   },
 };
