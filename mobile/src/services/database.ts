@@ -1,147 +1,629 @@
-import { supabase } from '../lib/supabase';
-import { Theme, Habit, Block } from '../types';
+import { supabase } from "../lib/supabase";
+import type {
+  Theme,
+  HabitGroup,
+  Habit,
+  Block,
+  ThemeGoal,
+  ThemeGoalCompletion,
+  WorkoutData,
+  SessionGroup,
+  HabitNote,
+  WorkoutHistoryEntry,
+} from "../types";
 
-export const databaseService = {
-  async fetchThemes(userId: string): Promise<Theme[]> {
-    const { data, error } = await supabase
-      .from('themes')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+export const database = {
+  habitGroups: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
 
-    if (error) throw error;
-    return data || [];
+      if (error) throw error;
+      return data as HabitGroup[];
+    },
+
+    async getByTheme(themeId: string) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .select("*")
+        .eq("theme_id", themeId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as HabitGroup[];
+    },
+
+    async create(
+      userId: string,
+      themeId: string,
+      name: string,
+      groupType: "strength_training" | "custom",
+      linkBehavior: "adjacent_merge" | "none"
+    ) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .insert({
+          user_id: userId,
+          theme_id: themeId,
+          name,
+          group_type: groupType,
+          link_behavior: linkBehavior,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as HabitGroup;
+    },
+
+    async update(id: string, updates: Partial<HabitGroup>) {
+      const { data, error } = await supabase
+        .from("habit_groups")
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as HabitGroup;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("habit_groups")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
   },
 
-  async fetchHabits(userId: string): Promise<Habit[]> {
-    const { data, error } = await supabase
-      .from('habits')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+  themes: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("themes")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
 
-    if (error) throw error;
-    return data || [];
+      if (error) throw error;
+      return data as Theme[];
+    },
+
+    async create(userId: string, name: string) {
+      const { data, error } = await supabase
+        .from("themes")
+        .insert({ user_id: userId, name })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as Theme;
+    },
+
+    async update(id: string, name: string) {
+      const { data, error } = await supabase
+        .from("themes")
+        .update({ name, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as Theme;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("themes")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
   },
 
-  async fetchBlocks(userId: string): Promise<Block[]> {
-    const { data, error } = await supabase
-      .from('blocks')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+  habits: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("habits")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
 
-    if (error) throw error;
-    return data || [];
-  },
+      if (error) throw error;
+      return data as Habit[];
+    },
 
-  async createTheme(userId: string, name: string): Promise<Theme> {
-    const { data, error } = await supabase
-      .from('themes')
-      .insert([{ user_id: userId, name }])
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  },
-
-  async createHabit(
-    userId: string,
-    themeId: string,
-    name: string,
-    targetPerWeek: number,
-    frequency: 'weekly' | 'monthly' | 'none'
-  ): Promise<Habit> {
-    const { data, error } = await supabase
-      .from('habits')
-      .insert([
-        {
+    async create(
+      userId: string,
+      themeId: string,
+      name: string,
+      targetPerWeek: number,
+      frequency: "daily" | "weekly" | "monthly" | "none",
+      habitGroupId?: string
+    ) {
+      const { data, error } = await supabase
+        .from("habits")
+        .insert({
           user_id: userId,
           theme_id: themeId,
           name,
           target_per_week: targetPerWeek,
           frequency,
           done_count: 0,
-        },
-      ])
-      .select()
-      .single();
+          habit_group_id: habitGroupId ?? null,
+        })
+        .select()
+        .single();
 
-    if (error) throw error;
-    return data;
+      if (error) throw error;
+      return data as Habit;
+    },
+
+    async update(id: string, updates: Partial<Habit>) {
+      const { data, error } = await supabase
+        .from("habits")
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as Habit;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("habits")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+
+    async resetAll(userId: string) {
+      const { error } = await supabase
+        .from("habits")
+        .update({
+          done_count: 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId);
+
+      if (error) throw error;
+    },
+
+    async clearLastDoneAt(id: string) {
+      const { error } = await supabase
+        .from("habits")
+        .update({
+          last_done_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+    },
   },
 
-  async updateHabit(habitId: string, updates: Partial<Habit>): Promise<void> {
-    const { error } = await supabase
-      .from('habits')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', habitId);
+  blocks: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("blocks")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
 
-    if (error) throw error;
-  },
+      if (error) throw error;
+      return data as Block[];
+    },
 
-  async deleteHabit(habitId: string): Promise<void> {
-    const { error } = await supabase.from('habits').delete().eq('id', habitId);
+    async getForWeek(userId: string, weekStartDate: string) {
+      const { data, error } = await supabase
+        .from("blocks")
+        .select("*")
+        .eq("user_id", userId)
+        .or(`week_start_date.eq.${weekStartDate},week_start_date.is.null`)
+        .order("created_at", { ascending: true });
 
-    if (error) throw error;
-  },
+      if (error) throw error;
+      return data as Block[];
+    },
 
-  async createBlock(
-    userId: string,
-    label: string,
-    isHabitBlock: boolean,
-    habitId?: string,
-    hashtag?: string
-  ): Promise<Block> {
-    const { data, error } = await supabase
-      .from('blocks')
-      .insert([
-        {
-          user_id: userId,
-          label,
-          is_habit_block: isHabitBlock,
-          habit_id: habitId,
-          location_type: 'unscheduled',
+    async create(userId: string, block: Omit<Block, "id" | "user_id" | "created_at" | "updated_at">) {
+      const { data, error } = await supabase
+        .from("blocks")
+        .insert({ ...block, user_id: userId })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as Block;
+    },
+
+    async update(id: string, updates: Partial<Block>) {
+      const { data, error } = await supabase
+        .from("blocks")
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as Block;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("blocks")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+
+    async resetCompletion(userId: string) {
+      const { error } = await supabase
+        .from("blocks")
+        .update({
           completed: false,
-          hashtag,
-        },
-      ])
-      .select()
-      .single();
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId);
 
-    if (error) throw error;
-    return data;
+      if (error) throw error;
+    },
   },
 
-  async updateBlock(blockId: string, updates: Partial<Block>): Promise<void> {
-    const { error } = await supabase
-      .from('blocks')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', blockId);
+  themeGoals: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
 
-    if (error) throw error;
+      if (error) throw error;
+      return data as ThemeGoal[];
+    },
+
+    async getByTheme(themeId: string) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .select("*")
+        .eq("theme_id", themeId)
+        .eq("is_active", true)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as ThemeGoal[];
+    },
+
+    async create(
+      userId: string,
+      themeId: string,
+      goalType: "total_completions" | "unique_daily_habits" | "group_completion",
+      targetCount: number,
+      frequency: "daily" | "weekly",
+      description?: string,
+      habitGroupId?: string
+    ) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .insert({
+          user_id: userId,
+          theme_id: themeId,
+          goal_type: goalType,
+          target_count: targetCount,
+          frequency: frequency,
+          description: description || null,
+          habit_group_id: habitGroupId ?? null,
+          is_active: true,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as ThemeGoal;
+    },
+
+    async update(id: string, updates: Partial<ThemeGoal>) {
+      const { data, error } = await supabase
+        .from("theme_goals")
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as ThemeGoal;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase.from("theme_goals").delete().eq("id", id);
+
+      if (error) throw error;
+    },
+
+    async getCompletionCount(goalId: string, startDate: string) {
+      const { data, error } = await supabase
+        .from("theme_goal_completions")
+        .select("*")
+        .eq("theme_goal_id", goalId)
+        .gte("completed_date", startDate);
+
+      if (error) throw error;
+      return data as ThemeGoalCompletion[];
+    },
+
+    async recordCompletion(
+      userId: string,
+      goalId: string,
+      habitId: string,
+      completedDate: string
+    ) {
+      const { data, error } = await supabase
+        .from("theme_goal_completions")
+        .insert({
+          user_id: userId,
+          theme_goal_id: goalId,
+          habit_id: habitId,
+          completed_date: completedDate,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as ThemeGoalCompletion;
+    },
   },
 
-  async deleteBlock(blockId: string): Promise<void> {
-    const { error } = await supabase.from('blocks').delete().eq('id', blockId);
+  workoutData: {
+    async getByBlockId(blockId: string) {
+      const { data, error } = await supabase
+        .from("workout_data")
+        .select("*")
+        .eq("block_id", blockId)
+        .maybeSingle();
 
-    if (error) throw error;
+      if (error) throw error;
+      return data as WorkoutData | null;
+    },
+
+    async getByBlockIds(blockIds: string[]) {
+      if (blockIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("workout_data")
+        .select("*")
+        .in("block_id", blockIds);
+
+      if (error) throw error;
+      return data as WorkoutData[];
+    },
+
+    async upsert(
+      userId: string,
+      blockId: string,
+      sets: number | null,
+      reps: number | null,
+      weight: number | null,
+      unit: "lbs" | "kg" | null
+    ) {
+      const { data, error } = await supabase
+        .from("workout_data")
+        .upsert(
+          {
+            block_id: blockId,
+            user_id: userId,
+            sets,
+            reps,
+            weight,
+            unit,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "block_id" }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as WorkoutData;
+    },
+
+    async delete(blockId: string) {
+      const { error } = await supabase
+        .from("workout_data")
+        .delete()
+        .eq("block_id", blockId);
+
+      if (error) throw error;
+    },
   },
 
-  async resetHabitsForNewWeek(userId: string): Promise<void> {
-    const { error: habitsError } = await supabase
-      .from('habits')
-      .update({ done_count: 0, updated_at: new Date().toISOString() })
-      .eq('user_id', userId);
+  sessionGroups: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .select("*")
+        .eq("user_id", userId)
+        .order("week_start_date", { ascending: false })
+        .order("session_number", { ascending: true });
 
-    if (habitsError) throw habitsError;
+      if (error) throw error;
+      return data as SessionGroup[];
+    },
 
-    const { error: blocksError } = await supabase
-      .from('blocks')
-      .update({ completed: false, updated_at: new Date().toISOString() })
-      .eq('user_id', userId);
+    async getForWeek(userId: string, weekStartDate: string) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("week_start_date", weekStartDate)
+        .order("session_number", { ascending: true });
 
-    if (blocksError) throw blocksError;
+      if (error) throw error;
+      return data as SessionGroup[];
+    },
+
+    async create(
+      userId: string,
+      weekStartDate: string,
+      sessionNumber: number,
+      accentColor: string,
+      customName?: string
+    ) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .insert({
+          user_id: userId,
+          week_start_date: weekStartDate,
+          session_number: sessionNumber,
+          accent_color: accentColor,
+          custom_name: customName || null,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as SessionGroup;
+    },
+
+    async update(id: string, updates: Partial<SessionGroup>) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .update(updates)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as SessionGroup;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("session_groups")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+
+    async getNextSessionNumber(userId: string, weekStartDate: string) {
+      const { data, error } = await supabase
+        .from("session_groups")
+        .select("session_number")
+        .eq("user_id", userId)
+        .eq("week_start_date", weekStartDate)
+        .order("session_number", { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+      if (!data || data.length === 0) return 1;
+      return data[0].session_number + 1;
+    },
+  },
+
+  habitNotes: {
+    async getByHabit(habitId: string) {
+      const { data, error } = await supabase
+        .from("habit_notes")
+        .select("*")
+        .eq("habit_id", habitId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as HabitNote | null;
+    },
+
+    async getByHabitIds(habitIds: string[]) {
+      if (habitIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("habit_notes")
+        .select("*")
+        .in("habit_id", habitIds);
+
+      if (error) throw error;
+      return data as HabitNote[];
+    },
+
+    async upsert(userId: string, habitId: string, content: string) {
+      const { data, error } = await supabase
+        .from("habit_notes")
+        .upsert(
+          {
+            habit_id: habitId,
+            user_id: userId,
+            content,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "habit_id,user_id" }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as HabitNote;
+    },
+  },
+
+  workoutHistory: {
+    async getByHabit(habitId: string) {
+      const { data, error } = await supabase
+        .from("workout_history")
+        .select("*")
+        .eq("habit_id", habitId)
+        .order("completed_date", { ascending: false })
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      return data as WorkoutHistoryEntry[];
+    },
+
+    async create(
+      userId: string,
+      habitId: string,
+      blockId: string | null,
+      sets: number | null,
+      reps: number | null,
+      weight: number | null,
+      unit: "lbs" | "kg" | null,
+      completedDate: string
+    ) {
+      const { data, error } = await supabase
+        .from("workout_history")
+        .insert({
+          user_id: userId,
+          habit_id: habitId,
+          block_id: blockId,
+          sets,
+          reps,
+          weight,
+          unit,
+          completed_date: completedDate,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as WorkoutHistoryEntry;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("workout_history")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
   },
 };
+
+export const databaseService = database;
