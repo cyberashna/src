@@ -24,6 +24,7 @@ interface PriorityPickerPanelProps {
 }
 
 export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }: PriorityPickerPanelProps) {
+  console.log('PriorityPickerPanel rendering, userId:', userId, 'blocks:', blocks.length);
   const [isOpen, setIsOpen] = useState(false);
   const [priorities, setPriorities] = useState<Priority[]>([
     { block_id: null, priority_rank: 1, completed: false },
@@ -50,84 +51,120 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
   }, [priorities]);
 
   async function loadPriorities() {
-    const { data, error } = await supabase
-      .from('daily_priorities')
-      .select('*, blocks(*)')
-      .eq('user_id', userId)
-      .eq('date', todayString)
-      .order('priority_rank');
+    try {
+      const { data, error } = await supabase
+        .from('daily_priorities')
+        .select('*, blocks(*)')
+        .eq('user_id', userId)
+        .eq('date', todayString)
+        .order('priority_rank');
 
-    if (error) {
-      console.error('Error loading priorities:', error);
-      return;
-    }
+      if (error) {
+        console.error('Error loading priorities:', error);
+        return;
+      }
 
-    if (data && data.length > 0) {
-      const loadedPriorities = [1, 2, 3].map(rank => {
-        const existing = data.find(p => p.priority_rank === rank);
-        return existing ? {
-          id: existing.id,
-          block_id: existing.block_id,
-          priority_rank: rank,
-          completed: existing.completed,
-          block: existing.blocks
-        } : {
-          block_id: null,
-          priority_rank: rank,
-          completed: false
-        };
-      });
-      setPriorities(loadedPriorities);
+      if (data && data.length > 0) {
+        const loadedPriorities = [1, 2, 3].map(rank => {
+          const existing = data.find(p => p.priority_rank === rank);
+          return existing ? {
+            id: existing.id,
+            block_id: existing.block_id,
+            priority_rank: rank,
+            completed: existing.completed,
+            block: existing.blocks
+          } : {
+            block_id: null,
+            priority_rank: rank,
+            completed: false
+          };
+        });
+        setPriorities(loadedPriorities);
+      }
+    } catch (err) {
+      console.error('Exception loading priorities:', err);
     }
   }
 
   async function setPriority(rank: number, blockId: string) {
-    const existingPriority = priorities.find(p => p.priority_rank === rank);
+    try {
+      const existingPriority = priorities.find(p => p.priority_rank === rank);
 
-    if (existingPriority?.id) {
-      await supabase
-        .from('daily_priorities')
-        .update({ block_id: blockId })
-        .eq('id', existingPriority.id);
-    } else {
-      await supabase
-        .from('daily_priorities')
-        .insert({
-          user_id: userId,
-          block_id: blockId,
-          date: todayString,
-          priority_rank: rank,
-          completed: false
-        });
-    }
+      if (existingPriority?.id) {
+        const { error } = await supabase
+          .from('daily_priorities')
+          .update({ block_id: blockId })
+          .eq('id', existingPriority.id);
 
-    await loadPriorities();
-    onPriorityChange();
-  }
+        if (error) {
+          console.error('Error updating priority:', error);
+          return;
+        }
+      } else {
+        const { error } = await supabase
+          .from('daily_priorities')
+          .insert({
+            user_id: userId,
+            block_id: blockId,
+            date: todayString,
+            priority_rank: rank,
+            completed: false
+          });
 
-  async function removePriority(rank: number) {
-    const priority = priorities.find(p => p.priority_rank === rank);
-    if (priority?.id) {
-      await supabase
-        .from('daily_priorities')
-        .delete()
-        .eq('id', priority.id);
-    }
-
-    await loadPriorities();
-    onPriorityChange();
-  }
-
-  async function togglePriorityComplete(rank: number) {
-    const priority = priorities.find(p => p.priority_rank === rank);
-    if (priority?.id) {
-      await supabase
-        .from('daily_priorities')
-        .update({ completed: !priority.completed })
-        .eq('id', priority.id);
+        if (error) {
+          console.error('Error inserting priority:', error);
+          return;
+        }
+      }
 
       await loadPriorities();
       onPriorityChange();
+    } catch (err) {
+      console.error('Exception setting priority:', err);
+    }
+  }
+
+  async function removePriority(rank: number) {
+    try {
+      const priority = priorities.find(p => p.priority_rank === rank);
+      if (priority?.id) {
+        const { error } = await supabase
+          .from('daily_priorities')
+          .delete()
+          .eq('id', priority.id);
+
+        if (error) {
+          console.error('Error removing priority:', error);
+          return;
+        }
+      }
+
+      await loadPriorities();
+      onPriorityChange();
+    } catch (err) {
+      console.error('Exception removing priority:', err);
+    }
+  }
+
+  async function togglePriorityComplete(rank: number) {
+    try {
+      const priority = priorities.find(p => p.priority_rank === rank);
+      if (priority?.id) {
+        const { error } = await supabase
+          .from('daily_priorities')
+          .update({ completed: !priority.completed })
+          .eq('id', priority.id);
+
+        if (error) {
+          console.error('Error toggling priority:', error);
+          return;
+        }
+
+        await loadPriorities();
+        onPriorityChange();
+      }
+    } catch (err) {
+      console.error('Exception toggling priority:', err);
     }
   }
 
