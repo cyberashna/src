@@ -1699,19 +1699,17 @@ const App: React.FC = () => {
     <>
       <div className="app">
         <div className="left-column">
-          {weekOffset === 0 && (
-            <PriorityPickerPanel
-              userId={user.id}
-              blocks={blocks.map(b => ({
-                id: b.id,
-                label: b.label,
-                completed: b.completed || false,
-                day_index: b.location.type === 'slot' ? b.location.dayIndex : null,
-                time_index: b.location.type === 'slot' ? b.location.timeIndex : null
-              }))}
-              onPriorityChange={() => loadUserData()}
-            />
-          )}
+          <PriorityPickerPanel
+            userId={user.id}
+            blocks={blocks.map(b => ({
+              id: b.id,
+              label: b.label,
+              completed: b.completed || false,
+              day_index: b.location.type === 'slot' ? b.location.dayIndex : null,
+              time_index: b.location.type === 'slot' ? b.location.timeIndex : null
+            }))}
+            onPriorityChange={() => loadUserData()}
+          />
 
           <div className="card">
             <div className="top-row">
