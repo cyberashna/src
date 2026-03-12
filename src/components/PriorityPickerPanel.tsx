@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 
 interface Block {
@@ -33,24 +33,16 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
   ]);
   const [showCelebration, setShowCelebration] = useState(false);
 
-  const today = new Date();
-  const todayString = today.toISOString().split('T')[0];
-  const todayDayOfWeek = today.toLocaleDateString('en-US', { weekday: 'long' });
-  const todayDate = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  // Calculate once and memoize to prevent infinite re-renders
+  const todayString = useMemo(() => {
+    return new Date().toISOString().split('T')[0];
+  }, []);
 
-  useEffect(() => {
-    loadPriorities();
-  }, [userId, todayString]);
+  const today = useMemo(() => new Date(), []);
+  const todayDayOfWeek = useMemo(() => today.toLocaleDateString('en-US', { weekday: 'long' }), [today]);
+  const todayDate = useMemo(() => today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), [today]);
 
-  useEffect(() => {
-    const allCompleted = priorities.every(p => p.block_id && p.completed);
-    if (allCompleted && priorities.some(p => p.block_id)) {
-      setShowCelebration(true);
-      setTimeout(() => setShowCelebration(false), 3000);
-    }
-  }, [priorities]);
-
-  async function loadPriorities() {
+  const loadPriorities = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('daily_priorities')
@@ -84,7 +76,19 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
     } catch (err) {
       console.error('Exception loading priorities:', err);
     }
-  }
+  }, [userId, todayString]);
+
+  useEffect(() => {
+    loadPriorities();
+  }, [loadPriorities]);
+
+  useEffect(() => {
+    const allCompleted = priorities.every(p => p.block_id && p.completed);
+    if (allCompleted && priorities.some(p => p.block_id)) {
+      setShowCelebration(true);
+      setTimeout(() => setShowCelebration(false), 3000);
+    }
+  }, [priorities]);
 
   async function setPriority(rank: number, blockId: string) {
     try {
