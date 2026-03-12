@@ -13,6 +13,12 @@ import { WeekSummary } from "./components/WeekSummary";
 import { database, SessionGroup, Habit as DBHabit, Block as DBBlock } from "./services/database";
 import { updateSessionGroups, getSessionDisplayName } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
+import PriorityPickerPanel from "./components/PriorityPickerPanel";
+import QuickStartTemplateModal from "./components/QuickStartTemplateModal";
+import GhostBlock from "./components/GhostBlock";
+import PriorityBadge from "./components/PriorityBadge";
+import { generateGhostBlocks, dismissPattern, acceptGhostBlock, type GhostBlock as GhostBlockType } from "./services/patternAnalysis";
+import { generateStandingBlocksForWeek } from "./services/standingBlocks";
 
 type HabitGroup = {
   id: string;
@@ -207,6 +213,9 @@ const App: React.FC = () => {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editBlockLabel, setEditBlockLabel] = useState("");
 
+  const [ghostBlocks, setGhostBlocks] = useState<GhostBlockType[]>([]);
+  const [showQuickStartModal, setShowQuickStartModal] = useState(false);
+  const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -327,11 +336,84 @@ const App: React.FC = () => {
       }));
 
       setBlocks(convertedBlocks);
+
+      if (weekOffset === 0) {
+        await generateStandingBlocksForWeek(
+          user.id,
+          weekStartDate,
+          habitsData[0]?.id || '',
+          blocksData.map(b => ({ day_index: b.day_index, time_index: b.time_index }))
+        );
+      }
+
+      const ghosts = await generateGhostBlocks(
+        user.id,
+        weekStartDate,
+        blocksData.map(b => ({ day_index: b.day_index, time_index: b.time_index }))
+      );
+      setGhostBlocks(ghosts);
+
+      const { data: priorities } = await supabase
+        .from('daily_priorities')
+        .select('block_id, priority_rank')
+        .eq('user_id', user.id)
+        .eq('date', new Date().toISOString().split('T')[0]);
+
+      setDailyPriorities(priorities || []);
     } catch (error) {
       console.error("Error loading data:", error);
     } finally {
       setDataLoading(false);
     }
+  };
+
+  const handleAcceptGhostBlock = async (ghost: GhostBlockType) => {
+    if (!user) return;
+
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    const habit = allHabits[0];
+    if (!habit) return;
+
+    const blockId = await acceptGhostBlock(user.id, ghost, weekStartDate, habit.id);
+
+    if (blockId) {
+      setGhostBlocks(prev => prev.filter(g =>
+        !(g.day_index === ghost.day_index && g.time_index === ghost.time_index && g.label === ghost.label)
+      ));
+      await loadUserData();
+      showToast('Block added to calendar');
+    }
+  };
+
+  const handleDismissGhostBlock = async (ghost: GhostBlockType) => {
+    await dismissPattern(ghost.pattern_id);
+    setGhostBlocks(prev => prev.filter(g => g.pattern_id !== ghost.pattern_id));
+    showToast('Suggestion dismissed');
+  };
+
+  const handleApplyTemplate = async (templateBlocks: Array<{ label: string; day_index: number; time_index: number }>) => {
+    if (!user) return;
+
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    const habit = allHabits[0];
+    if (!habit) return;
+
+    for (const templateBlock of templateBlocks) {
+      await supabase.from('blocks').insert({
+        user_id: user.id,
+        habit_id: habit.id,
+        label: templateBlock.label,
+        day_index: templateBlock.day_index,
+        time_index: templateBlock.time_index,
+        week_start_date: weekStartDate,
+        completed: false,
+        is_habit_block: false
+      });
+    }
+
+    setShowQuickStartModal(false);
+    await loadUserData();
+    showToast(`Applied template with ${templateBlocks.length} blocks`);
   };
 
   const allHabits = themes.flatMap((theme) =>
@@ -1617,6 +1699,20 @@ const App: React.FC = () => {
     <>
       <div className="app">
         <div className="left-column">
+          {weekOffset === 0 && (
+            <PriorityPickerPanel
+              userId={user.id}
+              blocks={blocks.map(b => ({
+                id: b.id,
+                label: b.label,
+                completed: b.completed || false,
+                day_index: b.location.type === 'slot' ? b.location.dayIndex : null,
+                time_index: b.location.type === 'slot' ? b.location.timeIndex : null
+              }))}
+              onPriorityChange={() => loadUserData()}
+            />
+          )}
+
           <div className="card">
             <div className="top-row">
               <h2>Habit themes</h2>
@@ -2288,6 +2384,15 @@ const App: React.FC = () => {
                 >
                   Copy last week
                 </button>
+                <button
+                  type="button"
+                  className="copy-week-btn"
+                  onClick={() => setShowQuickStartModal(true)}
+                  title="Create a routine from templates"
+                  style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none' }}
+                >
+                  Quick Start
+                </button>
               </div>
             </div>
 
@@ -2425,7 +2530,12 @@ const App: React.FC = () => {
                               onDoubleClick={() =>
                                 handleBlockDoubleClickWithUndo(block.id)
                               }
+                              style={{ position: 'relative' }}
                             >
+                              {(() => {
+                                const priority = dailyPriorities.find(p => p.block_id === block.id);
+                                return priority ? <PriorityBadge rank={priority.priority_rank as 1 | 2 | 3} /> : null;
+                              })()}
                               {hasSessionGroup && block.sessionGroup && (
                                 <div
                                   className={`session-badge session-${sessionColor}`}
@@ -2514,6 +2624,17 @@ const App: React.FC = () => {
                             </div>
                             );
                           })}
+                          {ghostBlocks
+                            .filter(ghost => ghost.day_index === dayIndex && ghost.time_index === -1)
+                            .map((ghost, idx) => (
+                              <GhostBlock
+                                key={`ghost-daily-${dayIndex}-${idx}`}
+                                label={ghost.label}
+                                confidenceScore={ghost.confidence_score}
+                                onAccept={() => handleAcceptGhostBlock(ghost)}
+                                onDismiss={() => handleDismissGhostBlock(ghost)}
+                              />
+                            ))}
                         </div>
                       </td>
                     );
@@ -2556,7 +2677,12 @@ const App: React.FC = () => {
                                 onDoubleClick={() =>
                                   handleBlockDoubleClickWithUndo(block.id)
                                 }
+                                style={{ position: 'relative' }}
                               >
+                                {(() => {
+                                  const priority = dailyPriorities.find(p => p.block_id === block.id);
+                                  return priority ? <PriorityBadge rank={priority.priority_rank as 1 | 2 | 3} /> : null;
+                                })()}
                                 {hasSessionGroup && block.sessionGroup && (
                                   <div
                                     className={`session-badge session-${sessionColor}`}
@@ -2645,6 +2771,17 @@ const App: React.FC = () => {
                               </div>
                               );
                             })}
+                            {ghostBlocks
+                              .filter(ghost => ghost.day_index === dayIndex && ghost.time_index === slotIndex)
+                              .map((ghost, idx) => (
+                                <GhostBlock
+                                  key={`ghost-${dayIndex}-${slotIndex}-${idx}`}
+                                  label={ghost.label}
+                                  confidenceScore={ghost.confidence_score}
+                                  onAccept={() => handleAcceptGhostBlock(ghost)}
+                                  onDismiss={() => handleDismissGhostBlock(ghost)}
+                                />
+                              ))}
                           </div>
                         </td>
                       );
@@ -2793,6 +2930,17 @@ const App: React.FC = () => {
           />
         );
       })()}
+
+      {showQuickStartModal && (
+        <QuickStartTemplateModal
+          userId={user.id}
+          unscheduledBlocks={blocks
+            .filter(b => b.location.type === 'unscheduled')
+            .map(b => ({ id: b.id, label: b.label }))}
+          onClose={() => setShowQuickStartModal(false)}
+          onApplyTemplate={handleApplyTemplate}
+        />
+      )}
     </>
   );
 };
