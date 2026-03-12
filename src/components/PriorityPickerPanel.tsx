@@ -25,7 +25,7 @@ interface PriorityPickerPanelProps {
 
 export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }: PriorityPickerPanelProps) {
   console.log('PriorityPickerPanel rendering, userId:', userId, 'blocks:', blocks.length);
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(true);
   const [priorities, setPriorities] = useState<Priority[]>([
     { block_id: null, priority_rank: 1, completed: false },
     { block_id: null, priority_rank: 2, completed: false },
@@ -293,7 +293,7 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
           flex-direction: column;
           align-items: center;
           padding: 8px 12px;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
           color: white;
           border-radius: 6px;
           min-width: 70px;
@@ -379,11 +379,11 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
         }
 
         .priority-checkbox:hover {
-          border-color: #667eea;
+          border-color: #2563eb;
         }
 
         .priority-checkbox .checkmark {
-          color: #667eea;
+          color: #2563eb;
           font-weight: bold;
           font-size: 14px;
         }
