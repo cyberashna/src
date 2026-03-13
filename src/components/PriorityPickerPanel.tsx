@@ -271,10 +271,8 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
           background: white;
           border-radius: 8px;
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-          margin-bottom: 20px;
           overflow: hidden;
-          position: relative;
-          z-index: 10;
+          flex-shrink: 0;
         }
 
         .priority-header {
