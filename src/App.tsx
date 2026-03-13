@@ -1417,8 +1417,9 @@ const App: React.FC = () => {
     e.preventDefault();
     e.currentTarget.classList.remove("drag-over");
 
-    if (dragBlockId) {
-      moveBlockToSlot(dragBlockId, dayIndex, timeIndex);
+    const droppedBlockId = currentDragBlockId || dragBlockId;
+    if (droppedBlockId) {
+      moveBlockToSlot(droppedBlockId, dayIndex, timeIndex);
     } else if (dragHabitId) {
       createHabitBlockAtSlot(dragHabitId, dayIndex, timeIndex);
     }
