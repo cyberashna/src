@@ -974,6 +974,7 @@ const App: React.FC = () => {
     setDragBlockId(blockId);
     setDragHabitId(null);
     if (e) {
+      e.dataTransfer.setData('application/block-id', blockId);
       e.dataTransfer.setData('text/plain', blockId);
     }
   };

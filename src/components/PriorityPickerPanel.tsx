@@ -202,7 +202,9 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
     e.preventDefault();
     e.stopPropagation();
     setDragOverRank(null);
-    const blockId = dragBlockIdRef.current || dragBlockId;
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const transferred = e.dataTransfer.getData('application/block-id') || e.dataTransfer.getData('text/plain');
+    const blockId = UUID_RE.test(transferred ?? '') ? transferred : (dragBlockIdRef.current || dragBlockId);
     if (blockId) {
       setPriority(rank, blockId);
     }
