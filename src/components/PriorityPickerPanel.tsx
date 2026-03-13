@@ -61,8 +61,13 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
       }
 
       if (data && data.length > 0) {
+        const orphanIds: string[] = [];
         const loadedPriorities = [1, 2, 3].map(rank => {
           const existing = data.find(p => p.priority_rank === rank);
+          if (existing && !existing.blocks) {
+            orphanIds.push(existing.id);
+            return { block_id: null, priority_rank: rank, completed: false };
+          }
           return existing ? {
             id: existing.id,
             block_id: existing.block_id,
@@ -75,7 +80,19 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
             completed: false
           };
         });
+        if (orphanIds.length > 0) {
+          await supabase
+            .from('daily_priorities')
+            .delete()
+            .in('id', orphanIds);
+        }
         setPriorities(loadedPriorities);
+      } else {
+        setPriorities([
+          { block_id: null, priority_rank: 1, completed: false },
+          { block_id: null, priority_rank: 2, completed: false },
+          { block_id: null, priority_rank: 3, completed: false }
+        ]);
       }
     } catch (err) {
       console.error('Exception loading priorities:', err);
