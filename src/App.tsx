@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
+
+export let currentDragBlockId: string | null = null;
 import "./App.css";
 import { supabase } from "./lib/supabase";
 import { AuthScreen } from "./components/AuthScreen";
@@ -971,6 +973,7 @@ const App: React.FC = () => {
   };
 
   const handleDragStart = (blockId: string, e?: React.DragEvent) => {
+    currentDragBlockId = blockId;
     setDragBlockId(blockId);
     setDragHabitId(null);
     if (e) {
@@ -980,6 +983,7 @@ const App: React.FC = () => {
   };
 
   const handleDragEnd = () => {
+    currentDragBlockId = null;
     setDragBlockId(null);
   };
 

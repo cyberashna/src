@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { currentDragBlockId } from '../App';
 
 interface Block {
   id: string;
@@ -25,12 +26,6 @@ interface PriorityPickerPanelProps {
 }
 
 export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPriorityChange }: PriorityPickerPanelProps) {
-  const dragBlockIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    dragBlockIdRef.current = dragBlockId;
-  }, [dragBlockId]);
-
   const [isOpen, setIsOpen] = useState(true);
   const [priorities, setPriorities] = useState<Priority[]>([
     { block_id: null, priority_rank: 1, completed: false },
@@ -204,7 +199,7 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
     setDragOverRank(null);
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const transferred = e.dataTransfer.getData('application/block-id') || e.dataTransfer.getData('text/plain');
-    const blockId = UUID_RE.test(transferred ?? '') ? transferred : (dragBlockIdRef.current || dragBlockId);
+    const blockId = currentDragBlockId || (UUID_RE.test(transferred ?? '') ? transferred : null) || dragBlockId;
     if (blockId) {
       setPriority(rank, blockId);
     }
