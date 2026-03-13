@@ -987,13 +987,67 @@ const App: React.FC = () => {
     setDragBlockId(null);
   };
 
-  const handleHabitDragStart = (habitId: string) => {
+  const handleHabitDragStart = (habitId: string, e?: React.DragEvent) => {
     setDragHabitId(habitId);
     setDragBlockId(null);
+    if (e) {
+      e.dataTransfer.setData('application/habit-id', habitId);
+      e.dataTransfer.setData('text/plain', habitId);
+    }
   };
 
   const handleHabitDragEnd = () => {
     setDragHabitId(null);
+  };
+
+  const createHabitBlockForPriority = async (habitId: string): Promise<string | null> => {
+    const habit = allHabits.find((h) => h.id === habitId);
+    if (!habit || !user) return null;
+
+    try {
+      const todayIdx = getTodayDayIndex();
+      if (todayIdx === -1) return null;
+
+      const weekStartDate = getWeekStartDateString(weekOffset);
+
+      const blockData = await database.blocks.create(user.id, {
+        label: `Habit: ${habit.name}`,
+        is_habit_block: true,
+        habit_id: habitId,
+        location_type: "slot",
+        day_index: todayIdx,
+        time_index: 0,
+        completed: false,
+        hashtag: habit.themeName,
+        week_start_date: weekStartDate,
+        linked_block_id: null,
+        is_linked_group: false,
+        workout_submitted: false,
+        session_group_id: null,
+        is_daily_template: false,
+        daily_template_id: null,
+      });
+
+      const newBlock: Block = {
+        id: blockData.id,
+        label: blockData.label,
+        isHabitBlock: true,
+        location: { type: "slot", dayIndex: todayIdx, timeIndex: 0 },
+        habitId: habitId,
+        completed: false,
+        hashtag: habit.themeName,
+        linkedBlockId: blockData.linked_block_id ?? undefined,
+        isLinkedGroup: blockData.is_linked_group,
+        workoutSubmitted: blockData.workout_submitted,
+      };
+
+      setBlocks((currentBlocks) => [...currentBlocks, newBlock]);
+      await refreshSessionGroups();
+      return blockData.id;
+    } catch (error) {
+      console.error("Error creating habit block for priority:", error);
+      return null;
+    }
   };
 
   const linkBlocks = async (blockId1: string, blockId2: string) => {
@@ -1718,7 +1772,9 @@ const App: React.FC = () => {
               time_index: b.location.type === 'slot' ? b.location.timeIndex : null
             }))}
             dragBlockId={dragBlockId}
+            dragHabitId={dragHabitId}
             onPriorityChange={() => loadUserData()}
+            onHabitDrop={createHabitBlockForPriority}
           />
 
           <div className="card">
@@ -2081,7 +2137,7 @@ const App: React.FC = () => {
                                     <div
                                       className="habit-drag-area"
                                       draggable
-                                      onDragStart={() => handleHabitDragStart(habit.id)}
+                                      onDragStart={(e) => handleHabitDragStart(habit.id, e)}
                                       onDragEnd={handleHabitDragEnd}
                                       title="Drag to schedule this habit"
                                       style={{ display: "flex", alignItems: "center", gap: "6px" }}

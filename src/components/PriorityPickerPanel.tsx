@@ -22,10 +22,12 @@ interface PriorityPickerPanelProps {
   userId: string;
   blocks: Block[];
   dragBlockId: string | null;
+  dragHabitId: string | null;
   onPriorityChange: () => void;
+  onHabitDrop: (habitId: string) => Promise<string | null>;
 }
 
-export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPriorityChange }: PriorityPickerPanelProps) {
+export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragHabitId, onPriorityChange, onHabitDrop }: PriorityPickerPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [priorities, setPriorities] = useState<Priority[]>([
     { block_id: null, priority_rank: 1, completed: false },
@@ -193,15 +195,21 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
     }
   }
 
-  function handleSlotDrop(e: React.DragEvent, rank: number) {
+  async function handleSlotDrop(e: React.DragEvent, rank: number) {
     e.preventDefault();
     e.stopPropagation();
     setDragOverRank(null);
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const transferred = e.dataTransfer.getData('application/block-id') || e.dataTransfer.getData('text/plain');
+    const habitId = e.dataTransfer.getData('application/habit-id');
     const blockId = currentDragBlockId || (UUID_RE.test(transferred ?? '') ? transferred : null) || dragBlockId;
     if (blockId) {
       setPriority(rank, blockId);
+    } else if (habitId || dragHabitId) {
+      const newBlockId = await onHabitDrop(habitId || dragHabitId!);
+      if (newBlockId) {
+        setPriority(rank, newBlockId);
+      }
     }
   }
 
@@ -274,14 +282,14 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
                   </div>
                 ) : (
                   <div
-                    className={`priority-empty ${dragOverRank === priority.priority_rank ? 'drag-over' : ''} ${dragBlockId ? 'drop-ready' : ''}`}
+                    className={`priority-empty ${dragOverRank === priority.priority_rank ? 'drag-over' : ''} ${(dragBlockId || dragHabitId) ? 'drop-ready' : ''}`}
                     onDragOver={(e) => handleSlotDragOver(e, priority.priority_rank)}
                     onDragLeave={handleSlotDragLeave}
                     onDrop={(e) => handleSlotDrop(e, priority.priority_rank)}
                   >
-                    {dragBlockId ? (
+                    {(dragBlockId || dragHabitId) ? (
                       <div className="priority-drop-hint">
-                        Drop block here
+                        {dragHabitId ? 'Drop habit here' : 'Drop block here'}
                       </div>
                     ) : (
                       <select
