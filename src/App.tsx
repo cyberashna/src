@@ -21,6 +21,8 @@ import GhostBlock from "./components/GhostBlock";
 import PriorityBadge from "./components/PriorityBadge";
 import { generateGhostBlocks, dismissPattern, acceptGhostBlock, type GhostBlock as GhostBlockType } from "./services/patternAnalysis";
 import { generateStandingBlocksForWeek } from "./services/standingBlocks";
+import DailyEssentials from "./components/DailyEssentials";
+import MoodTracker from "./components/MoodTracker";
 
 type HabitGroup = {
   id: string;
@@ -2552,6 +2554,18 @@ const App: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
+                <MoodTracker
+                  userId={user!.id}
+                  weekStartDate={getWeekStartDateString(weekOffset)}
+                  days={days}
+                  todayDayIndex={todayDayIndex}
+                />
+                <DailyEssentials
+                  userId={user!.id}
+                  weekStartDate={getWeekStartDateString(weekOffset)}
+                  days={days}
+                  todayDayIndex={todayDayIndex}
+                />
                 <tr className="daily-row">
                   <th className="time-col daily-label" style={{ background: "#fff3cd", fontWeight: 600, fontSize: "11px", color: "#856404" }}>
                     Daily
