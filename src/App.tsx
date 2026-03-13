@@ -1775,6 +1775,7 @@ const App: React.FC = () => {
             dragHabitId={dragHabitId}
             onPriorityChange={() => loadUserData()}
             onHabitDrop={createHabitBlockForPriority}
+            onDeleteBlock={deleteBlockWithUndo}
           />
 
           <div className="card">

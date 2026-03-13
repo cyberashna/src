@@ -25,9 +25,10 @@ interface PriorityPickerPanelProps {
   dragHabitId: string | null;
   onPriorityChange: () => void;
   onHabitDrop: (habitId: string) => Promise<string | null>;
+  onDeleteBlock: (blockId: string) => void;
 }
 
-export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragHabitId, onPriorityChange, onHabitDrop }: PriorityPickerPanelProps) {
+export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragHabitId, onPriorityChange, onHabitDrop, onDeleteBlock }: PriorityPickerPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [priorities, setPriorities] = useState<Priority[]>([
     { block_id: null, priority_rank: 1, completed: false },
@@ -150,6 +151,29 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
       onPriorityChange();
     } catch (err) {
       console.error('Exception removing priority:', err);
+    }
+  }
+
+  async function deleteBlockAndPriority(rank: number) {
+    try {
+      const priority = priorities.find(p => p.priority_rank === rank);
+      if (!priority) return;
+
+      if (priority.id) {
+        await supabase
+          .from('daily_priorities')
+          .delete()
+          .eq('id', priority.id);
+      }
+
+      if (priority.block_id) {
+        onDeleteBlock(priority.block_id);
+      }
+
+      await loadPriorities();
+      onPriorityChange();
+    } catch (err) {
+      console.error('Exception deleting block and priority:', err);
     }
   }
 
@@ -276,8 +300,16 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
                     <button
                       className="remove-priority"
                       onClick={() => removePriority(priority.priority_rank)}
+                      title="Unassign from priority"
                     >
                       ×
+                    </button>
+                    <button
+                      className="delete-block-priority"
+                      onClick={() => deleteBlockAndPriority(priority.priority_rank)}
+                      title="Delete block entirely"
+                    >
+                      🗑
                     </button>
                   </div>
                 ) : (
@@ -464,6 +496,26 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
 
         .remove-priority:hover {
           background: #c82333;
+        }
+
+        .delete-block-priority {
+          width: 24px;
+          height: 24px;
+          border: none;
+          background: #6c757d;
+          color: white;
+          border-radius: 50%;
+          cursor: pointer;
+          font-size: 12px;
+          line-height: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.2s;
+        }
+
+        .delete-block-priority:hover {
+          background: #495057;
         }
 
         .priority-empty {
