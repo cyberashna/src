@@ -11,7 +11,7 @@ import { WorkoutInputs } from "./components/WorkoutInputs";
 import { ToastContainer, createToastId } from "./components/Toast";
 import type { ToastItem } from "./components/Toast";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { WeekSummary } from "./components/WeekSummary";
+
 import { database, SessionGroup, Habit as DBHabit, Block as DBBlock } from "./services/database";
 import { updateSessionGroups, getSessionDisplayName } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
@@ -2524,22 +2524,6 @@ const App: React.FC = () => {
               </div>
             )}
           </div>
-
-          <WeekSummary
-            blocks={blocks.map((b) => ({
-              id: b.id,
-              isHabitBlock: b.isHabitBlock,
-              habitId: b.habitId,
-              completed: b.completed,
-              location: { type: b.location.type },
-            }))}
-            habits={allHabits.map((h) => ({
-              id: h.id,
-              name: h.name,
-              targetPerWeek: h.targetPerWeek,
-              frequency: h.frequency,
-            }))}
-          />
 
           <div className="planner-wrapper">
             <table className="planner">

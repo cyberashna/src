@@ -1126,100 +1126,6 @@ table.planner td.slot.today-col.drag-over {
 }
 
 /* -- Week Summary -- */
-.week-summary {
-  background: #fff;
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-  overflow: hidden;
-}
-.week-summary-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  background: #fff;
-  border: none;
-  cursor: pointer;
-  font-size: 13px;
-  color: #333;
-  border-radius: 10px;
-}
-.week-summary-toggle:hover {
-  background: #fafafa;
-}
-.week-summary-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.week-summary-title {
-  font-weight: 600;
-  font-size: 14px;
-}
-.week-summary-quick {
-  font-size: 12px;
-  color: #666;
-}
-.week-summary-chevron {
-  font-size: 10px;
-  color: #999;
-  transition: transform 0.2s ease;
-}
-.week-summary-body {
-  padding: 0 14px 12px;
-}
-.week-summary-bar-container {
-  height: 6px;
-  background: #e5e7eb;
-  border-radius: 3px;
-  overflow: hidden;
-  margin-bottom: 10px;
-}
-.week-summary-bar {
-  height: 100%;
-  background: var(--color-primary);
-  border-radius: 3px;
-  transition: width 0.4s ease;
-}
-.week-summary-habits {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.week-summary-habit-row {
-  display: grid;
-  grid-template-columns: 1fr auto 60px;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-.week-summary-habit-name {
-  color: #333;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.week-summary-habit-count {
-  color: #666;
-  font-weight: 600;
-  font-size: 11px;
-}
-.week-summary-habit-bar-container {
-  height: 4px;
-  background: #e5e7eb;
-  border-radius: 2px;
-  overflow: hidden;
-}
-.week-summary-habit-bar {
-  height: 100%;
-  background: var(--color-primary);
-  border-radius: 2px;
-  transition: width 0.3s ease;
-}
-.week-summary-habit-bar.complete {
-  background: var(--color-success);
-}
 
 /* -- Copy Last Week Button -- */
 .copy-week-btn {
@@ -1450,9 +1356,6 @@ table.planner td.slot.today-col.drag-over {
   }
   .habit-item {
     padding: 14px 10px;
-  }
-  .week-summary-habit-row {
-    grid-template-columns: 1fr auto 50px;
   }
 }
 
