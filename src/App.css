@@ -1557,39 +1557,39 @@ table.planner td.slot.today-col.drag-over {
   border-color: #16a34a;
 }
 
-/* Essentials summary row */
-.essentials-summary-row {
-  background: #ecfdf5;
-}
 .essentials-summary-cell {
   cursor: default !important;
 }
 .essentials-summary-cell:hover {
-  background: #ecfdf5 !important;
+  background: #f0fdf4 !important;
 }
-.essentials-fraction {
-  font-size: 11px;
-  font-weight: 600;
-  color: #6b7280;
-}
-.essentials-fraction.all-done {
-  color: #16a34a;
-}
-
-/* Essentials add form */
-.essentials-add-btn {
+.essentials-inline-add {
   background: transparent !important;
-  border: 1px dashed #86efac !important;
-  color: #16a34a;
-  font-size: 10px;
-  padding: 2px 8px !important;
-  border-radius: 4px !important;
+  border: none !important;
+  color: #86efac;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0 !important;
+  margin-left: 2px;
   cursor: pointer;
+  line-height: 1;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px !important;
   transition: all 0.15s ease;
+  flex-shrink: 0;
+  opacity: 0;
 }
-.essentials-add-btn:hover {
+.essentials-inline-add:hover {
+  color: #16a34a;
   background: #dcfce7 !important;
-  border-color: #16a34a !important;
+}
+.essentials-label-inner:hover .essentials-inline-add {
+  opacity: 1;
+  color: #16a34a;
 }
 .essentials-add-form {
   display: flex;

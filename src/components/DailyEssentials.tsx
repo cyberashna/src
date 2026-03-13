@@ -145,47 +145,59 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDa
 
   return (
     <>
-      {essentials.map((essential) => (
-        <tr key={essential.id} className="essentials-row">
+      {essentials.map((essential, i) => {
+        const isLast = i === essentials.length - 1;
+        return (
+          <tr key={essential.id} className="essentials-row">
+            <th className="time-col essentials-label">
+              <div className="essentials-label-inner">
+                <span className="essentials-icon">{essential.icon}</span>
+                <span className="essentials-name">{essential.name}</span>
+                <button
+                  className="essentials-remove-btn"
+                  onClick={() => removeEssential(essential.id)}
+                  title="Remove"
+                >
+                  &times;
+                </button>
+                {isLast && !adding && (
+                  <button
+                    className="essentials-inline-add"
+                    onClick={() => setAdding(true)}
+                    title="Add essential"
+                  >
+                    +
+                  </button>
+                )}
+              </div>
+            </th>
+            {days.map((_, dayIndex) => {
+              const date = getDateForDay(weekStartDate, dayIndex);
+              const key = `${essential.id}_${date}`;
+              const done = completions.get(key) || false;
+              return (
+                <td
+                  key={dayIndex}
+                  className={`slot essentials-cell${dayIndex === todayDayIndex ? " today-col" : ""}${done ? " essentials-done" : ""}`}
+                  onClick={() => toggleCompletion(essential.id, dayIndex)}
+                >
+                  <div className="essentials-check">
+                    {done ? (
+                      <span className="essentials-check-on">✓</span>
+                    ) : (
+                      <span className="essentials-check-off" />
+                    )}
+                  </div>
+                </td>
+              );
+            })}
+          </tr>
+        );
+      })}
+      {adding && (
+        <tr className="essentials-row">
           <th className="time-col essentials-label">
             <div className="essentials-label-inner">
-              <span className="essentials-icon">{essential.icon}</span>
-              <span className="essentials-name">{essential.name}</span>
-              <button
-                className="essentials-remove-btn"
-                onClick={() => removeEssential(essential.id)}
-                title="Remove"
-              >
-                &times;
-              </button>
-            </div>
-          </th>
-          {days.map((_, dayIndex) => {
-            const date = getDateForDay(weekStartDate, dayIndex);
-            const key = `${essential.id}_${date}`;
-            const done = completions.get(key) || false;
-            return (
-              <td
-                key={dayIndex}
-                className={`slot essentials-cell${dayIndex === todayDayIndex ? " today-col" : ""}${done ? " essentials-done" : ""}`}
-                onClick={() => toggleCompletion(essential.id, dayIndex)}
-              >
-                <div className="essentials-check">
-                  {done ? (
-                    <span className="essentials-check-on">✓</span>
-                  ) : (
-                    <span className="essentials-check-off" />
-                  )}
-                </div>
-              </td>
-            );
-          })}
-        </tr>
-      ))}
-      <tr className="essentials-row essentials-summary-row">
-        <th className="time-col essentials-label">
-          <div className="essentials-label-inner">
-            {adding ? (
               <div className="essentials-add-form">
                 <input
                   type="text"
@@ -194,6 +206,7 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDa
                   onChange={(e) => setNewIcon(e.target.value)}
                   className="essentials-icon-input"
                   maxLength={2}
+                  autoFocus
                 />
                 <input
                   type="text"
@@ -206,20 +219,16 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDa
                 <button className="essentials-add-confirm" onClick={addEssential}>+</button>
                 <button className="essentials-add-cancel" onClick={() => setAdding(false)}>&times;</button>
               </div>
-            ) : (
-              <button className="essentials-add-btn" onClick={() => setAdding(true)}>
-                + Add
-              </button>
-            )}
-          </div>
-        </th>
-        {days.map((_, dayIndex) => (
-          <td
-            key={dayIndex}
-            className={`slot essentials-cell essentials-summary-cell${dayIndex === todayDayIndex ? " today-col" : ""}`}
-          />
-        ))}
-      </tr>
+            </div>
+          </th>
+          {days.map((_, dayIndex) => (
+            <td
+              key={dayIndex}
+              className={`slot essentials-cell essentials-summary-cell${dayIndex === todayDayIndex ? " today-col" : ""}`}
+            />
+          ))}
+        </tr>
+      )}
     </>
   );
 };
