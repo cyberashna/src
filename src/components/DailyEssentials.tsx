@@ -141,15 +141,6 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDa
     setEssentials((prev) => prev.filter((e) => e.id !== id));
   }
 
-  function getDayCompletionCount(dayIndex: number): number {
-    const date = getDateForDay(weekStartDate, dayIndex);
-    let count = 0;
-    essentials.forEach((e) => {
-      if (completions.get(`${e.id}_${date}`)) count++;
-    });
-    return count;
-  }
-
   if (essentials.length === 0) return null;
 
   return (
@@ -222,21 +213,12 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDa
             )}
           </div>
         </th>
-        {days.map((_, dayIndex) => {
-          const done = getDayCompletionCount(dayIndex);
-          const total = essentials.length;
-          const allDone = done === total;
-          return (
-            <td
-              key={dayIndex}
-              className={`slot essentials-cell essentials-summary-cell${dayIndex === todayDayIndex ? " today-col" : ""}`}
-            >
-              <span className={`essentials-fraction${allDone ? " all-done" : ""}`}>
-                {done}/{total}
-              </span>
-            </td>
-          );
-        })}
+        {days.map((_, dayIndex) => (
+          <td
+            key={dayIndex}
+            className={`slot essentials-cell essentials-summary-cell${dayIndex === todayDayIndex ? " today-col" : ""}`}
+          />
+        ))}
       </tr>
     </>
   );
