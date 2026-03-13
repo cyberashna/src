@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 
 interface Block {
@@ -25,6 +25,12 @@ interface PriorityPickerPanelProps {
 }
 
 export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPriorityChange }: PriorityPickerPanelProps) {
+  const dragBlockIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    dragBlockIdRef.current = dragBlockId;
+  }, [dragBlockId]);
+
   const [isOpen, setIsOpen] = useState(true);
   const [priorities, setPriorities] = useState<Priority[]>([
     { block_id: null, priority_rank: 1, completed: false },
@@ -196,7 +202,7 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
     e.preventDefault();
     e.stopPropagation();
     setDragOverRank(null);
-    const blockId = e.dataTransfer.getData('text/plain') || dragBlockId;
+    const blockId = dragBlockIdRef.current || dragBlockId;
     if (blockId) {
       setPriority(rank, blockId);
     }
