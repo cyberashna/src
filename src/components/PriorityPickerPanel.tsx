@@ -194,8 +194,9 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
     e.preventDefault();
     e.stopPropagation();
     setDragOverRank(null);
-    if (dragBlockId) {
-      setPriority(rank, dragBlockId);
+    const blockId = e.dataTransfer.getData('text/plain') || dragBlockId;
+    if (blockId) {
+      setPriority(rank, blockId);
     }
   }
 

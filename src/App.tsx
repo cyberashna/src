@@ -970,9 +970,12 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDragStart = (blockId: string) => {
+  const handleDragStart = (blockId: string, e?: React.DragEvent) => {
     setDragBlockId(blockId);
     setDragHabitId(null);
+    if (e) {
+      e.dataTransfer.setData('text/plain', blockId);
+    }
   };
 
   const handleDragEnd = () => {
@@ -2314,7 +2317,7 @@ const App: React.FC = () => {
                       (block.completed ? " block-done" : "")
                     }
                     draggable
-                    onDragStart={() => handleDragStart(block.id)}
+                    onDragStart={(e) => handleDragStart(block.id, e)}
                     onDragEnd={handleDragEnd}
                   >
                     <div>
@@ -2524,7 +2527,7 @@ const App: React.FC = () => {
                                 (hasSessionGroup ? ` session-group session-${sessionColor}` : "")
                               }
                               draggable
-                              onDragStart={() => handleDragStart(block.id)}
+                              onDragStart={(e) => handleDragStart(block.id, e)}
                               onDragEnd={handleDragEnd}
                               onDoubleClick={() =>
                                 handleBlockDoubleClickWithUndo(block.id)
@@ -2671,7 +2674,7 @@ const App: React.FC = () => {
                                   (hasSessionGroup ? ` session-group session-${sessionColor}` : "")
                                 }
                                 draggable
-                                onDragStart={() => handleDragStart(block.id)}
+                                onDragStart={(e) => handleDragStart(block.id, e)}
                                 onDragEnd={handleDragEnd}
                                 onDoubleClick={() =>
                                   handleBlockDoubleClickWithUndo(block.id)
