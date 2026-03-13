@@ -187,7 +187,9 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
 
   function handleSlotDragLeave(e: React.DragEvent) {
     e.preventDefault();
-    setDragOverRank(null);
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOverRank(null);
+    }
   }
 
   function handleSlotDrop(e: React.DragEvent, rank: number) {
@@ -457,6 +459,9 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
           flex: 1;
           border-radius: 6px;
           transition: all 0.2s;
+          min-height: 44px;
+          display: flex;
+          align-items: stretch;
         }
 
         .priority-empty.drop-ready {
@@ -477,6 +482,8 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPri
           font-size: 13px;
           font-weight: 500;
           color: #2563eb;
+          width: 100%;
+          pointer-events: none;
         }
 
         .priority-selector {
