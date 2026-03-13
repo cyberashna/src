@@ -1708,6 +1708,7 @@ const App: React.FC = () => {
               day_index: b.location.type === 'slot' ? b.location.dayIndex : null,
               time_index: b.location.type === 'slot' ? b.location.timeIndex : null
             }))}
+            dragBlockId={dragBlockId}
             onPriorityChange={() => loadUserData()}
           />
 

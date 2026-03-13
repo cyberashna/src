@@ -20,11 +20,11 @@ interface Priority {
 interface PriorityPickerPanelProps {
   userId: string;
   blocks: Block[];
+  dragBlockId: string | null;
   onPriorityChange: () => void;
 }
 
-export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }: PriorityPickerPanelProps) {
-  console.log('PriorityPickerPanel rendering, userId:', userId, 'blocks:', blocks.length);
+export default function PriorityPickerPanel({ userId, blocks, dragBlockId, onPriorityChange }: PriorityPickerPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [priorities, setPriorities] = useState<Priority[]>([
     { block_id: null, priority_rank: 1, completed: false },
@@ -172,10 +172,32 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
     }
   }
 
+  const [dragOverRank, setDragOverRank] = useState<number | null>(null);
+
   const scheduledBlocks = blocks.filter(b => b.day_index !== null && b.time_index !== null);
   const availableBlocks = scheduledBlocks.filter(
     b => !priorities.some(p => p.block_id === b.id)
   );
+
+  function handleSlotDragOver(e: React.DragEvent, rank: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverRank(rank);
+  }
+
+  function handleSlotDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOverRank(null);
+  }
+
+  function handleSlotDrop(e: React.DragEvent, rank: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverRank(null);
+    if (dragBlockId) {
+      setPriority(rank, dragBlockId);
+    }
+  }
 
   const priorityColors = [
     { name: 'Gold', bg: 'linear-gradient(135deg, #FFD700 0%, #FFA500 100%)', text: '#000' },
@@ -245,19 +267,30 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
                     </button>
                   </div>
                 ) : (
-                  <div className="priority-empty">
-                    <select
-                      className="priority-selector"
-                      value=""
-                      onChange={(e) => setPriority(priority.priority_rank, e.target.value)}
-                    >
-                      <option value="">Choose a block...</option>
-                      {availableBlocks.map(block => (
-                        <option key={block.id} value={block.id}>
-                          {block.label}
-                        </option>
-                      ))}
-                    </select>
+                  <div
+                    className={`priority-empty ${dragOverRank === priority.priority_rank ? 'drag-over' : ''} ${dragBlockId ? 'drop-ready' : ''}`}
+                    onDragOver={(e) => handleSlotDragOver(e, priority.priority_rank)}
+                    onDragLeave={handleSlotDragLeave}
+                    onDrop={(e) => handleSlotDrop(e, priority.priority_rank)}
+                  >
+                    {dragBlockId ? (
+                      <div className="priority-drop-hint">
+                        Drop block here
+                      </div>
+                    ) : (
+                      <select
+                        className="priority-selector"
+                        value=""
+                        onChange={(e) => setPriority(priority.priority_rank, e.target.value)}
+                      >
+                        <option value="">Choose a block...</option>
+                        {availableBlocks.map(block => (
+                          <option key={block.id} value={block.id}>
+                            {block.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 )}
               </div>
@@ -421,6 +454,28 @@ export default function PriorityPickerPanel({ userId, blocks, onPriorityChange }
 
         .priority-empty {
           flex: 1;
+          border-radius: 6px;
+          transition: all 0.2s;
+        }
+
+        .priority-empty.drop-ready {
+          border: 2px dashed #93c5fd;
+          background: #eff6ff;
+          padding: 0;
+        }
+
+        .priority-empty.drag-over {
+          border-color: #2563eb;
+          background: #dbeafe;
+          transform: scale(1.02);
+        }
+
+        .priority-drop-hint {
+          padding: 10px 14px;
+          text-align: center;
+          font-size: 13px;
+          font-weight: 500;
+          color: #2563eb;
         }
 
         .priority-selector {
