@@ -23,6 +23,8 @@ import { generateGhostBlocks, dismissPattern, acceptGhostBlock, type GhostBlock 
 import { generateStandingBlocksForWeek } from "./services/standingBlocks";
 import DailyEssentials from "./components/DailyEssentials";
 import MoodTracker from "./components/MoodTracker";
+import EventSuggestions from "./components/EventSuggestions";
+import type { Suggestion } from "./components/EventSuggestions";
 
 type HabitGroup = {
   id: string;
@@ -198,6 +200,7 @@ const App: React.FC = () => {
 
   const [blockLabel, setBlockLabel] = useState("");
   const [blockHashtag, setBlockHashtag] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const [showCalendarSettings, setShowCalendarSettings] = useState(false);
   const [notesThemeId, setNotesThemeId] = useState<string | null>(null);
@@ -2343,14 +2346,34 @@ const App: React.FC = () => {
             <h3>Unscheduled blocks</h3>
 
             <div className="blocks-panel">
-              <div className="inline">
-                <input
-                  id="blockLabelInput"
-                  type="text"
-                  placeholder="e.g. Deep clean bathroom"
-                  value={blockLabel}
-                  onChange={(e) => setBlockLabel(e.target.value)}
-                />
+              <div className="block-input-wrapper">
+                <div className="inline">
+                  <input
+                    id="blockLabelInput"
+                    type="text"
+                    placeholder="e.g. Deep clean bathroom"
+                    value={blockLabel}
+                    onChange={(e) => setBlockLabel(e.target.value)}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setShowSuggestions(false)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        createBlock(blockLabel, false, undefined, blockHashtag);
+                        setShowSuggestions(false);
+                      }
+                    }}
+                  />
+                </div>
+                {showSuggestions && (
+                  <EventSuggestions
+                    filter={blockLabel}
+                    onSelect={(s: Suggestion) => {
+                      setBlockLabel(s.label);
+                      setBlockHashtag(s.hashtag);
+                      setShowSuggestions(false);
+                    }}
+                  />
+                )}
               </div>
               <div className="inline" style={{ marginTop: 4 }}>
                 <input

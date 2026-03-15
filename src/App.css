@@ -1626,3 +1626,57 @@ table.planner td.slot.today-col.drag-over {
   cursor: pointer;
   border: none !important;
 }
+
+/* -- Event Suggestions -- */
+.block-input-wrapper {
+  position: relative;
+}
+.event-suggestions {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  animation: suggestionsIn 0.15s ease;
+}
+@keyframes suggestionsIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.suggestions-group {
+  margin-bottom: 6px;
+}
+.suggestions-group:last-child {
+  margin-bottom: 0;
+}
+.suggestions-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #888;
+  margin-bottom: 4px;
+}
+.suggestions-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.suggestion-chip {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+.suggestion-chip:hover {
+  background: var(--color-primary, #2563eb);
+  border-color: var(--color-primary, #2563eb);
+  color: #fff;
+}
