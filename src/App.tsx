@@ -222,6 +222,11 @@ const App: React.FC = () => {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editBlockLabel, setEditBlockLabel] = useState("");
 
+  const [convertingBlockId, setConvertingBlockId] = useState<string | null>(null);
+  const [convertFrequency, setConvertFrequency] = useState<"daily" | "weekly" | "monthly" | "none">("weekly");
+  const [convertTarget, setConvertTarget] = useState(3);
+  const [convertGroupId, setConvertGroupId] = useState("");
+
   const [ghostBlocks, setGhostBlocks] = useState<GhostBlockType[]>([]);
   const [showQuickStartModal, setShowQuickStartModal] = useState(false);
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
@@ -1020,6 +1025,49 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error removing block from theme:", error);
       showToast("Failed to remove block from theme", "error");
+    }
+  };
+
+  const convertBlockToHabit = async (blockId: string, themeId: string) => {
+    const block = blocks.find((b) => b.id === blockId);
+    if (!block || !user) return;
+
+    try {
+      const habitData = await database.habits.create(
+        user.id,
+        themeId,
+        block.label,
+        convertFrequency === "none" ? 0 : convertTarget,
+        convertFrequency,
+        convertGroupId || undefined
+      );
+
+      const newHabit: Habit = {
+        id: habitData.id,
+        name: habitData.name,
+        targetPerWeek: habitData.target_per_week,
+        doneCount: habitData.done_count,
+        frequency: habitData.frequency,
+        habitGroupId: habitData.habit_group_id ?? undefined,
+      };
+
+      setThemes((prev) =>
+        prev.map((t) =>
+          t.id === themeId ? { ...t, habits: [...t.habits, newHabit] } : t
+        )
+      );
+
+      await database.blocks.delete(blockId);
+      setBlocks((prev) => prev.filter((b) => b.id !== blockId));
+
+      setConvertingBlockId(null);
+      setConvertFrequency("weekly");
+      setConvertTarget(3);
+      setConvertGroupId("");
+      showToast("Block converted to habit", "success");
+    } catch (error) {
+      console.error("Error converting block to habit:", error);
+      showToast("Failed to convert block", "error");
     }
   };
 
@@ -2396,25 +2444,101 @@ const App: React.FC = () => {
                           {themedBlocks.length > 0 && (
                             <div className="theme-blocks-list">
                               {themedBlocks.map((block) => (
-                                <div
-                                  key={block.id}
-                                  className={`block${block.isHabitBlock ? " habit-block" : ""}${block.completed ? " block-done" : ""}`}
-                                  draggable
-                                  onDragStart={(e) => handleDragStart(block.id, e)}
-                                  onDragEnd={handleDragEnd}
-                                >
-                                  <span>{block.label}</span>
-                                  {block.hashtag && (
-                                    <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>#{block.hashtag}</span>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="theme-block-remove-btn"
-                                    onClick={() => removeBlockFromTheme(block.id)}
-                                    title="Remove from theme"
+                                <div key={block.id} className="themed-block-wrapper">
+                                  <div
+                                    className={`block${block.isHabitBlock ? " habit-block" : ""}${block.completed ? " block-done" : ""}`}
+                                    draggable
+                                    onDragStart={(e) => handleDragStart(block.id, e)}
+                                    onDragEnd={handleDragEnd}
                                   >
-                                    ×
-                                  </button>
+                                    <span>{block.label}</span>
+                                    {block.hashtag && (
+                                      <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>#{block.hashtag}</span>
+                                    )}
+                                    {!block.isHabitBlock && (
+                                      <button
+                                        type="button"
+                                        className="theme-block-convert-btn"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setConvertingBlockId(convertingBlockId === block.id ? null : block.id);
+                                          setConvertFrequency("weekly");
+                                          setConvertTarget(3);
+                                          setConvertGroupId("");
+                                        }}
+                                        title="Convert to habit"
+                                      >
+                                        &#x21bb;
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="theme-block-remove-btn"
+                                      onClick={() => removeBlockFromTheme(block.id)}
+                                      title="Remove from theme"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                  {convertingBlockId === block.id && (
+                                    <div className="convert-to-habit-form">
+                                      <div className="convert-form-title">Convert to Habit</div>
+                                      <div className="convert-form-row">
+                                        <label className="small-label">Frequency</label>
+                                        <select
+                                          value={convertFrequency}
+                                          onChange={(e) => setConvertFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
+                                        >
+                                          <option value="daily">Daily</option>
+                                          <option value="weekly">Weekly</option>
+                                          <option value="monthly">Monthly</option>
+                                          <option value="none">No Target</option>
+                                        </select>
+                                      </div>
+                                      {convertFrequency !== "none" && (
+                                        <div className="convert-form-row">
+                                          <label className="small-label">Target</label>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            max={convertFrequency === "daily" ? 7 : convertFrequency === "weekly" ? 14 : 28}
+                                            value={convertTarget}
+                                            onChange={(e) => setConvertTarget(parseInt(e.target.value) || 1)}
+                                          />
+                                        </div>
+                                      )}
+                                      {theme.groups.length > 0 && (
+                                        <div className="convert-form-row">
+                                          <label className="small-label">Group</label>
+                                          <select
+                                            value={convertGroupId}
+                                            onChange={(e) => setConvertGroupId(e.target.value)}
+                                          >
+                                            <option value="">None</option>
+                                            {theme.groups.map((g) => (
+                                              <option key={g.id} value={g.id}>{g.name}</option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      )}
+                                      <div className="convert-form-actions">
+                                        <button
+                                          className="primary"
+                                          type="button"
+                                          onClick={() => convertBlockToHabit(block.id, theme.id)}
+                                        >
+                                          Convert
+                                        </button>
+                                        <button
+                                          className="secondary"
+                                          type="button"
+                                          onClick={() => setConvertingBlockId(null)}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
