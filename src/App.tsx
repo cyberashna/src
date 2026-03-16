@@ -1023,12 +1023,11 @@ const App: React.FC = () => {
   const handleThemeDragOver = (e: React.DragEvent<HTMLDivElement>, themeId: string) => {
     if (!dragBlockId && !currentDragBlockId) return;
     e.preventDefault();
-    e.stopPropagation();
     setDragOverThemeId(themeId);
   };
 
   const handleThemeDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
       setDragOverThemeId(null);
     }
   };
@@ -1870,9 +1869,6 @@ const App: React.FC = () => {
                     <div
                       key={theme.id}
                       className={`theme-card${isDropTarget ? " theme-card-drop-target" : ""}`}
-                      onDragOver={(e) => handleThemeDragOver(e, theme.id)}
-                      onDragLeave={handleThemeDragLeave}
-                      onDrop={(e) => handleThemeDrop(e, theme.id)}
                     >
                       <div
                         className="theme-title-row"
@@ -2382,8 +2378,13 @@ const App: React.FC = () => {
                         habits={theme.habits.map(h => ({ id: h.id, habitGroupId: h.habitGroupId }))}
                       />
 
-                      {(themedBlocks.length > 0 || isDropTarget) && (
-                        <div className={`theme-blocks-zone${isDropTarget ? " theme-blocks-zone-active" : ""}`}>
+                      {(themedBlocks.length > 0 || isDraggingBlock) && (
+                        <div
+                          className={`theme-blocks-zone${isDropTarget ? " theme-blocks-zone-active" : ""}`}
+                          onDragOver={(e) => handleThemeDragOver(e, theme.id)}
+                          onDragLeave={handleThemeDragLeave}
+                          onDrop={(e) => handleThemeDrop(e, theme.id)}
+                        >
                           {themedBlocks.length > 0 && (
                             <div className="theme-blocks-list">
                               {themedBlocks.map((block) => (
@@ -2410,15 +2411,12 @@ const App: React.FC = () => {
                               ))}
                             </div>
                           )}
-                          {isDropTarget && themedBlocks.length === 0 && (
-                            <div className="theme-blocks-drop-hint">Drop block here</div>
+                          {isDraggingBlock && themedBlocks.length === 0 && !isDropTarget && (
+                            <div className="theme-blocks-drop-hint">Drop to add block</div>
                           )}
-                        </div>
-                      )}
-
-                      {isDraggingBlock && themedBlocks.length === 0 && !isDropTarget && (
-                        <div className="theme-blocks-drop-placeholder">
-                          Drop to add block
+                          {isDropTarget && themedBlocks.length === 0 && (
+                            <div className="theme-blocks-drop-hint theme-blocks-drop-hint-active">Drop block here</div>
+                          )}
                         </div>
                       )}
                       </div>
