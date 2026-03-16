@@ -982,12 +982,15 @@ const App: React.FC = () => {
 
   const handleDragStart = (blockId: string, e?: React.DragEvent) => {
     currentDragBlockId = blockId;
-    setDragBlockId(blockId);
-    setDragHabitId(null);
     if (e) {
       e.dataTransfer.setData('application/block-id', blockId);
       e.dataTransfer.setData('text/plain', blockId);
+      e.dataTransfer.effectAllowed = 'move';
     }
+    requestAnimationFrame(() => {
+      setDragBlockId(blockId);
+      setDragHabitId(null);
+    });
   };
 
   const handleDragEnd = () => {
@@ -1048,12 +1051,15 @@ const App: React.FC = () => {
   };
 
   const handleHabitDragStart = (habitId: string, e?: React.DragEvent) => {
-    setDragHabitId(habitId);
-    setDragBlockId(null);
     if (e) {
       e.dataTransfer.setData('application/habit-id', habitId);
       e.dataTransfer.setData('text/plain', habitId);
+      e.dataTransfer.effectAllowed = 'move';
     }
+    requestAnimationFrame(() => {
+      setDragHabitId(habitId);
+      setDragBlockId(null);
+    });
   };
 
   const handleHabitDragEnd = () => {
@@ -1200,6 +1206,7 @@ const App: React.FC = () => {
         linked_block_id: null,
         is_linked_group: false,
         daily_template_id: null,
+        theme_id: null,
       });
 
       if (originalHabit && block?.isHabitBlock) {
@@ -1215,6 +1222,7 @@ const App: React.FC = () => {
             location: { type: "slot" as const, dayIndex, timeIndex },
             linkedBlockId: undefined,
             isLinkedGroup: false,
+            themeId: undefined,
             label: originalHabit ? `Habit: ${originalHabit.name}` : b.label,
           };
         }
