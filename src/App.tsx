@@ -75,6 +75,7 @@ export type Block = {
   workoutSubmitted?: boolean;
   sessionGroupId?: string;
   sessionGroup?: SessionGroup;
+  themeId?: string;
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -160,6 +161,7 @@ const App: React.FC = () => {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dragHabitId, setDragHabitId] = useState<string | null>(null);
+  const [dragOverThemeId, setDragOverThemeId] = useState<string | null>(null);
 
   const [viewMode, setViewMode] = useState<ViewMode>("hourly");
   const [bucketSlots, setBucketSlots] = useState<string[]>([
@@ -336,6 +338,7 @@ const App: React.FC = () => {
         workoutSubmitted: b.workout_submitted,
         sessionGroupId: b.session_group_id ?? undefined,
         sessionGroup: b.session_group_id ? sessionGroupMap.get(b.session_group_id) : undefined,
+        themeId: b.theme_id ?? undefined,
         location:
           b.location_type === "slot" && b.day_index !== null && b.time_index !== null
             ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
@@ -990,6 +993,59 @@ const App: React.FC = () => {
   const handleDragEnd = () => {
     currentDragBlockId = null;
     setDragBlockId(null);
+    setDragOverThemeId(null);
+  };
+
+  const assignBlockToTheme = async (blockId: string, themeId: string) => {
+    try {
+      await database.blocks.update(blockId, { theme_id: themeId });
+      setBlocks((prev) =>
+        prev.map((b) => (b.id === blockId ? { ...b, themeId } : b))
+      );
+    } catch (error) {
+      console.error("Error assigning block to theme:", error);
+      showToast("Failed to assign block to theme", "error");
+    }
+  };
+
+  const removeBlockFromTheme = async (blockId: string) => {
+    try {
+      await database.blocks.update(blockId, { theme_id: null });
+      setBlocks((prev) =>
+        prev.map((b) => (b.id === blockId ? { ...b, themeId: undefined } : b))
+      );
+    } catch (error) {
+      console.error("Error removing block from theme:", error);
+      showToast("Failed to remove block from theme", "error");
+    }
+  };
+
+  const handleThemeDragOver = (e: React.DragEvent<HTMLDivElement>, themeId: string) => {
+    if (!dragBlockId && !currentDragBlockId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverThemeId(themeId);
+  };
+
+  const handleThemeDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOverThemeId(null);
+    }
+  };
+
+  const handleThemeDrop = (e: React.DragEvent<HTMLDivElement>, themeId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverThemeId(null);
+    const droppedBlockId = currentDragBlockId || dragBlockId;
+    if (droppedBlockId) {
+      const block = blocks.find((b) => b.id === droppedBlockId);
+      if (block && block.location.type === "unscheduled") {
+        assignBlockToTheme(droppedBlockId, themeId);
+      }
+    }
+    currentDragBlockId = null;
+    setDragBlockId(null);
   };
 
   const handleHabitDragStart = (habitId: string, e?: React.DragEvent) => {
@@ -1438,7 +1494,7 @@ const App: React.FC = () => {
   const slotLabels = viewMode === "hourly" ? hourlySlots : bucketSlots;
 
   const unscheduledBlocks = blocks.filter(
-    (b) => b.location.type === "unscheduled"
+    (b) => b.location.type === "unscheduled" && !b.themeId
   );
 
   const getBlocksForSlot = (dayIndex: number, timeIndex: number) => {
@@ -1805,8 +1861,19 @@ const App: React.FC = () => {
                 <div className="theme-list">
                   {themes.map((theme) => {
                     const isThemeExpanded = expandedThemes.has(theme.id);
+                    const themedBlocks = blocks.filter(
+                      (b) => b.location.type === "unscheduled" && b.themeId === theme.id
+                    );
+                    const isDropTarget = dragOverThemeId === theme.id;
+                    const isDraggingBlock = !!(dragBlockId || currentDragBlockId);
                     return (
-                    <div key={theme.id} className="theme-card">
+                    <div
+                      key={theme.id}
+                      className={`theme-card${isDropTarget ? " theme-card-drop-target" : ""}`}
+                      onDragOver={(e) => handleThemeDragOver(e, theme.id)}
+                      onDragLeave={handleThemeDragLeave}
+                      onDrop={(e) => handleThemeDrop(e, theme.id)}
+                    >
                       <div
                         className="theme-title-row"
                         onClick={() => toggleThemeExpanded(theme.id)}
@@ -2314,6 +2381,46 @@ const App: React.FC = () => {
                         groups={theme.groups}
                         habits={theme.habits.map(h => ({ id: h.id, habitGroupId: h.habitGroupId }))}
                       />
+
+                      {(themedBlocks.length > 0 || isDropTarget) && (
+                        <div className={`theme-blocks-zone${isDropTarget ? " theme-blocks-zone-active" : ""}`}>
+                          {themedBlocks.length > 0 && (
+                            <div className="theme-blocks-list">
+                              {themedBlocks.map((block) => (
+                                <div
+                                  key={block.id}
+                                  className={`block${block.isHabitBlock ? " habit-block" : ""}${block.completed ? " block-done" : ""}`}
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(block.id, e)}
+                                  onDragEnd={handleDragEnd}
+                                >
+                                  <span>{block.label}</span>
+                                  {block.hashtag && (
+                                    <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>#{block.hashtag}</span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="theme-block-remove-btn"
+                                    onClick={() => removeBlockFromTheme(block.id)}
+                                    title="Remove from theme"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {isDropTarget && themedBlocks.length === 0 && (
+                            <div className="theme-blocks-drop-hint">Drop block here</div>
+                          )}
+                        </div>
+                      )}
+
+                      {isDraggingBlock && themedBlocks.length === 0 && !isDropTarget && (
+                        <div className="theme-blocks-drop-placeholder">
+                          Drop to add block
+                        </div>
+                      )}
                       </div>
                     </div>
                     );

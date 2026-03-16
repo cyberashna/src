@@ -51,6 +51,7 @@ export type Block = {
   session_group_id: string | null;
   is_daily_template: boolean;
   daily_template_id: string | null;
+  theme_id?: string | null;
   created_at: string;
   updated_at: string;
 };
