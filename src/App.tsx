@@ -179,6 +179,7 @@ const App: React.FC = () => {
   const [newThemeHabitFrequency, setNewThemeHabitFrequency] = useState<"daily" | "weekly" | "monthly" | "none">("weekly");
   const [newThemeHabitGroupId, setNewThemeHabitGroupId] = useState<string>("");
   const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
   const [editHabitName, setEditHabitName] = useState("");
@@ -779,6 +780,18 @@ const App: React.FC = () => {
         next.delete(habitId);
       } else {
         next.add(habitId);
+      }
+      return next;
+    });
+  };
+
+  const toggleGroupExpanded = (groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
       }
       return next;
     });
@@ -2075,267 +2088,345 @@ const App: React.FC = () => {
                       )}
 
                       <div className="habit-list theme-habit-list">
-                        {theme.habits.map((habit) => {
-                          const isExpanded = expandedHabits.has(habit.id);
-                          return (
-                            <div key={habit.id} className="habit-item">
-                              <button
-                                onClick={() => toggleHabitExpanded(habit.id)}
-                                style={{
-                                  position: "absolute",
-                                  left: "8px",
-                                  top: "50%",
-                                  transform: "translateY(-50%)",
-                                  background: "none",
-                                  border: "none",
-                                  cursor: "pointer",
-                                  fontSize: "16px",
-                                  color: "#999",
-                                  padding: "4px",
-                                  lineHeight: 1,
-                                  transition: "transform 0.2s ease"
-                                }}
-                                title={isExpanded ? "Collapse" : "Expand"}
-                              >
-                                <span style={{
-                                  display: "inline-block",
-                                  transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
-                                  transition: "transform 0.2s ease"
-                                }}>
-                                  ▶
-                                </span>
-                              </button>
+                        {(() => {
+                          const ungroupedHabits = theme.habits.filter(h => !h.habitGroupId);
+                          const groupsWithHabits = theme.groups.map(g => ({
+                            ...g,
+                            habits: theme.habits.filter(h => h.habitGroupId === g.id)
+                          })).filter(g => g.habits.length > 0);
+                          const emptyGroups = theme.groups.filter(g => !theme.habits.some(h => h.habitGroupId === g.id));
 
-                              {!isExpanded && (() => {
-                                const done = getHabitDoneCount(habit.id, habit.frequency);
-                                const target = habit.targetPerWeek;
-                                const pct = habit.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
-                                const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
-                                return (
-                                <div style={{
-                                  paddingLeft: "28px",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "space-between",
-                                  width: "100%",
-                                  minHeight: "48px"
-                                }}>
-                                  <div style={{ flex: 1 }}>
-                                    <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px", display: "flex", alignItems: "center", gap: "6px" }}>
-                                      {habit.name}
-                                      <span style={{
-                                        fontSize: "9px",
-                                        fontWeight: 600,
-                                        padding: "2px 5px",
-                                        borderRadius: "3px",
-                                        background: habit.frequency === "daily" ? "#fef08a" : habit.frequency === "weekly" ? "#bfdbfe" : habit.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
-                                        color: habit.frequency === "daily" ? "#713f12" : habit.frequency === "weekly" ? "#1e3a8a" : habit.frequency === "monthly" ? "#581c87" : "#374151",
-                                        textTransform: "uppercase",
-                                        letterSpacing: "0.5px"
-                                      }}>
-                                        {habit.frequency === "daily" ? "D" : habit.frequency === "weekly" ? "W" : habit.frequency === "monthly" ? "M" : "N"}
-                                      </span>
-                                      {habit.habitGroupId && (() => {
-                                        const group = theme.groups.find(g => g.id === habit.habitGroupId);
-                                        return group ? (
-                                          <span style={{ marginLeft: "0px", fontSize: "11px", color: "#666", background: "#f0f0f0", padding: "2px 6px", borderRadius: "3px" }}>
-                                            {group.name}
-                                          </span>
-                                        ) : null;
-                                      })()}
-                                    </div>
-                                    {habit.frequency !== "none" && (
-                                      <div className="habit-progress-row">
-                                        <span className="habit-progress-fraction">{done}/{target}</span>
-                                        <div className="habit-progress-bar-track">
-                                          <div className={`habit-progress-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
-                                        </div>
-                                      </div>
-                                    )}
-                                    {habit.frequency === "none" && (
-                                      <div className="habit-meta">Done: {done}</div>
-                                    )}
-                                  </div>
-                                </div>
-                                );
-                              })()}
+                          const renderHabitItem = (habit: Habit, showGroupBadge: boolean) => {
+                            const isExpanded = expandedHabits.has(habit.id);
+                            return (
+                              <div key={habit.id} className="habit-item">
+                                <button
+                                  onClick={() => toggleHabitExpanded(habit.id)}
+                                  style={{
+                                    position: "absolute",
+                                    left: "8px",
+                                    top: "50%",
+                                    transform: "translateY(-50%)",
+                                    background: "none",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    fontSize: "16px",
+                                    color: "#999",
+                                    padding: "4px",
+                                    lineHeight: 1,
+                                    transition: "transform 0.2s ease"
+                                  }}
+                                  title={isExpanded ? "Collapse" : "Expand"}
+                                >
+                                  <span style={{
+                                    display: "inline-block",
+                                    transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                                    transition: "transform 0.2s ease"
+                                  }}>
+                                    ▶
+                                  </span>
+                                </button>
 
-                              {isExpanded && editingHabitId === habit.id && (
-                                <>
-                                  <button
-                                    className="habit-delete-x"
-                                    onClick={cancelEditingHabit}
-                                    title="Cancel editing"
-                                  >
-                                    ×
-                                  </button>
-
-                                  <div className="add-habit-form" style={{ paddingLeft: "24px", paddingRight: "24px" }}>
-                                    <label className="small-label">Habit name</label>
-                                    <input
-                                      type="text"
-                                      value={editHabitName}
-                                      onChange={(e) => setEditHabitName(e.target.value)}
-                                      placeholder="e.g. Clean kitchen"
-                                    />
-                                    {theme.groups.length > 0 && (
-                                      <>
-                                        <label className="small-label">Group (optional)</label>
-                                        <select
-                                          value={editHabitGroupId}
-                                          onChange={(e) => setEditHabitGroupId(e.target.value)}
-                                        >
-                                          <option value="">None</option>
-                                          {theme.groups.map((group) => (
-                                            <option key={group.id} value={group.id}>
+                                {!isExpanded && (() => {
+                                  const done = getHabitDoneCount(habit.id, habit.frequency);
+                                  const target = habit.targetPerWeek;
+                                  const pct = habit.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
+                                  const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
+                                  return (
+                                  <div style={{
+                                    paddingLeft: "28px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    width: "100%",
+                                    minHeight: "48px"
+                                  }}>
+                                    <div style={{ flex: 1 }}>
+                                      <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px", display: "flex", alignItems: "center", gap: "6px" }}>
+                                        {habit.name}
+                                        <span style={{
+                                          fontSize: "9px",
+                                          fontWeight: 600,
+                                          padding: "2px 5px",
+                                          borderRadius: "3px",
+                                          background: habit.frequency === "daily" ? "#fef08a" : habit.frequency === "weekly" ? "#bfdbfe" : habit.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
+                                          color: habit.frequency === "daily" ? "#713f12" : habit.frequency === "weekly" ? "#1e3a8a" : habit.frequency === "monthly" ? "#581c87" : "#374151",
+                                          textTransform: "uppercase",
+                                          letterSpacing: "0.5px"
+                                        }}>
+                                          {habit.frequency === "daily" ? "D" : habit.frequency === "weekly" ? "W" : habit.frequency === "monthly" ? "M" : "N"}
+                                        </span>
+                                        {showGroupBadge && habit.habitGroupId && (() => {
+                                          const group = theme.groups.find(g => g.id === habit.habitGroupId);
+                                          return group ? (
+                                            <span style={{ marginLeft: "0px", fontSize: "11px", color: "#666", background: "#f0f0f0", padding: "2px 6px", borderRadius: "3px" }}>
                                               {group.name}
-                                              {group.groupType === "strength_training" ? " 🏋️" : ""}
-                                            </option>
-                                          ))}
-                                        </select>
-                                      </>
-                                    )}
-                                    <label className="small-label">Frequency</label>
-                                    <select
-                                      value={editHabitFrequency}
-                                      onChange={(e) => setEditHabitFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
-                                    >
-                                      <option value="daily">Daily</option>
-                                      <option value="weekly">Weekly</option>
-                                      <option value="monthly">Monthly</option>
-                                      <option value="none">No Target</option>
-                                    </select>
-                                    {editHabitFrequency !== "none" && (
-                                      <>
-                                        <label className="small-label">Target</label>
-                                        <input
-                                          type="number"
-                                          min={1}
-                                          max={editHabitFrequency === "daily" ? 7 : editHabitFrequency === "weekly" ? 14 : 28}
-                                          value={editHabitTarget}
-                                          onChange={(e) =>
-                                            setEditHabitTarget(
-                                              parseInt(e.target.value || "0", 10)
-                                            )
-                                          }
-                                        />
-                                      </>
-                                    )}
-                                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          updateHabit(
-                                            habit.id,
-                                            editHabitName,
-                                            editHabitTarget,
-                                            editHabitFrequency,
-                                            editHabitGroupId || undefined
-                                          );
-                                        }}
-                                      >
-                                        Save changes
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="secondary"
-                                        onClick={cancelEditingHabit}
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  </div>
-                                </>
-                              )}
-
-                              {isExpanded && editingHabitId !== habit.id && (
-                                <>
-                                  <button
-                                    className="habit-delete-x"
-                                    onClick={() => deleteHabit(habit.id)}
-                                    title="Delete habit"
-                                  >
-                                    ×
-                                  </button>
-
-                                  <div className="habit-main" style={{ paddingLeft: "24px" }}>
-                                    <div
-                                      className="habit-drag-area"
-                                      draggable
-                                      onDragStart={(e) => handleHabitDragStart(habit.id, e)}
-                                      onDragEnd={handleHabitDragEnd}
-                                      title="Drag to schedule this habit"
-                                      style={{ display: "flex", alignItems: "center", gap: "6px" }}
-                                    >
-                                      <span className="habit-name-draggable">{habit.name}</span>
-                                      <span style={{
-                                        fontSize: "9px",
-                                        fontWeight: 600,
-                                        padding: "2px 5px",
-                                        borderRadius: "3px",
-                                        background: habit.frequency === "daily" ? "#fef08a" : habit.frequency === "weekly" ? "#bfdbfe" : habit.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
-                                        color: habit.frequency === "daily" ? "#713f12" : habit.frequency === "weekly" ? "#1e3a8a" : habit.frequency === "monthly" ? "#581c87" : "#374151",
-                                        textTransform: "uppercase",
-                                        letterSpacing: "0.5px"
-                                      }}>
-                                        {habit.frequency === "daily" ? "D" : habit.frequency === "weekly" ? "W" : habit.frequency === "monthly" ? "M" : "N"}
-                                      </span>
-                                    </div>
-
-                                    <div className="habit-meta">
-                                      {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
-                                    </div>
-
-                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                                      <span className="pill">
-                                        Done: {getHabitDoneCount(habit.id, habit.frequency)}
-                                        {habit.frequency !== "none" && ` / ${habit.targetPerWeek}`}
-                                      </span>
-                                      {habit.lastDoneAt && (
-                                        <>
-                                          <span style={{ fontSize: "12px", color: "#666" }}>
-                                            Last: {formatTimeSince(habit.lastDoneAt)}
-                                          </span>
-                                          <button
-                                            onClick={() => clearLastDoneAt(habit.id)}
-                                            style={{
-                                              fontSize: "11px",
-                                              padding: "2px 6px",
-                                              background: "#f0f0f0",
-                                              border: "1px solid #ddd",
-                                              borderRadius: "3px",
-                                              cursor: "pointer",
-                                              color: "#666"
-                                            }}
-                                            title="Clear last done timestamp"
-                                          >
-                                            Clear
-                                          </button>
-                                        </>
+                                            </span>
+                                          ) : null;
+                                        })()}
+                                      </div>
+                                      {habit.frequency !== "none" && (
+                                        <div className="habit-progress-row">
+                                          <span className="habit-progress-fraction">{done}/{target}</span>
+                                          <div className="habit-progress-bar-track">
+                                            <div className={`habit-progress-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
+                                          </div>
+                                        </div>
+                                      )}
+                                      {habit.frequency === "none" && (
+                                        <div className="habit-meta">Done: {done}</div>
                                       )}
                                     </div>
                                   </div>
+                                  );
+                                })()}
 
-                                  <div className="habit-actions">
+                                {isExpanded && editingHabitId === habit.id && (
+                                  <>
                                     <button
-                                      style={{ fontSize: 12 }}
-                                      onClick={() => incrementHabit(habit.id)}
+                                      className="habit-delete-x"
+                                      onClick={cancelEditingHabit}
+                                      title="Cancel editing"
                                     >
-                                      Done
+                                      ×
                                     </button>
+
+                                    <div className="add-habit-form" style={{ paddingLeft: "24px", paddingRight: "24px" }}>
+                                      <label className="small-label">Habit name</label>
+                                      <input
+                                        type="text"
+                                        value={editHabitName}
+                                        onChange={(e) => setEditHabitName(e.target.value)}
+                                        placeholder="e.g. Clean kitchen"
+                                      />
+                                      {theme.groups.length > 0 && (
+                                        <>
+                                          <label className="small-label">Group (optional)</label>
+                                          <select
+                                            value={editHabitGroupId}
+                                            onChange={(e) => setEditHabitGroupId(e.target.value)}
+                                          >
+                                            <option value="">None</option>
+                                            {theme.groups.map((group) => (
+                                              <option key={group.id} value={group.id}>
+                                                {group.name}
+                                                {group.groupType === "strength_training" ? " 🏋️" : ""}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </>
+                                      )}
+                                      <label className="small-label">Frequency</label>
+                                      <select
+                                        value={editHabitFrequency}
+                                        onChange={(e) => setEditHabitFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
+                                      >
+                                        <option value="daily">Daily</option>
+                                        <option value="weekly">Weekly</option>
+                                        <option value="monthly">Monthly</option>
+                                        <option value="none">No Target</option>
+                                      </select>
+                                      {editHabitFrequency !== "none" && (
+                                        <>
+                                          <label className="small-label">Target</label>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            max={editHabitFrequency === "daily" ? 7 : editHabitFrequency === "weekly" ? 14 : 28}
+                                            value={editHabitTarget}
+                                            onChange={(e) =>
+                                              setEditHabitTarget(
+                                                parseInt(e.target.value || "0", 10)
+                                              )
+                                            }
+                                          />
+                                        </>
+                                      )}
+                                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            updateHabit(
+                                              habit.id,
+                                              editHabitName,
+                                              editHabitTarget,
+                                              editHabitFrequency,
+                                              editHabitGroupId || undefined
+                                            );
+                                          }}
+                                        >
+                                          Save changes
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="secondary"
+                                          onClick={cancelEditingHabit}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </>
+                                )}
+
+                                {isExpanded && editingHabitId !== habit.id && (
+                                  <>
                                     <button
-                                      style={{ fontSize: 12 }}
-                                      className="secondary"
-                                      onClick={() => startEditingHabit(habit)}
+                                      className="habit-delete-x"
+                                      onClick={() => deleteHabit(habit.id)}
+                                      title="Delete habit"
                                     >
-                                      Edit
+                                      ×
                                     </button>
+
+                                    <div className="habit-main" style={{ paddingLeft: "24px" }}>
+                                      <div
+                                        className="habit-drag-area"
+                                        draggable
+                                        onDragStart={(e) => handleHabitDragStart(habit.id, e)}
+                                        onDragEnd={handleHabitDragEnd}
+                                        title="Drag to schedule this habit"
+                                        style={{ display: "flex", alignItems: "center", gap: "6px" }}
+                                      >
+                                        <span className="habit-name-draggable">{habit.name}</span>
+                                        <span style={{
+                                          fontSize: "9px",
+                                          fontWeight: 600,
+                                          padding: "2px 5px",
+                                          borderRadius: "3px",
+                                          background: habit.frequency === "daily" ? "#fef08a" : habit.frequency === "weekly" ? "#bfdbfe" : habit.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
+                                          color: habit.frequency === "daily" ? "#713f12" : habit.frequency === "weekly" ? "#1e3a8a" : habit.frequency === "monthly" ? "#581c87" : "#374151",
+                                          textTransform: "uppercase",
+                                          letterSpacing: "0.5px"
+                                        }}>
+                                          {habit.frequency === "daily" ? "D" : habit.frequency === "weekly" ? "W" : habit.frequency === "monthly" ? "M" : "N"}
+                                        </span>
+                                      </div>
+
+                                      <div className="habit-meta">
+                                        {habit.frequency === "none" ? "No target" : `Target: ${habit.targetPerWeek} / ${habit.frequency}`}
+                                      </div>
+
+                                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                                        <span className="pill">
+                                          Done: {getHabitDoneCount(habit.id, habit.frequency)}
+                                          {habit.frequency !== "none" && ` / ${habit.targetPerWeek}`}
+                                        </span>
+                                        {habit.lastDoneAt && (
+                                          <>
+                                            <span style={{ fontSize: "12px", color: "#666" }}>
+                                              Last: {formatTimeSince(habit.lastDoneAt)}
+                                            </span>
+                                            <button
+                                              onClick={() => clearLastDoneAt(habit.id)}
+                                              style={{
+                                                fontSize: "11px",
+                                                padding: "2px 6px",
+                                                background: "#f0f0f0",
+                                                border: "1px solid #ddd",
+                                                borderRadius: "3px",
+                                                cursor: "pointer",
+                                                color: "#666"
+                                              }}
+                                              title="Clear last done timestamp"
+                                            >
+                                              Clear
+                                            </button>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="habit-actions">
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        onClick={() => incrementHabit(habit.id)}
+                                      >
+                                        Done
+                                      </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
+                                        onClick={() => startEditingHabit(habit)}
+                                      >
+                                        Edit
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          };
+
+                          return (
+                            <>
+                              {ungroupedHabits.map(h => renderHabitItem(h, false))}
+
+                              {groupsWithHabits.map(group => {
+                                const isGroupExpanded = expandedGroups.has(group.id);
+                                const groupDone = group.habits.reduce((sum, h) => sum + getHabitDoneCount(h.id, h.frequency), 0);
+                                const groupTarget = group.habits.reduce((sum, h) => sum + (h.frequency !== "none" ? h.targetPerWeek : 0), 0);
+                                return (
+                                  <div key={group.id} className="habit-group-section">
+                                    <button
+                                      className="habit-group-header"
+                                      onClick={() => toggleGroupExpanded(group.id)}
+                                    >
+                                      <span className="habit-group-chevron" style={{
+                                        transform: isGroupExpanded ? "rotate(90deg)" : "rotate(0deg)"
+                                      }}>
+                                        ▶
+                                      </span>
+                                      <span className="habit-group-name">{group.name}</span>
+                                      {group.groupType === "strength_training" && (
+                                        <span className="habit-group-type-badge">Strength</span>
+                                      )}
+                                      <span className="habit-group-count">
+                                        {group.habits.length} {group.habits.length === 1 ? "habit" : "habits"}
+                                      </span>
+                                      {groupTarget > 0 && (
+                                        <span className="habit-group-progress">{groupDone}/{groupTarget}</span>
+                                      )}
+                                    </button>
+                                    {isGroupExpanded && (
+                                      <div className="habit-group-children">
+                                        {group.habits.map(h => renderHabitItem(h, false))}
+                                      </div>
+                                    )}
                                   </div>
-                                </>
-                              )}
-                            </div>
+                                );
+                              })}
+
+                              {emptyGroups.map(group => {
+                                const isGroupExpanded = expandedGroups.has(group.id);
+                                return (
+                                  <div key={group.id} className="habit-group-section">
+                                    <button
+                                      className="habit-group-header"
+                                      onClick={() => toggleGroupExpanded(group.id)}
+                                    >
+                                      <span className="habit-group-chevron" style={{
+                                        transform: isGroupExpanded ? "rotate(90deg)" : "rotate(0deg)"
+                                      }}>
+                                        ▶
+                                      </span>
+                                      <span className="habit-group-name">{group.name}</span>
+                                      {group.groupType === "strength_training" && (
+                                        <span className="habit-group-type-badge">Strength</span>
+                                      )}
+                                      <span className="habit-group-count">0 habits</span>
+                                    </button>
+                                    {isGroupExpanded && (
+                                      <div className="habit-group-children habit-group-empty">
+                                        No habits in this group yet
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </>
                           );
-                        })}
+                        })()}
                       </div>
 
                       {addingThemeId === theme.id && (
