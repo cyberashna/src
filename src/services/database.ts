@@ -29,6 +29,7 @@ export type Habit = {
   last_done_at: string | null;
   frequency: "daily" | "weekly" | "monthly" | "none";
   habit_group_id: string | null;
+  parent_habit_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -256,7 +257,8 @@ export const database = {
       name: string,
       targetPerWeek: number,
       frequency: "daily" | "weekly" | "monthly" | "none",
-      habitGroupId?: string
+      habitGroupId?: string,
+      parentHabitId?: string
     ) {
       const { data, error } = await supabase
         .from("habits")
@@ -268,6 +270,7 @@ export const database = {
           frequency,
           done_count: 0,
           habit_group_id: habitGroupId ?? null,
+          parent_habit_id: parentHabitId ?? null,
         })
         .select()
         .single();

@@ -41,6 +41,8 @@ type Habit = {
   lastDoneAt?: string;
   frequency: "daily" | "weekly" | "monthly" | "none";
   habitGroupId?: string;
+  parentHabitId?: string;
+  subtasks: Habit[];
 };
 
 type Theme = {
@@ -191,6 +193,11 @@ const App: React.FC = () => {
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupType, setNewGroupType] = useState<"strength_training" | "custom">("custom");
 
+  const [addingSubtaskForHabitId, setAddingSubtaskForHabitId] = useState<string | null>(null);
+  const [newSubtaskName, setNewSubtaskName] = useState("");
+  const [newSubtaskFrequency, setNewSubtaskFrequency] = useState<"daily" | "weekly" | "monthly" | "none">("weekly");
+  const [newSubtaskTarget, setNewSubtaskTarget] = useState<number>(2);
+
   const [linkConfirmation, setLinkConfirmation] = useState<{
     blockId1: string;
     blockId2: string;
@@ -280,29 +287,37 @@ const App: React.FC = () => {
         database.sessionGroups.getForWeek(user.id, weekStartDate),
       ]);
 
-      const themesWithHabits: Theme[] = themesData.map((theme) => ({
-        id: theme.id,
-        name: theme.name,
-        habits: habitsData
-          .filter((h) => h.theme_id === theme.id)
-          .map((h) => ({
-            id: h.id,
-            name: h.name,
-            targetPerWeek: h.target_per_week,
-            doneCount: h.done_count,
-            lastDoneAt: h.last_done_at ?? undefined,
-            frequency: h.frequency,
-            habitGroupId: h.habit_group_id ?? undefined,
-          })),
-        groups: groupsData
-          .filter((g) => g.theme_id === theme.id)
-          .map((g) => ({
-            id: g.id,
-            name: g.name,
-            groupType: g.group_type,
-            linkBehavior: g.link_behavior,
-          })),
-      }));
+      const mapHabit = (h: DBHabit, allHabits: DBHabit[]): Habit => ({
+        id: h.id,
+        name: h.name,
+        targetPerWeek: h.target_per_week,
+        doneCount: h.done_count,
+        lastDoneAt: h.last_done_at ?? undefined,
+        frequency: h.frequency,
+        habitGroupId: h.habit_group_id ?? undefined,
+        parentHabitId: h.parent_habit_id ?? undefined,
+        subtasks: allHabits
+          .filter((s) => s.parent_habit_id === h.id)
+          .map((s) => mapHabit(s, allHabits)),
+      });
+
+      const themesWithHabits: Theme[] = themesData.map((theme) => {
+        const themeHabits = habitsData.filter((h) => h.theme_id === theme.id);
+        const topLevelHabits = themeHabits.filter((h) => !h.parent_habit_id);
+        return {
+          id: theme.id,
+          name: theme.name,
+          habits: topLevelHabits.map((h) => mapHabit(h, themeHabits)),
+          groups: groupsData
+            .filter((g) => g.theme_id === theme.id)
+            .map((g) => ({
+              id: g.id,
+              name: g.name,
+              groupType: g.group_type,
+              linkBehavior: g.link_behavior,
+            })),
+        };
+      });
 
       setThemes(themesWithHabits);
 
@@ -432,12 +447,10 @@ const App: React.FC = () => {
     showToast(`Applied template with ${templateBlocks.length} blocks`);
   };
 
-  const allHabits = themes.flatMap((theme) =>
-    theme.habits.map((habit) => ({
-      ...habit,
-      themeName: theme.name,
-    }))
-  );
+  const flattenHabits = (habits: Habit[], themeName: string): (Habit & { themeName: string })[] =>
+    habits.flatMap((h) => [{ ...h, themeName }, ...flattenHabits(h.subtasks, themeName)]);
+
+  const allHabits = themes.flatMap((theme) => flattenHabits(theme.habits, theme.name));
 
   const refreshSessionGroups = async () => {
     if (!user) return;
@@ -502,6 +515,18 @@ const App: React.FC = () => {
     setBlocks([]);
   };
 
+  const updateHabitInTree = (habits: Habit[], habitId: string, updater: (h: Habit) => Habit): Habit[] =>
+    habits.map((h) =>
+      h.id === habitId
+        ? updater(h)
+        : { ...h, subtasks: updateHabitInTree(h.subtasks, habitId, updater) }
+    );
+
+  const removeHabitFromTree = (habits: Habit[], habitId: string): Habit[] =>
+    habits
+      .filter((h) => h.id !== habitId)
+      .map((h) => ({ ...h, subtasks: removeHabitFromTree(h.subtasks, habitId) }));
+
   const addHabitToTheme = async (
     themeId: string,
     name: string,
@@ -538,6 +563,7 @@ const App: React.FC = () => {
         doneCount: habitData.done_count,
         frequency: habitData.frequency,
         habitGroupId: habitData.habit_group_id ?? undefined,
+        subtasks: [],
       };
 
       setThemes((prevThemes) =>
@@ -584,17 +610,13 @@ const App: React.FC = () => {
       setThemes((prevThemes) =>
         prevThemes.map((theme) => ({
           ...theme,
-          habits: theme.habits.map((h) =>
-            h.id === habitId
-              ? {
-                  ...h,
-                  name: trimmed,
-                  targetPerWeek,
-                  frequency,
-                  habitGroupId: habitGroupId || undefined,
-                }
-              : h
-          ),
+          habits: updateHabitInTree(theme.habits, habitId, (h) => ({
+            ...h,
+            name: trimmed,
+            targetPerWeek,
+            frequency,
+            habitGroupId: habitGroupId || undefined,
+          })),
         }))
       );
 
@@ -606,6 +628,71 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error updating habit:", error);
       showToast("Failed to update habit", "error");
+    }
+  };
+
+  const addSubtask = async (
+    parentHabit: Habit,
+    themeId: string,
+    name: string,
+    targetPerWeek: number,
+    frequency: "daily" | "weekly" | "monthly" | "none"
+  ) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      showToast("Enter a subtask name.", "error");
+      return;
+    }
+    if (frequency !== "none" && (!targetPerWeek || targetPerWeek <= 0)) {
+      showToast("Enter a valid target.", "error");
+      return;
+    }
+    if (!user) return;
+
+    try {
+      const habitData = await database.habits.create(
+        user.id,
+        themeId,
+        trimmed,
+        targetPerWeek,
+        frequency,
+        parentHabit.habitGroupId,
+        parentHabit.id
+      );
+
+      const newSubtask: Habit = {
+        id: habitData.id,
+        name: habitData.name,
+        targetPerWeek: habitData.target_per_week,
+        doneCount: habitData.done_count,
+        frequency: habitData.frequency,
+        habitGroupId: habitData.habit_group_id ?? undefined,
+        parentHabitId: habitData.parent_habit_id ?? undefined,
+        subtasks: [],
+      };
+
+      setThemes((prevThemes) =>
+        prevThemes.map((theme) =>
+          theme.id === themeId
+            ? {
+                ...theme,
+                habits: updateHabitInTree(theme.habits, parentHabit.id, (h) => ({
+                  ...h,
+                  subtasks: [...h.subtasks, newSubtask],
+                })),
+              }
+            : theme
+        )
+      );
+
+      setAddingSubtaskForHabitId(null);
+      setNewSubtaskName("");
+      setNewSubtaskFrequency("weekly");
+      setNewSubtaskTarget(2);
+      showToast("Subtask added", "success");
+    } catch (error) {
+      console.error("Error creating subtask:", error);
+      showToast("Failed to create subtask", "error");
     }
   };
 
@@ -689,15 +776,15 @@ const App: React.FC = () => {
       setThemes((prevThemes) =>
         prevThemes.map((theme) => ({
           ...theme,
-          habits: theme.habits.map((h) =>
-            h.id === habitId
-              ? { ...h, doneCount: newCount, lastDoneAt: now }
-              : h
-          ),
+          habits: updateHabitInTree(theme.habits, habitId, (h) => ({
+            ...h,
+            doneCount: newCount,
+            lastDoneAt: now,
+          })),
         }))
       );
 
-      const theme = themes.find((t) => t.habits.some((h) => h.id === habitId));
+      const theme = themes.find((t) => flattenHabits(t.habits, t.name).some((h) => h.id === habitId));
       if (theme) {
         const goals = await database.themeGoals.getByTheme(theme.id);
         const completedDate = now.split('T')[0];
@@ -729,9 +816,10 @@ const App: React.FC = () => {
       setThemes((prevThemes) =>
         prevThemes.map((theme) => ({
           ...theme,
-          habits: theme.habits.map((h) =>
-            h.id === habitId ? { ...h, lastDoneAt: undefined } : h
-          ),
+          habits: updateHabitInTree(theme.habits, habitId, (h) => ({
+            ...h,
+            lastDoneAt: undefined,
+          })),
         }))
       );
     } catch (error) {
@@ -746,7 +834,7 @@ const App: React.FC = () => {
         setThemes((prevThemes) =>
           prevThemes.map((theme) => ({
             ...theme,
-            habits: theme.habits.filter((h) => h.id !== habitId),
+            habits: removeHabitFromTree(theme.habits, habitId),
           }))
         );
         setBlocks((prevBlocks) =>
@@ -1062,6 +1150,7 @@ const App: React.FC = () => {
         doneCount: habitData.done_count,
         frequency: habitData.frequency,
         habitGroupId: habitData.habit_group_id ?? undefined,
+        subtasks: [],
       };
 
       setThemes((prev) =>
@@ -1395,15 +1484,15 @@ const App: React.FC = () => {
         setThemes((prevThemes) =>
           prevThemes.map((theme) => ({
             ...theme,
-            habits: theme.habits.map((h) =>
-              h.id === block.habitId
-                ? { ...h, doneCount: nextCount, lastDoneAt: now }
-                : h
-            ),
+            habits: updateHabitInTree(theme.habits, block.habitId!, (h) => ({
+              ...h,
+              doneCount: nextCount,
+              lastDoneAt: now,
+            })),
           }))
         );
 
-        const theme = themes.find((t) => t.habits.some((h) => h.id === block.habitId));
+        const theme = themes.find((t) => flattenHabits(t.habits, t.name).some((h) => h.id === block.habitId));
         if (theme && user) {
           const goals = await database.themeGoals.getByTheme(theme.id);
           const completedDate = now.split('T')[0];
@@ -1429,9 +1518,10 @@ const App: React.FC = () => {
         setThemes((prevThemes) =>
           prevThemes.map((theme) => ({
             ...theme,
-            habits: theme.habits.map((h) =>
-              h.id === block.habitId ? { ...h, doneCount: nextCount } : h
-            ),
+            habits: updateHabitInTree(theme.habits, block.habitId!, (h) => ({
+              ...h,
+              doneCount: nextCount,
+            })),
           }))
         );
       }
@@ -2351,7 +2441,142 @@ const App: React.FC = () => {
                                       >
                                         Edit
                                       </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
+                                        onClick={() => {
+                                          setAddingSubtaskForHabitId(habit.id);
+                                          setNewSubtaskName("");
+                                          setNewSubtaskFrequency("weekly");
+                                          setNewSubtaskTarget(2);
+                                        }}
+                                        title="Add a subtask"
+                                      >
+                                        + Subtask
+                                      </button>
                                     </div>
+
+                                    {habit.subtasks.length > 0 && (
+                                      <div className="subtask-list">
+                                        <div className="subtask-list-label">Subtasks</div>
+                                        {habit.subtasks.map((subtask) => {
+                                          const done = getHabitDoneCount(subtask.id, subtask.frequency);
+                                          const target = subtask.targetPerWeek;
+                                          const pct = subtask.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
+                                          const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
+                                          return (
+                                            <div key={subtask.id} className="subtask-item">
+                                              <div className="subtask-item-info">
+                                                <span
+                                                  className="subtask-drag-area"
+                                                  draggable
+                                                  onDragStart={(e) => handleHabitDragStart(subtask.id, e)}
+                                                  onDragEnd={handleHabitDragEnd}
+                                                  title="Drag to schedule this subtask"
+                                                >
+                                                  {subtask.name}
+                                                </span>
+                                                <span className="subtask-freq-badge" style={{
+                                                  background: subtask.frequency === "daily" ? "#fef08a" : subtask.frequency === "weekly" ? "#bfdbfe" : subtask.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
+                                                  color: subtask.frequency === "daily" ? "#713f12" : subtask.frequency === "weekly" ? "#1e3a8a" : subtask.frequency === "monthly" ? "#581c87" : "#374151",
+                                                }}>
+                                                  {subtask.frequency === "daily" ? "D" : subtask.frequency === "weekly" ? "W" : subtask.frequency === "monthly" ? "M" : "N"}
+                                                </span>
+                                              </div>
+                                              {subtask.frequency !== "none" && (
+                                                <div className="subtask-progress">
+                                                  <span className="subtask-fraction">{done}/{target}</span>
+                                                  <div className="subtask-bar-track">
+                                                    <div className={`subtask-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
+                                                  </div>
+                                                </div>
+                                              )}
+                                              <div className="subtask-actions">
+                                                <button
+                                                  className="subtask-done-btn"
+                                                  onClick={() => incrementHabit(subtask.id)}
+                                                  title="Mark done"
+                                                >
+                                                  Done
+                                                </button>
+                                                <button
+                                                  className="subtask-delete-btn"
+                                                  onClick={() => deleteHabit(subtask.id)}
+                                                  title="Delete subtask"
+                                                >
+                                                  ×
+                                                </button>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+
+                                    {addingSubtaskForHabitId === habit.id && (
+                                      <div className="subtask-add-form">
+                                        <div className="subtask-list-label">New subtask</div>
+                                        <input
+                                          type="text"
+                                          value={newSubtaskName}
+                                          onChange={(e) => setNewSubtaskName(e.target.value)}
+                                          placeholder="e.g. Warm-up squats"
+                                          className="subtask-input"
+                                          autoFocus
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                              const themeId = themes.find((t) =>
+                                                flattenHabits(t.habits, t.name).some((h) => h.id === habit.id)
+                                              )?.id;
+                                              if (themeId) addSubtask(habit, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency);
+                                            }
+                                            if (e.key === "Escape") setAddingSubtaskForHabitId(null);
+                                          }}
+                                        />
+                                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                          <select
+                                            value={newSubtaskFrequency}
+                                            onChange={(e) => setNewSubtaskFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
+                                            style={{ fontSize: 11, padding: "2px 4px" }}
+                                          >
+                                            <option value="daily">Daily</option>
+                                            <option value="weekly">Weekly</option>
+                                            <option value="monthly">Monthly</option>
+                                            <option value="none">No Target</option>
+                                          </select>
+                                          {newSubtaskFrequency !== "none" && (
+                                            <input
+                                              type="number"
+                                              min={1}
+                                              max={newSubtaskFrequency === "daily" ? 7 : newSubtaskFrequency === "weekly" ? 14 : 28}
+                                              value={newSubtaskTarget}
+                                              onChange={(e) => setNewSubtaskTarget(parseInt(e.target.value || "1", 10))}
+                                              style={{ fontSize: 11, padding: "2px 4px", width: 48 }}
+                                            />
+                                          )}
+                                          <button
+                                            type="button"
+                                            style={{ fontSize: 11 }}
+                                            onClick={() => {
+                                              const themeId = themes.find((t) =>
+                                                flattenHabits(t.habits, t.name).some((h) => h.id === habit.id)
+                                              )?.id;
+                                              if (themeId) addSubtask(habit, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency);
+                                            }}
+                                          >
+                                            Save
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="secondary"
+                                            style={{ fontSize: 11 }}
+                                            onClick={() => setAddingSubtaskForHabitId(null)}
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
                                   </>
                                 )}
                               </div>
