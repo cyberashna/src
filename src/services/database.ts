@@ -125,6 +125,26 @@ export type WorkoutHistoryEntry = {
   created_at: string;
 };
 
+export type BlockHabitCredit = {
+  id: string;
+  block_id: string;
+  habit_id: string;
+  user_id: string;
+  created_at: string;
+};
+
+export type BlockActivityLog = {
+  id: string;
+  block_id: string;
+  habit_id: string;
+  user_id: string;
+  week_start_date: string | null;
+  day_index: number | null;
+  time_index: number | null;
+  completed_at: string;
+  created_at: string;
+};
+
 export const database = {
   habitGroups: {
     async getAll(userId: string) {
@@ -737,6 +757,145 @@ export const database = {
         .eq("id", id);
 
       if (error) throw error;
+    },
+  },
+
+  blockHabitCredits: {
+    async getByBlock(blockId: string) {
+      const { data, error } = await supabase
+        .from("block_habit_credits")
+        .select("*")
+        .eq("block_id", blockId);
+
+      if (error) throw error;
+      return data as BlockHabitCredit[];
+    },
+
+    async getByBlocks(blockIds: string[]) {
+      if (blockIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("block_habit_credits")
+        .select("*")
+        .in("block_id", blockIds);
+
+      if (error) throw error;
+      return data as BlockHabitCredit[];
+    },
+
+    async create(userId: string, blockId: string, habitId: string) {
+      const { data, error } = await supabase
+        .from("block_habit_credits")
+        .insert({ user_id: userId, block_id: blockId, habit_id: habitId })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as BlockHabitCredit;
+    },
+
+    async delete(blockId: string, habitId: string) {
+      const { error } = await supabase
+        .from("block_habit_credits")
+        .delete()
+        .eq("block_id", blockId)
+        .eq("habit_id", habitId);
+
+      if (error) throw error;
+    },
+
+    async deleteAllForBlock(blockId: string) {
+      const { error } = await supabase
+        .from("block_habit_credits")
+        .delete()
+        .eq("block_id", blockId);
+
+      if (error) throw error;
+    },
+  },
+
+  blockActivityLogs: {
+    async getByUser(userId: string, weekStartDate?: string) {
+      let query = supabase
+        .from("block_activity_logs")
+        .select("*")
+        .eq("user_id", userId)
+        .order("completed_at", { ascending: false });
+
+      if (weekStartDate) {
+        query = query.eq("week_start_date", weekStartDate);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      return data as BlockActivityLog[];
+    },
+
+    async getByHabit(userId: string, habitId: string) {
+      const { data, error } = await supabase
+        .from("block_activity_logs")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("habit_id", habitId)
+        .order("completed_at", { ascending: false });
+
+      if (error) throw error;
+      return data as BlockActivityLog[];
+    },
+
+    async create(
+      userId: string,
+      blockId: string,
+      habitId: string,
+      weekStartDate: string | null,
+      dayIndex: number | null,
+      timeIndex: number | null
+    ) {
+      const { data, error } = await supabase
+        .from("block_activity_logs")
+        .insert({
+          user_id: userId,
+          block_id: blockId,
+          habit_id: habitId,
+          week_start_date: weekStartDate,
+          day_index: dayIndex,
+          time_index: timeIndex,
+          completed_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as BlockActivityLog;
+    },
+
+    async deleteByBlock(blockId: string) {
+      const { error } = await supabase
+        .from("block_activity_logs")
+        .delete()
+        .eq("block_id", blockId);
+
+      if (error) throw error;
+    },
+
+    async getHabitCompletionsByDayOfWeek(userId: string) {
+      const { data, error } = await supabase
+        .from("block_activity_logs")
+        .select("habit_id, day_index, completed_at")
+        .eq("user_id", userId);
+
+      if (error) throw error;
+      return data as Pick<BlockActivityLog, "habit_id" | "day_index" | "completed_at">[];
+    },
+
+    async getHabitCompletionsByTimeOfDay(userId: string) {
+      const { data, error } = await supabase
+        .from("block_activity_logs")
+        .select("habit_id, time_index, completed_at")
+        .eq("user_id", userId);
+
+      if (error) throw error;
+      return data as Pick<BlockActivityLog, "habit_id" | "time_index" | "completed_at">[];
     },
   },
 };

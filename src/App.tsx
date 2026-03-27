@@ -25,6 +25,8 @@ import DailyEssentials from "./components/DailyEssentials";
 import MoodTracker from "./components/MoodTracker";
 import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
+import BlockCreditPopover from "./components/BlockCreditPopover";
+import AnalyticsDashboard from "./components/AnalyticsDashboard";
 
 type HabitGroup = {
   id: string;
@@ -78,6 +80,7 @@ export type Block = {
   sessionGroupId?: string;
   sessionGroup?: SessionGroup;
   themeId?: string;
+  creditedHabitIds?: string[];
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -238,6 +241,8 @@ const App: React.FC = () => {
   const [ghostBlocks, setGhostBlocks] = useState<GhostBlockType[]>([]);
   const [showQuickStartModal, setShowQuickStartModal] = useState(false);
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
+  const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
+  const [showAnalytics, setShowAnalytics] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -328,9 +333,10 @@ const App: React.FC = () => {
       });
 
       const blockIds = blocksData.map((b) => b.id);
-      const workoutDataArray = blockIds.length > 0
-        ? await database.workoutData.getByBlockIds(blockIds)
-        : [];
+      const [workoutDataArray, blockCreditsArray] = await Promise.all([
+        blockIds.length > 0 ? database.workoutData.getByBlockIds(blockIds) : Promise.resolve([]),
+        blockIds.length > 0 ? database.blockHabitCredits.getByBlocks(blockIds) : Promise.resolve([]),
+      ]);
 
       const workoutDataMap = new Map(
         workoutDataArray.map((wd) => [
@@ -343,6 +349,13 @@ const App: React.FC = () => {
           },
         ])
       );
+
+      const creditsByBlock = new Map<string, string[]>();
+      blockCreditsArray.forEach((c) => {
+        const existing = creditsByBlock.get(c.block_id) ?? [];
+        existing.push(c.habit_id);
+        creditsByBlock.set(c.block_id, existing);
+      });
 
       const sessionGroupMap = new Map(sessionGroupsData.map((sg) => [sg.id, sg]));
 
@@ -360,6 +373,7 @@ const App: React.FC = () => {
         sessionGroupId: b.session_group_id ?? undefined,
         sessionGroup: b.session_group_id ? sessionGroupMap.get(b.session_group_id) : undefined,
         themeId: b.theme_id ?? undefined,
+        creditedHabitIds: creditsByBlock.get(b.id) ?? [],
         location:
           b.location_type === "slot" && b.day_index !== null && b.time_index !== null
             ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
@@ -1045,6 +1059,13 @@ const App: React.FC = () => {
         return;
       }
 
+      const habitTheme = themes.find((t) =>
+        t.habits.some((h) => {
+          const flat = flattenHabits([h], t.name);
+          return flat.some((fh) => fh.id === habitId);
+        })
+      );
+
       const blockData = await database.blocks.create(user.id, {
         label: `Habit: ${habit.name}`,
         is_habit_block: true,
@@ -1061,6 +1082,7 @@ const App: React.FC = () => {
         session_group_id: null,
         is_daily_template: false,
         daily_template_id: null,
+        theme_id: habitTheme?.id ?? null,
       });
 
       const newBlock: Block = {
@@ -1074,6 +1096,8 @@ const App: React.FC = () => {
         linkedBlockId: blockData.linked_block_id ?? undefined,
         isLinkedGroup: blockData.is_linked_group,
         workoutSubmitted: blockData.workout_submitted,
+        themeId: habitTheme?.id,
+        creditedHabitIds: [],
       };
 
       console.log("New block created:", newBlock);
@@ -1459,71 +1483,96 @@ const App: React.FC = () => {
     }
   };
 
+  const getHabitAncestorIds = (habitId: string): string[] => {
+    const ancestors: string[] = [];
+    let current = allHabits.find((h) => h.id === habitId);
+    while (current?.parentHabitId) {
+      ancestors.push(current.parentHabitId);
+      current = allHabits.find((h) => h.id === current!.parentHabitId);
+    }
+    return ancestors;
+  };
+
   const toggleBlockCompletion = async (blockId: string) => {
     const block = blocks.find((b) => b.id === blockId);
     if (!block || !block.isHabitBlock || !block.habitId) return;
 
     const newCompleted = !block.completed;
+
+    const primaryHabitId = block.habitId;
+    const crossCreditIds = block.creditedHabitIds ?? [];
+
+    const directHabitIds = Array.from(new Set([primaryHabitId, ...crossCreditIds]));
+    const allAffectedHabitIds = Array.from(new Set([
+      ...directHabitIds,
+      ...directHabitIds.flatMap((hId) => getHabitAncestorIds(hId)),
+    ]));
+
     const delta = newCompleted ? 1 : -1;
-
-    const habit = allHabits.find((h) => h.id === block.habitId);
-    if (!habit) return;
-
-    const nextCount = Math.max(0, habit.doneCount + delta);
 
     try {
       await database.blocks.update(blockId, { completed: newCompleted });
 
-      if (newCompleted) {
-        const now = new Date().toISOString();
-        await database.habits.update(block.habitId, {
-          done_count: nextCount,
-          last_done_at: now,
-        });
+      const now = new Date().toISOString();
+
+      for (const habitId of allAffectedHabitIds) {
+        const habit = allHabits.find((h) => h.id === habitId);
+        if (!habit) continue;
+        const nextCount = Math.max(0, habit.doneCount + delta);
+
+        if (newCompleted) {
+          await database.habits.update(habitId, {
+            done_count: nextCount,
+            last_done_at: now,
+          });
+        } else {
+          await database.habits.update(habitId, { done_count: nextCount });
+        }
 
         setThemes((prevThemes) =>
           prevThemes.map((theme) => ({
             ...theme,
-            habits: updateHabitInTree(theme.habits, block.habitId!, (h) => ({
+            habits: updateHabitInTree(theme.habits, habitId, (h) => ({
               ...h,
               doneCount: nextCount,
-              lastDoneAt: now,
+              ...(newCompleted ? { lastDoneAt: now } : {}),
             })),
           }))
         );
+      }
 
-        const theme = themes.find((t) => flattenHabits(t.habits, t.name).some((h) => h.id === block.habitId));
-        if (theme && user) {
+      if (newCompleted && user) {
+        const weekStartDate = block.location.type === "slot"
+          ? getWeekStartDateString(weekOffset)
+          : null;
+        const dayIndex = block.location.type === "slot" ? block.location.dayIndex : null;
+        const timeIndex = block.location.type === "slot" ? block.location.timeIndex : null;
+
+        for (const habitId of directHabitIds) {
+          await database.blockActivityLogs.create(
+            user.id,
+            blockId,
+            habitId,
+            weekStartDate,
+            dayIndex,
+            timeIndex
+          );
+        }
+
+        const theme = themes.find((t) => flattenHabits(t.habits, t.name).some((h) => h.id === primaryHabitId));
+        if (theme) {
           const goals = await database.themeGoals.getByTheme(theme.id);
           const completedDate = now.split('T')[0];
-
           for (const goal of goals) {
             try {
-              await database.themeGoals.recordCompletion(
-                user.id,
-                goal.id,
-                block.habitId!,
-                completedDate
-              );
+              await database.themeGoals.recordCompletion(user.id, goal.id, primaryHabitId, completedDate);
             } catch (error) {
               console.error("Error recording goal completion:", error);
             }
           }
         }
-      } else {
-        await database.habits.update(block.habitId, {
-          done_count: nextCount,
-        });
-
-        setThemes((prevThemes) =>
-          prevThemes.map((theme) => ({
-            ...theme,
-            habits: updateHabitInTree(theme.habits, block.habitId!, (h) => ({
-              ...h,
-              doneCount: nextCount,
-            })),
-          }))
-        );
+      } else if (!newCompleted) {
+        await database.blockActivityLogs.deleteByBlock(blockId);
       }
 
       setBlocks((prev) =>
@@ -1533,6 +1582,31 @@ const App: React.FC = () => {
       );
     } catch (error) {
       console.error("Error toggling completion:", error);
+    }
+  };
+
+  const saveBlockCredits = async (blockId: string, creditedHabitIds: string[]) => {
+    if (!user) return;
+    const block = blocks.find((b) => b.id === blockId);
+    if (!block) return;
+
+    try {
+      await database.blockHabitCredits.deleteAllForBlock(blockId);
+
+      for (const habitId of creditedHabitIds) {
+        await database.blockHabitCredits.create(user.id, blockId, habitId);
+      }
+
+      setBlocks((prev) =>
+        prev.map((b) => (b.id === blockId ? { ...b, creditedHabitIds } : b))
+      );
+
+      if (block.completed && creditedHabitIds.length > 0) {
+        showToast("Credits updated. Re-check the block to apply changes.", "info");
+      }
+    } catch (error) {
+      console.error("Error saving block credits:", error);
+      showToast("Failed to save credits", "error");
     }
   };
 
@@ -3036,6 +3110,15 @@ const App: React.FC = () => {
                 >
                   Quick Start
                 </button>
+                <button
+                  type="button"
+                  className="copy-week-btn"
+                  onClick={() => setShowAnalytics(true)}
+                  title="View habit analytics"
+                  style={{ background: '#0f172a', color: 'white', border: 'none' }}
+                >
+                  Analytics
+                </button>
               </div>
             </div>
 
@@ -3205,6 +3288,46 @@ const App: React.FC = () => {
                                         {block.completed && <span className="block-done-check"> &#10003;</span>}
                                         {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
                                       </span>
+                                      {block.themeId && (
+                                        <span
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setCreditPopoverBlockId(
+                                              creditPopoverBlockId === block.id ? null : block.id
+                                            );
+                                          }}
+                                          title="Also counts for..."
+                                          style={{
+                                            marginLeft: 4,
+                                            fontSize: 10,
+                                            background: (block.creditedHabitIds?.length ?? 0) > 0 ? "#2563eb" : "#e5e7eb",
+                                            color: (block.creditedHabitIds?.length ?? 0) > 0 ? "#fff" : "#555",
+                                            borderRadius: 999,
+                                            padding: "1px 5px",
+                                            cursor: "pointer",
+                                            fontWeight: 600,
+                                            transition: "all 0.12s",
+                                            whiteSpace: "nowrap",
+                                          }}
+                                        >
+                                          {(block.creditedHabitIds?.length ?? 0) > 0
+                                            ? `+${block.creditedHabitIds!.length}`
+                                            : "+"}
+                                        </span>
+                                      )}
+                                      {creditPopoverBlockId === block.id && (
+                                        <BlockCreditPopover
+                                          blockId={block.id}
+                                          primaryHabitId={block.habitId!}
+                                          themeId={block.themeId}
+                                          themes={themes}
+                                          creditedHabitIds={block.creditedHabitIds ?? []}
+                                          completed={!!block.completed}
+                                          onSave={saveBlockCredits}
+                                          onClose={() => setCreditPopoverBlockId(null)}
+                                        />
+                                      )}
                                     </label>
                                   ) : editingBlockId === block.id ? (
                                     <input
@@ -3425,6 +3548,14 @@ const App: React.FC = () => {
             .map(b => ({ id: b.id, label: b.label }))}
           onClose={() => setShowQuickStartModal(false)}
           onApplyTemplate={handleApplyTemplate}
+        />
+      )}
+
+      {showAnalytics && (
+        <AnalyticsDashboard
+          userId={user.id}
+          themes={themes}
+          onClose={() => setShowAnalytics(false)}
         />
       )}
     </>
