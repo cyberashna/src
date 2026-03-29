@@ -27,6 +27,7 @@ import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
 import BlockCreditPopover from "./components/BlockCreditPopover";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
+import TemplateStickyNote from "./components/TemplateStickyNote";
 
 type HabitGroup = {
   id: string;
@@ -243,6 +244,7 @@ const App: React.FC = () => {
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [showTemplateNote, setShowTemplateNote] = useState(true);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -3119,6 +3121,15 @@ const App: React.FC = () => {
                 >
                   Analytics
                 </button>
+                <button
+                  type="button"
+                  className="copy-week-btn"
+                  onClick={() => setShowTemplateNote((v) => !v)}
+                  title="Toggle planning templates"
+                  style={{ background: showTemplateNote ? '#0ea5e9' : undefined, color: showTemplateNote ? 'white' : undefined, border: showTemplateNote ? 'none' : undefined }}
+                >
+                  Checklist
+                </button>
               </div>
             </div>
 
@@ -3556,6 +3567,15 @@ const App: React.FC = () => {
           userId={user.id}
           themes={themes}
           onClose={() => setShowAnalytics(false)}
+        />
+      )}
+
+      {showTemplateNote && user && (
+        <TemplateStickyNote
+          userId={user.id}
+          weekStartDate={getWeekStartDateString(weekOffset)}
+          todayDate={new Date().toISOString().split('T')[0]}
+          onClose={() => setShowTemplateNote(false)}
         />
       )}
     </>

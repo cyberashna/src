@@ -1,5 +1,33 @@
 import { supabase } from "../lib/supabase";
 
+export type PlanningTemplate = {
+  id: string;
+  user_id: string;
+  name: string;
+  icon: string;
+  type: "weekly" | "daily" | "custom";
+  sort_order: number;
+  is_default: boolean;
+  created_at: string;
+};
+
+export type TemplateChecklistItem = {
+  id: string;
+  template_id: string;
+  user_id: string;
+  label: string;
+  sort_order: number;
+  created_at: string;
+};
+
+export type TemplateCompletion = {
+  id: string;
+  user_id: string;
+  item_id: string;
+  completed_date: string;
+  created_at: string;
+};
+
 export type Theme = {
   id: string;
   user_id: string;
@@ -896,6 +924,151 @@ export const database = {
 
       if (error) throw error;
       return data as Pick<BlockActivityLog, "habit_id" | "time_index" | "completed_at">[];
+    },
+  },
+
+  planningTemplates: {
+    async getAll(userId: string) {
+      const { data, error } = await supabase
+        .from("planning_templates")
+        .select("*")
+        .eq("user_id", userId)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+      return data as PlanningTemplate[];
+    },
+
+    async create(userId: string, name: string, icon: string, type: PlanningTemplate["type"], sortOrder: number, isDefault = false) {
+      const { data, error } = await supabase
+        .from("planning_templates")
+        .insert({ user_id: userId, name, icon, type, sort_order: sortOrder, is_default: isDefault })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as PlanningTemplate;
+    },
+
+    async update(id: string, updates: Partial<Pick<PlanningTemplate, "name" | "icon" | "sort_order">>) {
+      const { data, error } = await supabase
+        .from("planning_templates")
+        .update(updates)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as PlanningTemplate;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("planning_templates")
+        .delete()
+        .eq("id", id)
+        .eq("is_default", false);
+
+      if (error) throw error;
+    },
+  },
+
+  templateChecklistItems: {
+    async getByTemplate(templateId: string) {
+      const { data, error } = await supabase
+        .from("template_checklist_items")
+        .select("*")
+        .eq("template_id", templateId)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+      return data as TemplateChecklistItem[];
+    },
+
+    async create(userId: string, templateId: string, label: string, sortOrder: number) {
+      const { data, error } = await supabase
+        .from("template_checklist_items")
+        .insert({ user_id: userId, template_id: templateId, label, sort_order: sortOrder })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as TemplateChecklistItem;
+    },
+
+    async update(id: string, updates: Partial<Pick<TemplateChecklistItem, "label" | "sort_order">>) {
+      const { data, error } = await supabase
+        .from("template_checklist_items")
+        .update(updates)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as TemplateChecklistItem;
+    },
+
+    async reorder(items: { id: string; sort_order: number }[]) {
+      await Promise.all(
+        items.map(({ id, sort_order }) =>
+          supabase.from("template_checklist_items").update({ sort_order }).eq("id", id)
+        )
+      );
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("template_checklist_items")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+  },
+
+  templateCompletions: {
+    async getByDate(userId: string, completedDate: string) {
+      const { data, error } = await supabase
+        .from("template_completions")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("completed_date", completedDate);
+
+      if (error) throw error;
+      return data as TemplateCompletion[];
+    },
+
+    async getByDates(userId: string, dates: string[]) {
+      const { data, error } = await supabase
+        .from("template_completions")
+        .select("*")
+        .eq("user_id", userId)
+        .in("completed_date", dates);
+
+      if (error) throw error;
+      return data as TemplateCompletion[];
+    },
+
+    async check(userId: string, itemId: string, completedDate: string) {
+      const { data, error } = await supabase
+        .from("template_completions")
+        .upsert({ user_id: userId, item_id: itemId, completed_date: completedDate }, { onConflict: "item_id,completed_date" })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as TemplateCompletion;
+    },
+
+    async uncheck(userId: string, itemId: string, completedDate: string) {
+      const { error } = await supabase
+        .from("template_completions")
+        .delete()
+        .eq("user_id", userId)
+        .eq("item_id", itemId)
+        .eq("completed_date", completedDate);
+
+      if (error) throw error;
     },
   },
 };
