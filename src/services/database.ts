@@ -942,7 +942,10 @@ export const database = {
     async create(userId: string, name: string, icon: string, type: PlanningTemplate["type"], sortOrder: number, isDefault = false) {
       const { data, error } = await supabase
         .from("planning_templates")
-        .insert({ user_id: userId, name, icon, type, sort_order: sortOrder, is_default: isDefault })
+        .upsert(
+          { user_id: userId, name, icon, type, sort_order: sortOrder, is_default: isDefault },
+          { onConflict: "user_id,name", ignoreDuplicates: false }
+        )
         .select()
         .single();
 
