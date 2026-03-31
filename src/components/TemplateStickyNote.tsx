@@ -47,7 +47,7 @@ export default function TemplateStickyNote({ userId, weekStartDate, todayDate, o
   const [newTemplateIcon, setNewTemplateIcon] = useState("");
   const [dragItemId, setDragItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
-  const [seeded, setSeeded] = useState(false);
+  const seedingRef = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const newItemInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,6 +95,13 @@ export default function TemplateStickyNote({ userId, weekStartDate, todayDate, o
 
   const seedDefaults = useCallback(async () => {
     try {
+      const existing = await db.planningTemplates.getAll(userId);
+      if (existing.length > 0) {
+        setActiveTemplateId(existing[0].id);
+        await loadItems(existing[0].id);
+        return;
+      }
+
       const weeklyTpl = await db.planningTemplates.create(userId, "Weekly", "📅", "weekly", 0, true);
       const dailyTpl = await db.planningTemplates.create(userId, "Daily", "☀️", "daily", 1, true);
 
@@ -120,8 +127,8 @@ export default function TemplateStickyNote({ userId, weekStartDate, todayDate, o
   }, [userId, loadTemplates, loadItems]);
 
   useEffect(() => {
-    if (seeded) return;
-    setSeeded(true);
+    if (seedingRef.current) return;
+    seedingRef.current = true;
 
     (async () => {
       const data = await loadTemplates();
@@ -133,7 +140,7 @@ export default function TemplateStickyNote({ userId, weekStartDate, todayDate, o
       }
       await loadCompletions();
     })();
-  }, [seeded, loadTemplates, loadItems, loadCompletions, seedDefaults]);
+  }, [loadTemplates, loadItems, loadCompletions, seedDefaults]);
 
   useEffect(() => {
     if (activeTemplateId && !itemsByTemplate[activeTemplateId]) {
