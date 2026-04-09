@@ -12,7 +12,8 @@ import { ToastContainer, createToastId } from "./components/Toast";
 import type { ToastItem } from "./components/Toast";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 
-import { database, SessionGroup, Habit as DBHabit, Block as DBBlock } from "./services/database";
+import { database, SessionGroup, Habit as DBHabit, Block as DBBlock, Meal } from "./services/database";
+import MealForm from "./components/MealForm";
 import { updateSessionGroups, getSessionDisplayName } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
 import PriorityPickerPanel from "./components/PriorityPickerPanel";
@@ -51,8 +52,10 @@ type Habit = {
 type Theme = {
   id: string;
   name: string;
+  themeType: "habit" | "meals";
   habits: Habit[];
   groups: HabitGroup[];
+  meals: Meal[];
 };
 
 type BlockLocation =
@@ -82,6 +85,8 @@ export type Block = {
   sessionGroup?: SessionGroup;
   themeId?: string;
   creditedHabitIds?: string[];
+  mealId?: string;
+  mealType?: "breakfast" | "lunch" | "dinner";
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -211,6 +216,9 @@ const App: React.FC = () => {
   const [sessionRenameValue, setSessionRenameValue] = useState("");
 
   const [newThemeName, setNewThemeName] = useState("");
+  const [newThemeType, setNewThemeType] = useState<"habit" | "meals">("habit");
+  const [addingMealForThemeId, setAddingMealForThemeId] = useState<string | null>(null);
+  const [mealPopoverBlockId, setMealPopoverBlockId] = useState<string | null>(null);
 
   const [blockLabel, setBlockLabel] = useState("");
   const [blockHashtag, setBlockHashtag] = useState("");
@@ -286,12 +294,13 @@ const App: React.FC = () => {
     setDataLoading(true);
     try {
       const weekStartDate = getWeekStartDateString(weekOffset);
-      const [themesData, habitsData, blocksData, groupsData, sessionGroupsData] = await Promise.all([
+      const [themesData, habitsData, blocksData, groupsData, sessionGroupsData, mealsData] = await Promise.all([
         database.themes.getAll(user.id),
         database.habits.getAll(user.id),
         database.blocks.getForWeek(user.id, weekStartDate),
         database.habitGroups.getAll(user.id),
         database.sessionGroups.getForWeek(user.id, weekStartDate),
+        database.meals.getByUser(user.id),
       ]);
 
       const mapHabit = (h: DBHabit, allHabits: DBHabit[]): Habit => ({
@@ -314,6 +323,7 @@ const App: React.FC = () => {
         return {
           id: theme.id,
           name: theme.name,
+          themeType: (theme.theme_type ?? "habit") as "habit" | "meals",
           habits: topLevelHabits.map((h) => mapHabit(h, themeHabits)),
           groups: groupsData
             .filter((g) => g.theme_id === theme.id)
@@ -323,6 +333,7 @@ const App: React.FC = () => {
               groupType: g.group_type,
               linkBehavior: g.link_behavior,
             })),
+          meals: mealsData.filter((m) => m.theme_id === theme.id),
         };
       });
 
@@ -335,9 +346,10 @@ const App: React.FC = () => {
       });
 
       const blockIds = blocksData.map((b) => b.id);
-      const [workoutDataArray, blockCreditsArray] = await Promise.all([
+      const [workoutDataArray, blockCreditsArray, mealBlockLinksArray] = await Promise.all([
         blockIds.length > 0 ? database.workoutData.getByBlockIds(blockIds) : Promise.resolve([]),
         blockIds.length > 0 ? database.blockHabitCredits.getByBlocks(blockIds) : Promise.resolve([]),
+        blockIds.length > 0 ? database.mealBlockLinks.getByBlocks(blockIds) : Promise.resolve([]),
       ]);
 
       const workoutDataMap = new Map(
@@ -361,26 +373,35 @@ const App: React.FC = () => {
 
       const sessionGroupMap = new Map(sessionGroupsData.map((sg) => [sg.id, sg]));
 
-      const convertedBlocks: Block[] = blocksData.map((b) => ({
-        id: b.id,
-        label: b.label,
-        isHabitBlock: b.is_habit_block,
-        habitId: b.habit_id ?? undefined,
-        completed: b.completed,
-        hashtag: b.hashtag ?? undefined,
-        linkedBlockId: b.linked_block_id ?? undefined,
-        isLinkedGroup: b.is_linked_group,
-        workoutData: workoutDataMap.get(b.id),
-        workoutSubmitted: b.workout_submitted,
-        sessionGroupId: b.session_group_id ?? undefined,
-        sessionGroup: b.session_group_id ? sessionGroupMap.get(b.session_group_id) : undefined,
-        themeId: b.theme_id ?? undefined,
-        creditedHabitIds: creditsByBlock.get(b.id) ?? [],
-        location:
-          b.location_type === "slot" && b.day_index !== null && b.time_index !== null
-            ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
-            : { type: "unscheduled" },
-      }));
+      const mealLinkByBlock = new Map(mealBlockLinksArray.map((ml) => [ml.block_id, ml.meal_id]));
+      const mealMap = new Map(mealsData.map((m) => [m.id, m]));
+
+      const convertedBlocks: Block[] = blocksData.map((b) => {
+        const mealId = mealLinkByBlock.get(b.id);
+        const linkedMeal = mealId ? mealMap.get(mealId) : undefined;
+        return {
+          id: b.id,
+          label: b.label,
+          isHabitBlock: b.is_habit_block,
+          habitId: b.habit_id ?? undefined,
+          completed: b.completed,
+          hashtag: b.hashtag ?? undefined,
+          linkedBlockId: b.linked_block_id ?? undefined,
+          isLinkedGroup: b.is_linked_group,
+          workoutData: workoutDataMap.get(b.id),
+          workoutSubmitted: b.workout_submitted,
+          sessionGroupId: b.session_group_id ?? undefined,
+          sessionGroup: b.session_group_id ? sessionGroupMap.get(b.session_group_id) : undefined,
+          themeId: b.theme_id ?? undefined,
+          creditedHabitIds: creditsByBlock.get(b.id) ?? [],
+          mealId: mealId ?? undefined,
+          mealType: linkedMeal?.meal_type ?? undefined,
+          location:
+            b.location_type === "slot" && b.day_index !== null && b.time_index !== null
+              ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
+              : { type: "unscheduled" },
+        };
+      });
 
       setBlocks(convertedBlocks);
 
@@ -927,22 +948,97 @@ const App: React.FC = () => {
     if (!user) return;
 
     try {
-      const themeData = await database.themes.create(user.id, trimmed);
+      const themeData = await database.themes.create(user.id, trimmed, newThemeType);
 
       const newTheme: Theme = {
         id: themeData.id,
         name: themeData.name,
+        themeType: newThemeType,
         habits: [],
         groups: [],
+        meals: [],
       };
 
       setThemes((prev) => [...prev, newTheme]);
       setExpandedThemes((prev) => new Set([...prev, themeData.id]));
       setNewThemeName("");
+      setNewThemeType("habit");
       showToast("Theme created", "success");
     } catch (error) {
       console.error("Error creating theme:", error);
       showToast("Failed to create theme", "error");
+    }
+  };
+
+  const addMealToTheme = (themeId: string, meal: Meal) => {
+    setThemes((prev) =>
+      prev.map((t) =>
+        t.id === themeId ? { ...t, meals: [...t.meals, meal] } : t
+      )
+    );
+    setAddingMealForThemeId(null);
+    showToast("Meal added", "success");
+  };
+
+  const deleteMeal = async (themeId: string, mealId: string) => {
+    try {
+      await database.meals.delete(mealId);
+      setThemes((prev) =>
+        prev.map((t) =>
+          t.id === themeId
+            ? { ...t, meals: t.meals.filter((m) => m.id !== mealId) }
+            : t
+        )
+      );
+      setBlocks((prev) =>
+        prev.map((b) => (b.mealId === mealId ? { ...b, mealId: undefined, mealType: undefined } : b))
+      );
+    } catch {
+      showToast("Failed to delete meal", "error");
+    }
+  };
+
+  const createMealBlock = async (meal: Meal) => {
+    if (!user) return;
+
+    try {
+      const blockData = await database.blocks.create(user.id, {
+        label: meal.name,
+        is_habit_block: false,
+        habit_id: null,
+        location_type: "unscheduled",
+        day_index: null,
+        time_index: null,
+        completed: false,
+        hashtag: null,
+        week_start_date: null,
+        linked_block_id: null,
+        is_linked_group: false,
+        workout_submitted: false,
+        session_group_id: null,
+        is_daily_template: false,
+        daily_template_id: null,
+        theme_id: meal.theme_id,
+      });
+
+      await database.mealBlockLinks.create(user.id, blockData.id, meal.id);
+
+      const newBlock: Block = {
+        id: blockData.id,
+        label: blockData.label,
+        isHabitBlock: false,
+        location: { type: "unscheduled" },
+        completed: false,
+        themeId: meal.theme_id,
+        mealId: meal.id,
+        mealType: meal.meal_type,
+        creditedHabitIds: [],
+      };
+
+      setBlocks((prev) => [...prev, newBlock]);
+      showToast("Meal block added", "success");
+    } catch {
+      showToast("Failed to create meal block", "error");
     }
   };
 
@@ -2140,6 +2236,9 @@ const App: React.FC = () => {
                               onDoubleClick={(e) => { e.stopPropagation(); startRenamingTheme(theme.id, theme.name); }}
                               title="Double-click to rename"
                             >
+                              {theme.themeType === "meals" && (
+                                <span className="meals-theme-icon" title="Meals theme">&#127860;</span>
+                              )}
                               {theme.name}
                             </div>
                           )}
@@ -2151,14 +2250,18 @@ const App: React.FC = () => {
                                 type="button"
                                 className="secondary small-btn"
                                 onClick={() => {
-                                  setAddingThemeId(theme.id);
-                                  setNewThemeHabitName("");
-                                  setNewThemeHabitTarget(2);
-                                  setNewThemeHabitFrequency("weekly");
-                                  setNewThemeHabitGroupId("");
+                                  if (theme.themeType === "meals") {
+                                    setAddingMealForThemeId(theme.id);
+                                  } else {
+                                    setAddingThemeId(theme.id);
+                                    setNewThemeHabitName("");
+                                    setNewThemeHabitTarget(2);
+                                    setNewThemeHabitFrequency("weekly");
+                                    setNewThemeHabitGroupId("");
+                                  }
                                 }}
                               >
-                                Add habit
+                                {theme.themeType === "meals" ? "Add meal" : "Add habit"}
                               </button>
                               <button
                                 type="button"
@@ -2819,12 +2922,74 @@ const App: React.FC = () => {
                         </div>
                       )}
 
-                      <ThemeGoals
-                        themeId={theme.id}
-                        userId={user.id}
-                        groups={theme.groups}
-                        habits={theme.habits.map(h => ({ id: h.id, habitGroupId: h.habitGroupId }))}
-                      />
+                      {theme.themeType === "meals" && (
+                        <div style={{ marginBottom: 8 }}>
+                          {["breakfast", "lunch", "dinner"].map((mType) => {
+                            const typeMeals = theme.meals.filter((m) => m.meal_type === mType);
+                            if (typeMeals.length === 0) return null;
+                            return (
+                              <div key={mType}>
+                                <div className="meal-group-header">
+                                  {mType.charAt(0).toUpperCase() + mType.slice(1)}
+                                </div>
+                                {typeMeals.map((meal) => {
+                                  const hasNutrition = !!(
+                                    meal.calories || meal.protein_g || meal.carbs_g || meal.fat_g || meal.vitamins_notes
+                                  );
+                                  return (
+                                    <div key={meal.id} className="meal-item-row">
+                                      <span
+                                        className={`meal-type-badge meal-${mType}`}
+                                      >
+                                        {mType === "breakfast" ? "B" : mType === "lunch" ? "L" : "D"}
+                                      </span>
+                                      <span style={{ flex: 1 }}>{meal.name}</span>
+                                      {hasNutrition && (
+                                        <span className="meal-nutrition-dot" title="Has nutrition info" />
+                                      )}
+                                      <button
+                                        type="button"
+                                        className="secondary small-btn"
+                                        style={{ fontSize: 10, padding: "1px 6px" }}
+                                        onClick={() => createMealBlock(meal)}
+                                        title="Add to board"
+                                      >
+                                        + Block
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="theme-delete-btn"
+                                        onClick={() => deleteMeal(theme.id, meal.id)}
+                                        title="Delete meal"
+                                      >
+                                        x
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })}
+
+                          {addingMealForThemeId === theme.id && (
+                            <MealForm
+                              userId={user.id}
+                              themeId={theme.id}
+                              onSaved={(meal) => addMealToTheme(theme.id, meal)}
+                              onCancel={() => setAddingMealForThemeId(null)}
+                            />
+                          )}
+                        </div>
+                      )}
+
+                      {theme.themeType !== "meals" && (
+                        <ThemeGoals
+                          themeId={theme.id}
+                          userId={user.id}
+                          groups={theme.groups}
+                          habits={theme.habits.map(h => ({ id: h.id, habitGroupId: h.habitGroupId }))}
+                        />
+                      )}
 
                       {(themedBlocks.length > 0 || isDraggingBlock) && (
                         <div
@@ -2838,11 +3003,17 @@ const App: React.FC = () => {
                               {themedBlocks.map((block) => (
                                 <div key={block.id} className="themed-block-wrapper">
                                   <div
-                                    className={`block${block.isHabitBlock ? " habit-block" : ""}${block.completed ? " block-done" : ""}`}
+                                    className={`block${block.isHabitBlock ? " habit-block" : ""}${block.completed ? " block-done" : ""}${block.mealType ? ` meal-block meal-${block.mealType}` : ""}`}
                                     draggable
                                     onDragStart={(e) => handleDragStart(block.id, e)}
                                     onDragEnd={handleDragEnd}
+                                    style={{ position: "relative" }}
                                   >
+                                    {block.mealType && (
+                                      <span className={`meal-badge meal-${block.mealType}`}>
+                                        {block.mealType === "breakfast" ? "B" : block.mealType === "lunch" ? "L" : "D"}
+                                      </span>
+                                    )}
                                     <span>{block.label}</span>
                                     {block.hashtag && (
                                       <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>#{block.hashtag}</span>
@@ -2957,7 +3128,16 @@ const App: React.FC = () => {
                       placeholder="e.g. Spiritual, Social"
                       value={newThemeName}
                       onChange={(e) => setNewThemeName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") addTheme(); }}
                     />
+                    <select
+                      value={newThemeType}
+                      onChange={(e) => setNewThemeType(e.target.value as "habit" | "meals")}
+                      style={{ minWidth: 80 }}
+                    >
+                      <option value="habit">Habit</option>
+                      <option value="meals">Meals</option>
+                    </select>
                     <button
                       type="button"
                       className="secondary"
@@ -3031,12 +3211,19 @@ const App: React.FC = () => {
                     className={
                       "block" +
                       (block.isHabitBlock ? " habit-block" : "") +
-                      (block.completed ? " block-done" : "")
+                      (block.completed ? " block-done" : "") +
+                      (block.mealType ? ` meal-block meal-${block.mealType}` : "")
                     }
                     draggable
                     onDragStart={(e) => handleDragStart(block.id, e)}
                     onDragEnd={handleDragEnd}
+                    style={{ position: "relative" }}
                   >
+                    {block.mealType && (
+                      <span className={`meal-badge meal-${block.mealType}`}>
+                        {block.mealType === "breakfast" ? "B" : block.mealType === "lunch" ? "L" : "D"}
+                      </span>
+                    )}
                     <div>
                       {block.label}
                       {block.hashtag && <span style={{ marginLeft: 8, opacity: 0.7, fontSize: 12 }}>#{block.hashtag}</span>}
@@ -3240,6 +3427,7 @@ const App: React.FC = () => {
                               const hasSessionGroup = !!block.sessionGroup;
                               const sessionColor = block.sessionGroup?.accent_color || "";
                               const showConnector = hasAdjacentBlockBelow(block);
+                              const hasMeal = !!block.mealId && !!block.mealType;
 
                               return (
                               <div
@@ -3249,7 +3437,8 @@ const App: React.FC = () => {
                                   (block.isHabitBlock ? " habit-block" : "") +
                                   (block.isLinkedGroup ? " linked-group" : "") +
                                   (block.completed ? " block-done" : "") +
-                                  (hasSessionGroup ? ` session-group session-${sessionColor}` : "")
+                                  (hasSessionGroup ? ` session-group session-${sessionColor}` : "") +
+                                  (hasMeal ? ` meal-block meal-${block.mealType}` : "")
                                 }
                                 draggable
                                 onDragStart={(e) => handleDragStart(block.id, e)}
@@ -3263,9 +3452,80 @@ const App: React.FC = () => {
                                   const priority = dailyPriorities.find(p => p.block_id === block.id);
                                   return priority ? <PriorityBadge rank={priority.priority_rank as 1 | 2 | 3} /> : null;
                                 })()}
+                                {hasMeal && (
+                                  <div
+                                    className={`meal-badge meal-${block.mealType}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setMealPopoverBlockId(
+                                        mealPopoverBlockId === block.id ? null : block.id
+                                      );
+                                    }}
+                                    title="Meal info"
+                                  >
+                                    {block.mealType === "breakfast" ? "B" : block.mealType === "lunch" ? "L" : "D"}
+                                  </div>
+                                )}
+                                {hasMeal && mealPopoverBlockId === block.id && (() => {
+                                  const meal = themes
+                                    .flatMap((t) => t.meals)
+                                    .find((m) => m.id === block.mealId);
+                                  if (!meal) return null;
+                                  return (
+                                    <div
+                                      className="meal-popover"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <div className="meal-popover-title">{meal.name}</div>
+                                      <div className="meal-popover-row">
+                                        <span className="meal-popover-label">Type</span>
+                                        <span style={{ textTransform: "capitalize" }}>{meal.meal_type}</span>
+                                      </div>
+                                      {meal.calories != null && (
+                                        <div className="meal-popover-row">
+                                          <span className="meal-popover-label">Calories</span>
+                                          <span>{meal.calories} kcal</span>
+                                        </div>
+                                      )}
+                                      {meal.protein_g != null && (
+                                        <div className="meal-popover-row">
+                                          <span className="meal-popover-label">Protein</span>
+                                          <span>{meal.protein_g}g</span>
+                                        </div>
+                                      )}
+                                      {meal.carbs_g != null && (
+                                        <div className="meal-popover-row">
+                                          <span className="meal-popover-label">Carbs</span>
+                                          <span>{meal.carbs_g}g</span>
+                                        </div>
+                                      )}
+                                      {meal.fat_g != null && (
+                                        <div className="meal-popover-row">
+                                          <span className="meal-popover-label">Fat</span>
+                                          <span>{meal.fat_g}g</span>
+                                        </div>
+                                      )}
+                                      {meal.vitamins_notes && (
+                                        <div className="meal-popover-row" style={{ flexDirection: "column", gap: 2 }}>
+                                          <span className="meal-popover-label">Notes</span>
+                                          <span>{meal.vitamins_notes}</span>
+                                        </div>
+                                      )}
+                                      <button
+                                        type="button"
+                                        className="secondary small-btn"
+                                        style={{ marginTop: 6, fontSize: 10 }}
+                                        onClick={() => setMealPopoverBlockId(null)}
+                                      >
+                                        Close
+                                      </button>
+                                    </div>
+                                  );
+                                })()}
                                 {hasSessionGroup && block.sessionGroup && (
                                   <div
                                     className={`session-badge session-${sessionColor}`}
+                                    style={hasMeal ? { left: 28 } : undefined}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setRenamingSession(block.sessionGroup!);

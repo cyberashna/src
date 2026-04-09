@@ -1132,6 +1132,212 @@ table.planner td.slot.drag-over {
   margin-bottom: 12px;
 }
 
+/* -- Meal Type Colors -- */
+:root {
+  --meal-breakfast: #f59e0b;
+  --meal-lunch: #10b981;
+  --meal-dinner: #ef4444;
+}
+
+.block.meal-block {
+  position: relative;
+}
+
+.block.meal-block.meal-breakfast {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+}
+
+.block.meal-block.meal-lunch {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.35);
+}
+
+.block.meal-block.meal-dinner {
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
+}
+
+.block.meal-block.meal-breakfast:hover {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.55);
+}
+
+.block.meal-block.meal-lunch:hover {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.55);
+}
+
+.block.meal-block.meal-dinner:hover {
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.55);
+}
+
+.meal-badge {
+  position: absolute;
+  top: -6px;
+  left: 4px;
+  font-size: 9px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  color: white;
+  user-select: none;
+  z-index: 2;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.meal-badge.meal-breakfast {
+  background: #f59e0b;
+}
+
+.meal-badge.meal-lunch {
+  background: #10b981;
+}
+
+.meal-badge.meal-dinner {
+  background: #ef4444;
+}
+
+.meal-nutrition-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  margin-left: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.meal-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.meal-item-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.meal-type-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: white;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.meal-type-badge.meal-breakfast {
+  background: #f59e0b;
+}
+
+.meal-type-badge.meal-lunch {
+  background: #10b981;
+}
+
+.meal-type-badge.meal-dinner {
+  background: #ef4444;
+}
+
+.meal-group-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 6px 2px;
+}
+
+.nutrition-collapsible {
+  margin-top: 6px;
+  border-top: 1px solid #eee;
+  padding-top: 6px;
+}
+
+.nutrition-toggle-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: #888;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.nutrition-toggle-btn:hover {
+  color: #555;
+}
+
+.nutrition-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.nutrition-fields .small-label {
+  grid-column: span 2;
+}
+
+.nutrition-fields input {
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.nutrition-fields textarea {
+  grid-column: span 2;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  resize: vertical;
+  min-height: 48px;
+  font-family: inherit;
+}
+
+.meals-theme-icon {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-right: 2px;
+}
+
+.meal-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 200;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  min-width: 180px;
+  font-size: 12px;
+}
+
+.meal-popover-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: #1a1a1a;
+}
+
+.meal-popover-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #555;
+  margin-bottom: 3px;
+}
+
+.meal-popover-label {
+  color: #888;
+}
+
 .habit-drag-area {
   cursor: grab;
   user-select: none;

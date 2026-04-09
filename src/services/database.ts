@@ -32,8 +32,31 @@ export type Theme = {
   id: string;
   user_id: string;
   name: string;
+  theme_type: "habit" | "meals";
   created_at: string;
   updated_at: string;
+};
+
+export type Meal = {
+  id: string;
+  user_id: string;
+  theme_id: string;
+  name: string;
+  meal_type: "breakfast" | "lunch" | "dinner";
+  calories: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  vitamins_notes: string | null;
+  created_at: string;
+};
+
+export type MealBlockLink = {
+  id: string;
+  block_id: string;
+  meal_id: string;
+  user_id: string;
+  created_at: string;
 };
 
 export type HabitGroup = {
@@ -254,10 +277,10 @@ export const database = {
       return data as Theme[];
     },
 
-    async create(userId: string, name: string) {
+    async create(userId: string, name: string, themeType: "habit" | "meals" = "habit") {
       const { data, error } = await supabase
         .from("themes")
-        .insert({ user_id: userId, name })
+        .insert({ user_id: userId, name, theme_type: themeType })
         .select()
         .single();
 
@@ -924,6 +947,115 @@ export const database = {
 
       if (error) throw error;
       return data as Pick<BlockActivityLog, "habit_id" | "time_index" | "completed_at">[];
+    },
+  },
+
+  meals: {
+    async getByTheme(themeId: string) {
+      const { data, error } = await supabase
+        .from("meals")
+        .select("*")
+        .eq("theme_id", themeId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as Meal[];
+    },
+
+    async getByUser(userId: string) {
+      const { data, error } = await supabase
+        .from("meals")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as Meal[];
+    },
+
+    async create(
+      userId: string,
+      themeId: string,
+      name: string,
+      mealType: "breakfast" | "lunch" | "dinner",
+      calories?: number | null,
+      proteinG?: number | null,
+      carbsG?: number | null,
+      fatG?: number | null,
+      vitaminsNotes?: string | null
+    ) {
+      const { data, error } = await supabase
+        .from("meals")
+        .insert({
+          user_id: userId,
+          theme_id: themeId,
+          name,
+          meal_type: mealType,
+          calories: calories ?? null,
+          protein_g: proteinG ?? null,
+          carbs_g: carbsG ?? null,
+          fat_g: fatG ?? null,
+          vitamins_notes: vitaminsNotes ?? null,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as Meal;
+    },
+
+    async update(id: string, updates: Partial<Omit<Meal, "id" | "user_id" | "created_at">>) {
+      const { data, error } = await supabase
+        .from("meals")
+        .update(updates)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as Meal;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase.from("meals").delete().eq("id", id);
+      if (error) throw error;
+    },
+  },
+
+  mealBlockLinks: {
+    async getByBlocks(blockIds: string[]) {
+      if (blockIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("meal_block_links")
+        .select("*")
+        .in("block_id", blockIds);
+
+      if (error) throw error;
+      return data as MealBlockLink[];
+    },
+
+    async create(userId: string, blockId: string, mealId: string) {
+      const { data, error } = await supabase
+        .from("meal_block_links")
+        .upsert(
+          { user_id: userId, block_id: blockId, meal_id: mealId },
+          { onConflict: "block_id" }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as MealBlockLink;
+    },
+
+    async delete(blockId: string) {
+      const { error } = await supabase
+        .from("meal_block_links")
+        .delete()
+        .eq("block_id", blockId);
+
+      if (error) throw error;
     },
   },
 
