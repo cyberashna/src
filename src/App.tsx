@@ -7,28 +7,27 @@ import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
 import { ThemeGoals } from "./components/ThemeGoals";
 import { ThemeNotes } from "./components/ThemeNotes";
-import { WorkoutInputs } from "./components/WorkoutInputs";
 import { ToastContainer, createToastId } from "./components/Toast";
 import type { ToastItem } from "./components/Toast";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 
 import { database, SessionGroup, Habit as DBHabit, Block as DBBlock, Meal } from "./services/database";
 import MealForm from "./components/MealForm";
-import { updateSessionGroups, getSessionDisplayName } from "./services/sessionGrouping";
+import { updateSessionGroups } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
 import PriorityPickerPanel from "./components/PriorityPickerPanel";
 import QuickStartTemplateModal from "./components/QuickStartTemplateModal";
 import GhostBlock from "./components/GhostBlock";
-import PriorityBadge from "./components/PriorityBadge";
 import { generateGhostBlocks, dismissPattern, acceptGhostBlock, type GhostBlock as GhostBlockType } from "./services/patternAnalysis";
 import { generateStandingBlocksForWeek } from "./services/standingBlocks";
 import DailyEssentials from "./components/DailyEssentials";
 import MoodTracker from "./components/MoodTracker";
 import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
-import BlockCreditPopover from "./components/BlockCreditPopover";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import TemplateStickyNote from "./components/TemplateStickyNote";
+import BlockCard from "./components/BlockCard";
+import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
 
 type HabitGroup = {
   id: string;
@@ -107,37 +106,6 @@ const formatTimeSince = (timestamp: string): string => {
   return then.toLocaleDateString();
 };
 
-const getMondayOfWeek = (weekOffset: number = 0): Date => {
-  const now = new Date();
-  const dayOfWeek = now.getDay();
-  const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-
-  const monday = new Date(now);
-  monday.setDate(now.getDate() + diff + (weekOffset * 7));
-  monday.setHours(0, 0, 0, 0);
-
-  return monday;
-};
-
-const getWeekStartDateString = (weekOffset: number = 0): string => {
-  const monday = getMondayOfWeek(weekOffset);
-  return monday.toISOString().split('T')[0];
-};
-
-const getCurrentWeekRange = (weekOffset: number = 0): string => {
-  const monday = getMondayOfWeek(weekOffset);
-
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-
-  const formatDate = (date: Date) => {
-    const month = date.toLocaleDateString('en-US', { month: 'short' });
-    const day = date.getDate();
-    return `${month} ${day}`;
-  };
-
-  return `${formatDate(monday)} - ${formatDate(sunday)}`;
-};
 
 const hourlySlots = [
   "6:00 AM",
@@ -1102,13 +1070,7 @@ const App: React.FC = () => {
     dayIndex: number,
     timeIndex: number
   ) => {
-    console.log("========== createHabitBlockAtSlot called ==========", { habitId, dayIndex, timeIndex });
     const habit = allHabits.find((h) => h.id === habitId);
-    console.log("Habit details:", {
-      found: !!habit,
-      name: habit?.name,
-      groupId: habit?.habitGroupId
-    });
     if (!habit || !user) return;
 
     try {
@@ -1197,8 +1159,6 @@ const App: React.FC = () => {
         themeId: habitTheme?.id,
         creditedHabitIds: [],
       };
-
-      console.log("New block created:", newBlock);
 
       setBlocks((currentBlocks) => [...currentBlocks, newBlock]);
 
@@ -1343,7 +1303,7 @@ const App: React.FC = () => {
     if (!habit || !user) return null;
 
     try {
-      const todayIdx = getTodayDayIndex();
+      const todayIdx = getTodayDayIndex(weekOffset);
       if (todayIdx === -1) return null;
 
       const weekStartDate = getWeekStartDateString(weekOffset);
@@ -1440,15 +1400,8 @@ const App: React.FC = () => {
     dayIndex: number,
     timeIndex: number
   ) => {
-    console.log("========== moveBlockToSlot called ==========", { blockId, dayIndex, timeIndex });
     try {
       const block = blocks.find((b) => b.id === blockId);
-      console.log("Block being moved:", {
-        found: !!block,
-        label: block?.label,
-        isHabitBlock: block?.isHabitBlock,
-        habitId: block?.habitId
-      });
 
       if (block?.linkedBlockId) {
         await database.blocks.update(block.linkedBlockId, {
@@ -2121,14 +2074,7 @@ const App: React.FC = () => {
     }
   };
 
-  const getTodayDayIndex = (): number => {
-    if (weekOffset !== 0) return -1;
-    const now = new Date();
-    const day = now.getDay();
-    return day === 0 ? 6 : day - 1;
-  };
-
-  const todayDayIndex = getTodayDayIndex();
+  const todayDayIndex = getTodayDayIndex(weekOffset);
 
   if (loading) {
     return (
@@ -3001,108 +2947,32 @@ const App: React.FC = () => {
                           {themedBlocks.length > 0 && (
                             <div className="theme-blocks-list">
                               {themedBlocks.map((block) => (
-                                <div key={block.id} className="themed-block-wrapper">
-                                  <div
-                                    className={`block${block.isHabitBlock ? " habit-block" : ""}${block.completed ? " block-done" : ""}${block.mealType ? ` meal-block meal-${block.mealType}` : ""}`}
-                                    draggable
-                                    onDragStart={(e) => handleDragStart(block.id, e)}
-                                    onDragEnd={handleDragEnd}
-                                    style={{ position: "relative" }}
-                                  >
-                                    {block.mealType && (
-                                      <span className={`meal-badge meal-${block.mealType}`}>
-                                        {block.mealType === "breakfast" ? "B" : block.mealType === "lunch" ? "L" : "D"}
-                                      </span>
-                                    )}
-                                    <span>{block.label}</span>
-                                    {block.hashtag && (
-                                      <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>#{block.hashtag}</span>
-                                    )}
-                                    {!block.isHabitBlock && (
-                                      <button
-                                        type="button"
-                                        className="theme-block-convert-btn"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setConvertingBlockId(convertingBlockId === block.id ? null : block.id);
-                                          setConvertFrequency("weekly");
-                                          setConvertTarget(3);
-                                          setConvertGroupId("");
-                                        }}
-                                        title="Convert to habit"
-                                      >
-                                        &#x21bb;
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      className="theme-block-remove-btn"
-                                      onClick={() => removeBlockFromTheme(block.id)}
-                                      title="Remove from theme"
-                                    >
-                                      ×
-                                    </button>
-                                  </div>
-                                  {convertingBlockId === block.id && (
-                                    <div className="convert-to-habit-form">
-                                      <div className="convert-form-title">Convert to Habit</div>
-                                      <div className="convert-form-row">
-                                        <label className="small-label">Frequency</label>
-                                        <select
-                                          value={convertFrequency}
-                                          onChange={(e) => setConvertFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
-                                        >
-                                          <option value="daily">Daily</option>
-                                          <option value="weekly">Weekly</option>
-                                          <option value="monthly">Monthly</option>
-                                          <option value="none">No Target</option>
-                                        </select>
-                                      </div>
-                                      {convertFrequency !== "none" && (
-                                        <div className="convert-form-row">
-                                          <label className="small-label">Target</label>
-                                          <input
-                                            type="number"
-                                            min={1}
-                                            max={convertFrequency === "daily" ? 7 : convertFrequency === "weekly" ? 14 : 28}
-                                            value={convertTarget}
-                                            onChange={(e) => setConvertTarget(parseInt(e.target.value) || 1)}
-                                          />
-                                        </div>
-                                      )}
-                                      {theme.groups.length > 0 && (
-                                        <div className="convert-form-row">
-                                          <label className="small-label">Group</label>
-                                          <select
-                                            value={convertGroupId}
-                                            onChange={(e) => setConvertGroupId(e.target.value)}
-                                          >
-                                            <option value="">None</option>
-                                            {theme.groups.map((g) => (
-                                              <option key={g.id} value={g.id}>{g.name}</option>
-                                            ))}
-                                          </select>
-                                        </div>
-                                      )}
-                                      <div className="convert-form-actions">
-                                        <button
-                                          className="primary"
-                                          type="button"
-                                          onClick={() => convertBlockToHabit(block.id, theme.id)}
-                                        >
-                                          Convert
-                                        </button>
-                                        <button
-                                          className="secondary"
-                                          type="button"
-                                          onClick={() => setConvertingBlockId(null)}
-                                        >
-                                          Cancel
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
+                                <BlockCard
+                                  key={block.id}
+                                  block={block}
+                                  variant="themed"
+                                  onDragStart={handleDragStart}
+                                  onDragEnd={handleDragEnd}
+                                  onDelete={deleteBlockWithUndo}
+                                  isStrengthTraining={isStrengthTrainingBlock}
+                                  onUpdateWorkout={updateWorkoutData}
+                                  onSubmitWorkout={submitWorkout}
+                                  convertingBlockId={convertingBlockId}
+                                  convertFrequency={convertFrequency}
+                                  convertTarget={convertTarget}
+                                  convertGroupId={convertGroupId}
+                                  themeGroups={theme.groups}
+                                  onSetConvertingBlock={setConvertingBlockId}
+                                  onSetConvertFrequency={setConvertFrequency}
+                                  onSetConvertTarget={setConvertTarget}
+                                  onSetConvertGroupId={setConvertGroupId}
+                                  onConvertToHabit={convertBlockToHabit}
+                                  onRemoveFromTheme={removeBlockFromTheme}
+                                  themeId={theme.id}
+                                  themes={themes}
+                                  mealPopoverBlockId={mealPopoverBlockId}
+                                  onSetMealPopover={setMealPopoverBlockId}
+                                />
                               ))}
                             </div>
                           )}
@@ -3206,37 +3076,20 @@ const App: React.FC = () => {
 
               <div className="block-list" style={{ marginTop: 8 }}>
                 {unscheduledBlocks.map((block) => (
-                  <div
+                  <BlockCard
                     key={block.id}
-                    className={
-                      "block" +
-                      (block.isHabitBlock ? " habit-block" : "") +
-                      (block.completed ? " block-done" : "") +
-                      (block.mealType ? ` meal-block meal-${block.mealType}` : "")
-                    }
-                    draggable
-                    onDragStart={(e) => handleDragStart(block.id, e)}
+                    block={block}
+                    variant="unscheduled"
+                    onDragStart={handleDragStart}
                     onDragEnd={handleDragEnd}
-                    style={{ position: "relative" }}
-                  >
-                    {block.mealType && (
-                      <span className={`meal-badge meal-${block.mealType}`}>
-                        {block.mealType === "breakfast" ? "B" : block.mealType === "lunch" ? "L" : "D"}
-                      </span>
-                    )}
-                    <div>
-                      {block.label}
-                      {block.hashtag && <span style={{ marginLeft: 8, opacity: 0.7, fontSize: 12 }}>#{block.hashtag}</span>}
-                    </div>
-                    {isStrengthTrainingBlock(block) && (
-                      <WorkoutInputs
-                        workoutData={block.workoutData}
-                        workoutSubmitted={block.workoutSubmitted}
-                        onUpdate={(data) => updateWorkoutData(block.id, data)}
-                        onSubmit={() => submitWorkout(block.id)}
-                      />
-                    )}
-                  </div>
+                    onDelete={deleteBlockWithUndo}
+                    isStrengthTraining={isStrengthTrainingBlock}
+                    onUpdateWorkout={updateWorkoutData}
+                    onSubmitWorkout={submitWorkout}
+                    themes={themes}
+                    mealPopoverBlockId={mealPopoverBlockId}
+                    onSetMealPopover={setMealPopoverBlockId}
+                  />
                 ))}
               </div>
             </div>
@@ -3424,231 +3277,36 @@ const App: React.FC = () => {
                         >
                           <div className="slot-inner">
                             {slotBlocks.map((block) => {
-                              const hasSessionGroup = !!block.sessionGroup;
-                              const sessionColor = block.sessionGroup?.accent_color || "";
-                              const showConnector = hasAdjacentBlockBelow(block);
-                              const hasMeal = !!block.mealId && !!block.mealType;
-
+                              const priority = dailyPriorities.find(p => p.block_id === block.id);
                               return (
-                              <div
-                                key={block.id}
-                                className={
-                                  "block" +
-                                  (block.isHabitBlock ? " habit-block" : "") +
-                                  (block.isLinkedGroup ? " linked-group" : "") +
-                                  (block.completed ? " block-done" : "") +
-                                  (hasSessionGroup ? ` session-group session-${sessionColor}` : "") +
-                                  (hasMeal ? ` meal-block meal-${block.mealType}` : "")
-                                }
-                                draggable
-                                onDragStart={(e) => handleDragStart(block.id, e)}
-                                onDragEnd={handleDragEnd}
-                                onDoubleClick={() =>
-                                  handleBlockDoubleClickWithUndo(block.id)
-                                }
-                                style={{ position: 'relative' }}
-                              >
-                                {(() => {
-                                  const priority = dailyPriorities.find(p => p.block_id === block.id);
-                                  return priority ? <PriorityBadge rank={priority.priority_rank as 1 | 2 | 3} /> : null;
-                                })()}
-                                {hasMeal && (
-                                  <div
-                                    className={`meal-badge meal-${block.mealType}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setMealPopoverBlockId(
-                                        mealPopoverBlockId === block.id ? null : block.id
-                                      );
-                                    }}
-                                    title="Meal info"
-                                  >
-                                    {block.mealType === "breakfast" ? "B" : block.mealType === "lunch" ? "L" : "D"}
-                                  </div>
-                                )}
-                                {hasMeal && mealPopoverBlockId === block.id && (() => {
-                                  const meal = themes
-                                    .flatMap((t) => t.meals)
-                                    .find((m) => m.id === block.mealId);
-                                  if (!meal) return null;
-                                  return (
-                                    <div
-                                      className="meal-popover"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <div className="meal-popover-title">{meal.name}</div>
-                                      <div className="meal-popover-row">
-                                        <span className="meal-popover-label">Type</span>
-                                        <span style={{ textTransform: "capitalize" }}>{meal.meal_type}</span>
-                                      </div>
-                                      {meal.calories != null && (
-                                        <div className="meal-popover-row">
-                                          <span className="meal-popover-label">Calories</span>
-                                          <span>{meal.calories} kcal</span>
-                                        </div>
-                                      )}
-                                      {meal.protein_g != null && (
-                                        <div className="meal-popover-row">
-                                          <span className="meal-popover-label">Protein</span>
-                                          <span>{meal.protein_g}g</span>
-                                        </div>
-                                      )}
-                                      {meal.carbs_g != null && (
-                                        <div className="meal-popover-row">
-                                          <span className="meal-popover-label">Carbs</span>
-                                          <span>{meal.carbs_g}g</span>
-                                        </div>
-                                      )}
-                                      {meal.fat_g != null && (
-                                        <div className="meal-popover-row">
-                                          <span className="meal-popover-label">Fat</span>
-                                          <span>{meal.fat_g}g</span>
-                                        </div>
-                                      )}
-                                      {meal.vitamins_notes && (
-                                        <div className="meal-popover-row" style={{ flexDirection: "column", gap: 2 }}>
-                                          <span className="meal-popover-label">Notes</span>
-                                          <span>{meal.vitamins_notes}</span>
-                                        </div>
-                                      )}
-                                      <button
-                                        type="button"
-                                        className="secondary small-btn"
-                                        style={{ marginTop: 6, fontSize: 10 }}
-                                        onClick={() => setMealPopoverBlockId(null)}
-                                      >
-                                        Close
-                                      </button>
-                                    </div>
-                                  );
-                                })()}
-                                {hasSessionGroup && block.sessionGroup && (
-                                  <div
-                                    className={`session-badge session-${sessionColor}`}
-                                    style={hasMeal ? { left: 28 } : undefined}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setRenamingSession(block.sessionGroup!);
-                                      setSessionRenameValue(
-                                        block.sessionGroup!.custom_name || ""
-                                      );
-                                    }}
-                                    title="Click to rename session"
-                                  >
-                                    {getSessionDisplayName(block.sessionGroup)}
-                                  </div>
-                                )}
-                                {showConnector && (
-                                  <div className={`session-connector session-${sessionColor}`} />
-                                )}
-                                <div>
-                                  {block.isHabitBlock ? (
-                                    <label
-                                      className="block-label-with-check"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={!!block.completed}
-                                        onChange={() =>
-                                          toggleBlockCompletion(block.id)
-                                        }
-                                      />
-                                      <span>
-                                        {block.label}
-                                        {block.completed && <span className="block-done-check"> &#10003;</span>}
-                                        {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
-                                      </span>
-                                      {block.themeId && (
-                                        <span
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            setCreditPopoverBlockId(
-                                              creditPopoverBlockId === block.id ? null : block.id
-                                            );
-                                          }}
-                                          title="Also counts for..."
-                                          style={{
-                                            marginLeft: 4,
-                                            fontSize: 10,
-                                            background: (block.creditedHabitIds?.length ?? 0) > 0 ? "#2563eb" : "#e5e7eb",
-                                            color: (block.creditedHabitIds?.length ?? 0) > 0 ? "#fff" : "#555",
-                                            borderRadius: 999,
-                                            padding: "1px 5px",
-                                            cursor: "pointer",
-                                            fontWeight: 600,
-                                            transition: "all 0.12s",
-                                            whiteSpace: "nowrap",
-                                          }}
-                                        >
-                                          {(block.creditedHabitIds?.length ?? 0) > 0
-                                            ? `+${block.creditedHabitIds!.length}`
-                                            : "+"}
-                                        </span>
-                                      )}
-                                      {creditPopoverBlockId === block.id && (
-                                        <BlockCreditPopover
-                                          blockId={block.id}
-                                          primaryHabitId={block.habitId!}
-                                          themeId={block.themeId}
-                                          themes={themes}
-                                          creditedHabitIds={block.creditedHabitIds ?? []}
-                                          completed={!!block.completed}
-                                          onSave={saveBlockCredits}
-                                          onClose={() => setCreditPopoverBlockId(null)}
-                                        />
-                                      )}
-                                    </label>
-                                  ) : editingBlockId === block.id ? (
-                                    <input
-                                      className="block-edit-input"
-                                      type="text"
-                                      value={editBlockLabel}
-                                      onChange={(e) => setEditBlockLabel(e.target.value)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter") saveBlockEdit(block.id);
-                                        if (e.key === "Escape") { setEditingBlockId(null); setEditBlockLabel(""); }
-                                      }}
-                                      onBlur={() => saveBlockEdit(block.id)}
-                                      onClick={(e) => e.stopPropagation()}
-                                      autoFocus
-                                    />
-                                  ) : (
-                                    <span
-                                      onDoubleClick={(e) => {
-                                        e.stopPropagation();
-                                        setEditingBlockId(block.id);
-                                        setEditBlockLabel(block.label);
-                                      }}
-                                      title="Double-click to edit"
-                                      style={{ cursor: "text" }}
-                                    >
-                                      {block.label}
-                                      {block.hashtag && <span style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}> #{block.hashtag}</span>}
-                                    </span>
-                                  )}
-                                  {isStrengthTrainingBlock(block) && (
-                                    <WorkoutInputs
-                                      workoutData={block.workoutData}
-                                      workoutSubmitted={block.workoutSubmitted}
-                                      onUpdate={(data) => updateWorkoutData(block.id, data)}
-                                      onSubmit={() => submitWorkout(block.id)}
-                                    />
-                                  )}
-                                </div>
-                                <button
-                                  className="block-delete-btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    deleteBlockWithUndo(block.id);
-                                  }}
-                                  title="Delete block"
-                                  aria-label="Delete block"
-                                >
-                                  ×
-                                </button>
-                              </div>
+                                <BlockCard
+                                  key={block.id}
+                                  block={block}
+                                  variant="slot"
+                                  priorityRank={priority ? (priority.priority_rank as 1 | 2 | 3) : undefined}
+                                  hasAdjacentBelow={hasAdjacentBlockBelow(block)}
+                                  mealPopoverBlockId={mealPopoverBlockId}
+                                  editingBlockId={editingBlockId}
+                                  editBlockLabel={editBlockLabel}
+                                  creditPopoverBlockId={creditPopoverBlockId}
+                                  themes={themes}
+                                  onSetMealPopover={setMealPopoverBlockId}
+                                  onSetRenamingSession={(session) => setRenamingSession(session as SessionGroup)}
+                                  onSetSessionRenameValue={setSessionRenameValue}
+                                  onToggleCompletion={toggleBlockCompletion}
+                                  onSetCreditPopover={setCreditPopoverBlockId}
+                                  onSaveBlockCredits={saveBlockCredits}
+                                  onSetEditingBlock={setEditingBlockId}
+                                  onSetEditBlockLabel={setEditBlockLabel}
+                                  onSaveBlockEdit={saveBlockEdit}
+                                  onDoubleClick={handleBlockDoubleClickWithUndo}
+                                  onDragStart={handleDragStart}
+                                  onDragEnd={handleDragEnd}
+                                  onDelete={deleteBlockWithUndo}
+                                  isStrengthTraining={isStrengthTrainingBlock}
+                                  onUpdateWorkout={updateWorkoutData}
+                                  onSubmitWorkout={submitWorkout}
+                                />
                               );
                             })}
                             {ghostBlocks
