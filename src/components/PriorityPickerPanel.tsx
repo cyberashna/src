@@ -182,13 +182,19 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
 
   const [dragOverRank, setDragOverRank] = useState<number | null>(null);
 
-  // All blocks (scheduled and unscheduled) are eligible
-  const availableBlocks = blocks.filter(b => !priorities.some(p => p.block_id === b.id));
-
-  function getFilteredBlocks(rank: number) {
+  function getFilteredBlocks(rank: number): { block: Block; alreadyAssigned: boolean }[] {
     const text = (searchText[rank] ?? '').trim().toLowerCase();
-    if (!text) return availableBlocks.slice(0, 8);
-    return availableBlocks.filter(b => b.label.toLowerCase().includes(text)).slice(0, 8);
+    const assignedToOtherRank = (b: Block) => priorities.some(p => p.block_id === b.id && p.priority_rank !== rank);
+    const assignedToThisRank = (b: Block) => priorities.some(p => p.block_id === b.id && p.priority_rank === rank);
+
+    let filtered = blocks.filter(b => !assignedToThisRank(b));
+    if (text) {
+      filtered = filtered.filter(b => b.label.toLowerCase().includes(text));
+    } else {
+      filtered = filtered.filter(b => !assignedToOtherRank(b)).slice(0, 8);
+    }
+
+    return filtered.map(b => ({ block: b, alreadyAssigned: assignedToOtherRank(b) }));
   }
 
   function handleSlotDragOver(e: React.DragEvent, rank: number) {
@@ -229,9 +235,9 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
       const text = (searchText[rank] ?? '').trim();
       if (!text) return;
       const filtered = getFilteredBlocks(rank);
-      const exactMatch = filtered.find(b => b.label.toLowerCase() === text.toLowerCase());
+      const exactMatch = filtered.find(({ block: b }) => b.label.toLowerCase() === text.toLowerCase());
       if (exactMatch) {
-        await handleSelectBlock(rank, exactMatch.id);
+        await handleSelectBlock(rank, exactMatch.block.id);
       } else {
         const newId = await onCreateBlock(text);
         if (newId) {
@@ -299,7 +305,7 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
           {priorities.map((priority, index) => {
             const color = priorityColors[index];
             const rank = priority.priority_rank;
-            const filtered = getFilteredBlocks(rank);
+            const filteredResults = getFilteredBlocks(rank);
             const currentText = (searchText[rank] ?? '').trim();
 
             return (
@@ -351,21 +357,26 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
                             className="priority-search-dropdown"
                             ref={el => { dropdownRefs.current[rank] = el; }}
                           >
-                            {filtered.length > 0 ? (
+                            {filteredResults.length > 0 ? (
                               <>
-                                {filtered.map(block => (
+                                {filteredResults.map(({ block, alreadyAssigned }) => (
                                   <div
                                     key={block.id}
-                                    className="priority-search-option"
+                                    className={`priority-search-option${alreadyAssigned ? ' priority-search-option--assigned' : ''}`}
                                     onMouseDown={e => { e.preventDefault(); handleSelectBlock(rank, block.id); }}
                                   >
                                     <span className="priority-search-option-label">{block.label}</span>
-                                    {block.day_index !== null && (
-                                      <span className="priority-search-option-badge">scheduled</span>
-                                    )}
+                                    <span className="priority-search-option-badges">
+                                      {alreadyAssigned && (
+                                        <span className="priority-search-option-badge priority-search-option-badge--assigned">in use</span>
+                                      )}
+                                      {block.day_index !== null && (
+                                        <span className="priority-search-option-badge">scheduled</span>
+                                      )}
+                                    </span>
                                   </div>
                                 ))}
-                                {currentText && !filtered.some(b => b.label.toLowerCase() === currentText.toLowerCase()) && (
+                                {currentText && !filteredResults.some(({ block: b }) => b.label.toLowerCase() === currentText.toLowerCase()) && (
                                   <div
                                     className="priority-search-option priority-search-option--create"
                                     onMouseDown={e => { e.preventDefault(); handleCreateFromDropdown(rank); }}
@@ -673,6 +684,12 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
           white-space: nowrap;
         }
 
+        .priority-search-option-badges {
+          display: flex;
+          gap: 4px;
+          flex-shrink: 0;
+        }
+
         .priority-search-option-badge {
           font-size: 10px;
           font-weight: 600;
@@ -683,6 +700,15 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
           padding: 2px 6px;
           border-radius: 3px;
           flex-shrink: 0;
+        }
+
+        .priority-search-option-badge--assigned {
+          color: #b45309;
+          background: #fef3c7;
+        }
+
+        .priority-search-option--assigned {
+          opacity: 0.75;
         }
 
         .priority-search-empty {
