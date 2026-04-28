@@ -36,6 +36,7 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
     { block_id: null, priority_rank: 2, completed: false },
     { block_id: null, priority_rank: 3, completed: false }
   ]);
+  const [allBlocks, setAllBlocks] = useState<Block[]>([]);
   const [showCelebration, setShowCelebration] = useState(false);
 
   // Per-slot search state
@@ -91,6 +92,26 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
   }, [userId, todayString]);
 
   useEffect(() => { loadPriorities(); }, [loadPriorities]);
+
+  const loadAllBlocks = useCallback(async () => {
+    const { data } = await supabase
+      .from('blocks')
+      .select('id, label, day_index, time_index, completed')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+    if (data) setAllBlocks(data as Block[]);
+  }, [userId]);
+
+  useEffect(() => { loadAllBlocks(); }, [loadAllBlocks]);
+
+  // Merge in any newly created blocks from the parent that may not be persisted yet
+  useEffect(() => {
+    setAllBlocks(prev => {
+      const existingIds = new Set(prev.map(b => b.id));
+      const newOnes = blocks.filter(b => !existingIds.has(b.id));
+      return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
+    });
+  }, [blocks]);
 
   useEffect(() => {
     const allCompleted = priorities.every(p => p.block_id && p.completed);
@@ -187,7 +208,7 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
     const assignedToOtherRank = (b: Block) => priorities.some(p => p.block_id === b.id && p.priority_rank !== rank);
     const assignedToThisRank = (b: Block) => priorities.some(p => p.block_id === b.id && p.priority_rank === rank);
 
-    let filtered = blocks.filter(b => !assignedToThisRank(b));
+    let filtered = allBlocks.filter(b => !assignedToThisRank(b));
     if (text) {
       filtered = filtered.filter(b => b.label.toLowerCase().includes(text));
     } else {
