@@ -11,6 +11,7 @@ interface Props {
   weekStartDate: string;
   todayDate: string;
   onClose: () => void;
+  onCreateBlock: (label: string) => Promise<void>;
 }
 
 const DEFAULT_WEEKLY_ITEMS = [
@@ -31,7 +32,7 @@ function getCompletionDate(template: PlanningTemplate, weekStartDate: string, to
   return template.type === "weekly" ? weekStartDate : todayDate;
 }
 
-export default function TemplateStickyNote({ userId, weekStartDate, todayDate, onClose }: Props) {
+export default function TemplateStickyNote({ userId, weekStartDate, todayDate, onClose, onCreateBlock }: Props) {
   const [templates, setTemplates] = useState<PlanningTemplate[]>([]);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
   const [itemsByTemplate, setItemsByTemplate] = useState<Record<string, TemplateChecklistItem[]>>({});
@@ -470,6 +471,13 @@ export default function TemplateStickyNote({ userId, weekStartDate, todayDate, o
               ) : (
                 <span className={`template-item-label ${done ? "template-item-label--done" : ""}`}>{item.label}</span>
               )}
+              <button
+                className="template-to-block-btn"
+                onClick={() => onCreateBlock(item.label)}
+                title="Add as unscheduled block"
+              >
+                + Block
+              </button>
               {editMode && (
                 <button
                   className="template-icon-btn template-icon-btn--danger template-delete-item-btn"

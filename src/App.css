@@ -2550,6 +2550,29 @@ table.planner td.slot.today-col.drag-over {
   opacity: 1;
 }
 
+.template-to-block-btn {
+  opacity: 0;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: #0ea5e9;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+
+.template-to-block-btn:hover {
+  background: #bae6fd;
+}
+
+.template-checklist-item:hover .template-to-block-btn {
+  opacity: 1;
+}
+
 .template-add-item-row {
   display: flex;
   align-items: center;

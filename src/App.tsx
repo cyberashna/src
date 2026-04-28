@@ -1015,14 +1015,14 @@ const App: React.FC = () => {
     isHabitBlock = false,
     habitId?: string,
     hashtag?: string
-  ) => {
+  ): Promise<string | null> => {
     const trimmed = label.trim();
     if (!trimmed) {
       showToast("Enter a label for the block.", "error");
-      return;
+      return null;
     }
 
-    if (!user) return;
+    if (!user) return null;
 
     try {
       const blockData = await database.blocks.create(user.id, {
@@ -1054,14 +1054,17 @@ const App: React.FC = () => {
         linkedBlockId: blockData.linked_block_id ?? undefined,
         isLinkedGroup: blockData.is_linked_group,
         workoutSubmitted: blockData.workout_submitted,
+        creditedHabitIds: [],
       };
 
       setBlocks((prev) => [...prev, newBlock]);
       setBlockLabel("");
       setBlockHashtag("");
+      return blockData.id;
     } catch (error) {
       console.error("Error creating block:", error);
       showToast("Failed to create block", "error");
+      return null;
     }
   };
 
@@ -2113,6 +2116,7 @@ const App: React.FC = () => {
             onPriorityChange={() => loadUserData()}
             onHabitDrop={createHabitBlockForPriority}
             onDeleteBlock={deleteBlockWithUndo}
+            onCreateBlock={(label) => createBlock(label)}
           />
 
           <div className="card">
@@ -3494,6 +3498,10 @@ const App: React.FC = () => {
           weekStartDate={getWeekStartDateString(weekOffset)}
           todayDate={new Date().toISOString().split('T')[0]}
           onClose={() => setShowTemplateNote(false)}
+          onCreateBlock={async (label) => {
+            const id = await createBlock(label);
+            if (id) showToast("Block added to unscheduled", "success");
+          }}
         />
       )}
     </>
