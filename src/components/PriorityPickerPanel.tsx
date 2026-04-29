@@ -18,6 +18,11 @@ interface Priority {
   block?: Block;
 }
 
+interface Habit {
+  id: string;
+  name: string;
+}
+
 interface PriorityPickerPanelProps {
   userId: string;
   blocks: Block[];
@@ -29,6 +34,10 @@ interface PriorityPickerPanelProps {
   onCreateBlock: (label: string) => Promise<string | null>;
 }
 
+type SearchResult =
+  | { kind: 'block'; block: Block; alreadyAssigned: boolean }
+  | { kind: 'habit'; habit: Habit };
+
 export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragHabitId, onPriorityChange, onHabitDrop, onDeleteBlock, onCreateBlock }: PriorityPickerPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [priorities, setPriorities] = useState<Priority[]>([
@@ -37,6 +46,7 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
     { block_id: null, priority_rank: 3, completed: false }
   ]);
   const [allBlocks, setAllBlocks] = useState<Block[]>([]);
+  const [allHabits, setAllHabits] = useState<Habit[]>([]);
   const [showCelebration, setShowCelebration] = useState(false);
 
   // Per-slot search state
@@ -102,7 +112,16 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
     if (data) setAllBlocks(data as Block[]);
   }, [userId]);
 
-  useEffect(() => { loadAllBlocks(); }, [loadAllBlocks]);
+  const loadAllHabits = useCallback(async () => {
+    const { data } = await supabase
+      .from('habits')
+      .select('id, name')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+    if (data) setAllHabits(data as Habit[]);
+  }, [userId]);
+
+  useEffect(() => { loadAllBlocks(); loadAllHabits(); }, [loadAllBlocks, loadAllHabits]);
 
   // Merge in any newly created blocks from the parent that may not be persisted yet
   useEffect(() => {
@@ -203,19 +222,41 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
 
   const [dragOverRank, setDragOverRank] = useState<number | null>(null);
 
-  function getFilteredBlocks(rank: number): { block: Block; alreadyAssigned: boolean }[] {
+  function getSearchResults(rank: number): SearchResult[] {
     const text = (searchText[rank] ?? '').trim().toLowerCase();
     const assignedToOtherRank = (b: Block) => priorities.some(p => p.block_id === b.id && p.priority_rank !== rank);
     const assignedToThisRank = (b: Block) => priorities.some(p => p.block_id === b.id && p.priority_rank === rank);
 
-    let filtered = allBlocks.filter(b => !assignedToThisRank(b));
-    if (text) {
-      filtered = filtered.filter(b => b.label.toLowerCase().includes(text));
-    } else {
-      filtered = filtered.filter(b => !assignedToOtherRank(b)).slice(0, 8);
+    if (!text) {
+      const blockResults: SearchResult[] = allBlocks
+        .filter(b => !assignedToThisRank(b) && !assignedToOtherRank(b))
+        .slice(0, 6)
+        .map(b => ({ kind: 'block', block: b, alreadyAssigned: false }));
+      const habitResults: SearchResult[] = allHabits
+        .slice(0, 4)
+        .map(h => ({ kind: 'habit', habit: h }));
+      return [...blockResults, ...habitResults].slice(0, 8);
     }
 
-    return filtered.map(b => ({ block: b, alreadyAssigned: assignedToOtherRank(b) }));
+    const blockResults: SearchResult[] = allBlocks
+      .filter(b => !assignedToThisRank(b) && b.label.toLowerCase().includes(text))
+      .map(b => ({ kind: 'block', block: b, alreadyAssigned: assignedToOtherRank(b) }));
+
+    const habitResults: SearchResult[] = allHabits
+      .filter(h => h.name.toLowerCase().includes(text))
+      .map(h => ({ kind: 'habit', habit: h }));
+
+    // Deduplicate: hide habits whose name already appears as a block result
+    const blockLabels = new Set(
+      blockResults
+        .filter((r): r is Extract<SearchResult, { kind: 'block' }> => r.kind === 'block')
+        .map(r => r.block.label.toLowerCase().replace(/^habit:\s*/i, ''))
+    );
+    const deduped = habitResults
+      .filter((r): r is Extract<SearchResult, { kind: 'habit' }> => r.kind === 'habit')
+      .filter(r => !blockLabels.has(r.habit.name.toLowerCase()));
+
+    return [...blockResults, ...deduped];
   }
 
   function handleSlotDragOver(e: React.DragEvent, rank: number) {
@@ -255,10 +296,17 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
       e.preventDefault();
       const text = (searchText[rank] ?? '').trim();
       if (!text) return;
-      const filtered = getFilteredBlocks(rank);
-      const exactMatch = filtered.find(({ block: b }) => b.label.toLowerCase() === text.toLowerCase());
-      if (exactMatch) {
-        await handleSelectBlock(rank, exactMatch.block.id);
+      const results = getSearchResults(rank);
+      const blockMatch = results.find((r): r is Extract<SearchResult, { kind: 'block' }> =>
+        r.kind === 'block' && r.block.label.toLowerCase() === text.toLowerCase()
+      );
+      const habitMatch = results.find((r): r is Extract<SearchResult, { kind: 'habit' }> =>
+        r.kind === 'habit' && r.habit.name.toLowerCase() === text.toLowerCase()
+      );
+      if (blockMatch) {
+        await handleSelectBlock(rank, blockMatch.block.id);
+      } else if (habitMatch) {
+        await handleSelectHabit(rank, habitMatch.habit.id);
       } else {
         const newId = await onCreateBlock(text);
         if (newId) {
@@ -274,6 +322,16 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
     setOpenDropdownRank(null);
     setSearchText(prev => ({ ...prev, [rank]: '' }));
     await setPriority(rank, blockId);
+  }
+
+  async function handleSelectHabit(rank: number, habitId: string) {
+    setOpenDropdownRank(null);
+    setSearchText(prev => ({ ...prev, [rank]: '' }));
+    const newBlockId = await onHabitDrop(habitId);
+    if (newBlockId) {
+      await setPriority(rank, newBlockId);
+      await loadAllBlocks();
+    }
   }
 
   async function handleCreateFromDropdown(rank: number) {
@@ -326,7 +384,7 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
           {priorities.map((priority, index) => {
             const color = priorityColors[index];
             const rank = priority.priority_rank;
-            const filteredResults = getFilteredBlocks(rank);
+            const filteredResults = getSearchResults(rank);
             const currentText = (searchText[rank] ?? '').trim();
 
             return (
@@ -380,24 +438,36 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
                           >
                             {filteredResults.length > 0 ? (
                               <>
-                                {filteredResults.map(({ block, alreadyAssigned }) => (
+                                {filteredResults.map(result => result.kind === 'block' ? (
                                   <div
-                                    key={block.id}
-                                    className={`priority-search-option${alreadyAssigned ? ' priority-search-option--assigned' : ''}`}
-                                    onMouseDown={e => { e.preventDefault(); handleSelectBlock(rank, block.id); }}
+                                    key={`block-${result.block.id}`}
+                                    className={`priority-search-option${result.alreadyAssigned ? ' priority-search-option--assigned' : ''}`}
+                                    onMouseDown={e => { e.preventDefault(); handleSelectBlock(rank, result.block.id); }}
                                   >
-                                    <span className="priority-search-option-label">{block.label}</span>
+                                    <span className="priority-search-option-label">{result.block.label}</span>
                                     <span className="priority-search-option-badges">
-                                      {alreadyAssigned && (
+                                      {result.alreadyAssigned && (
                                         <span className="priority-search-option-badge priority-search-option-badge--assigned">in use</span>
                                       )}
-                                      {block.day_index !== null && (
+                                      {result.block.day_index !== null && (
                                         <span className="priority-search-option-badge">scheduled</span>
                                       )}
                                     </span>
                                   </div>
+                                ) : (
+                                  <div
+                                    key={`habit-${result.habit.id}`}
+                                    className="priority-search-option priority-search-option--habit"
+                                    onMouseDown={e => { e.preventDefault(); handleSelectHabit(rank, result.habit.id); }}
+                                  >
+                                    <span className="priority-search-option-label">{result.habit.name}</span>
+                                    <span className="priority-search-option-badge priority-search-option-badge--habit">habit</span>
+                                  </div>
                                 ))}
-                                {currentText && !filteredResults.some(({ block: b }) => b.label.toLowerCase() === currentText.toLowerCase()) && (
+                                {currentText && !filteredResults.some(r =>
+                                  (r.kind === 'block' && r.block.label.toLowerCase() === currentText.toLowerCase()) ||
+                                  (r.kind === 'habit' && r.habit.name.toLowerCase() === currentText.toLowerCase())
+                                ) && (
                                   <div
                                     className="priority-search-option priority-search-option--create"
                                     onMouseDown={e => { e.preventDefault(); handleCreateFromDropdown(rank); }}
@@ -728,8 +798,17 @@ export default function PriorityPickerPanel({ userId, blocks, dragBlockId, dragH
           background: #fef3c7;
         }
 
+        .priority-search-option-badge--habit {
+          color: #0369a1;
+          background: #e0f2fe;
+        }
+
         .priority-search-option--assigned {
           opacity: 0.75;
+        }
+
+        .priority-search-option--habit:hover {
+          background: #f0f9ff;
         }
 
         .priority-search-empty {
