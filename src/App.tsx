@@ -17,6 +17,7 @@ import { updateSessionGroups } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
 import PriorityPickerPanel from "./components/PriorityPickerPanel";
 import QuickStartTemplateModal from "./components/QuickStartTemplateModal";
+import QuickHabitForm from "./components/QuickHabitForm";
 import GhostBlock from "./components/GhostBlock";
 import { generateGhostBlocks, dismissPattern, acceptGhostBlock, type GhostBlock as GhostBlockType } from "./services/patternAnalysis";
 import { generateStandingBlocksForWeek } from "./services/standingBlocks";
@@ -221,6 +222,7 @@ const App: React.FC = () => {
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showTemplateNote, setShowTemplateNote] = useState(true);
+  const [showQuickHabit, setShowQuickHabit] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -3174,6 +3176,15 @@ const App: React.FC = () => {
                 >
                   Checklist
                 </button>
+                <button
+                  type="button"
+                  className="copy-week-btn"
+                  onClick={() => setShowQuickHabit((v) => !v)}
+                  title="Quick add habit"
+                  style={{ background: showQuickHabit ? '#2563eb' : undefined, color: showQuickHabit ? 'white' : undefined, border: showQuickHabit ? 'none' : undefined }}
+                >
+                  + Habit
+                </button>
               </div>
             </div>
 
@@ -3489,6 +3500,16 @@ const App: React.FC = () => {
           userId={user.id}
           themes={themes}
           onClose={() => setShowAnalytics(false)}
+        />
+      )}
+
+      {showQuickHabit && user && (
+        <QuickHabitForm
+          themes={themes}
+          onClose={() => setShowQuickHabit(false)}
+          onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
+            await addHabitToTheme(themeId, name, targetPerWeek, frequency);
+          }}
         />
       )}
 
