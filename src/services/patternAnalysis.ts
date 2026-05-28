@@ -176,6 +176,7 @@ export async function acceptGhostBlock(
       day_index: ghostBlock.day_index,
       time_index: ghostBlock.time_index,
       week_start_date: weekStartDate,
+      location_type: 'slot',
       pattern_id: ghostBlock.pattern_id,
       is_suggested: false,
       completed: false

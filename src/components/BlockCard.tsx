@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
 import type { Block, WorkoutData } from "../App";
+import type { BlockTask } from "../services/database";
 import PriorityBadge from "./PriorityBadge";
 import BlockCreditPopover from "./BlockCreditPopover";
 import { WorkoutInputs } from "./WorkoutInputs";
@@ -46,6 +47,12 @@ type BlockCardProps = {
   onUpdateWorkout?: (blockId: string, data: WorkoutData) => void;
   onSubmitWorkout?: (blockId: string) => void;
 
+  // notes + tasks
+  onSaveBlockNote?: (blockId: string, content: string) => void;
+  onAddBlockTask?: (blockId: string, label: string) => void;
+  onToggleBlockTask?: (blockId: string, taskId: string) => void;
+  onDeleteBlockTask?: (blockId: string, taskId: string) => void;
+
   // themed-specific
   convertingBlockId?: string | null;
   convertFrequency?: "daily" | "weekly" | "monthly" | "none";
@@ -87,6 +94,10 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   isStrengthTraining,
   onUpdateWorkout,
   onSubmitWorkout,
+  onSaveBlockNote,
+  onAddBlockTask,
+  onToggleBlockTask,
+  onDeleteBlockTask,
   convertingBlockId,
   convertFrequency,
   convertTarget,
@@ -103,6 +114,35 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const hasSessionGroup = !!block.sessionGroup;
   const sessionColor = block.sessionGroup?.accent_color || "";
   const hasMeal = !!block.mealId && !!block.mealType;
+
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [noteValue, setNoteValue] = useState(block.blockNote ?? "");
+  const [newTaskLabel, setNewTaskLabel] = useState("");
+  const noteSaveTimer = useRef<number | null>(null);
+
+  // Keep noteValue in sync if block.blockNote changes externally
+  useEffect(() => {
+    setNoteValue(block.blockNote ?? "");
+  }, [block.blockNote]);
+
+  const handleNoteChange = (val: string) => {
+    setNoteValue(val);
+    if (noteSaveTimer.current) clearTimeout(noteSaveTimer.current);
+    noteSaveTimer.current = window.setTimeout(() => {
+      onSaveBlockNote?.(block.id, val);
+    }, 800);
+  };
+
+  const handleAddTask = () => {
+    if (!newTaskLabel.trim()) return;
+    onAddBlockTask?.(block.id, newTaskLabel);
+    setNewTaskLabel("");
+  };
+
+  const tasks: BlockTask[] = block.blockTasks ?? [];
+  const completedTaskCount = tasks.filter((t) => t.completed).length;
+  const hasNoteContent = (block.blockNote ?? "").trim().length > 0;
+  const hasDetailContent = tasks.length > 0 || hasNoteContent;
 
   const blockClass = [
     "block",
@@ -320,6 +360,29 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           )}
         </div>
 
+        {/* Tasks progress indicator (collapsed) */}
+        {tasks.length > 0 && !detailOpen && (
+          <div
+            className="block-tasks-pill"
+            onClick={(e) => { e.stopPropagation(); setDetailOpen(true); }}
+            title="View tasks"
+          >
+            <span className="block-tasks-pill-check">&#10003;</span>
+            {completedTaskCount}/{tasks.length}
+          </div>
+        )}
+
+        {/* Notes/Tasks toggle button */}
+        {(onSaveBlockNote || onAddBlockTask) && (
+          <button
+            className={`block-detail-toggle ${detailOpen ? "active" : ""} ${hasDetailContent ? "has-content" : ""}`}
+            onClick={(e) => { e.stopPropagation(); setDetailOpen((v) => !v); }}
+            title={detailOpen ? "Hide notes & tasks" : "Notes & tasks"}
+          >
+            &#9776;
+          </button>
+        )}
+
         {variant === "themed" && !block.isHabitBlock && (
           <button
             type="button"
@@ -362,6 +425,81 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           </button>
         )}
       </div>
+
+      {/* Inline notes + tasks panel */}
+      {detailOpen && (
+        <div className="block-detail-panel" onClick={(e) => e.stopPropagation()}>
+          {/* Tasks */}
+          {(onAddBlockTask || tasks.length > 0) && (
+            <div className="block-detail-section">
+              <div className="block-detail-section-label">Tasks</div>
+              {tasks.length > 0 && (
+                <ul className="block-task-list">
+                  {tasks.map((task) => (
+                    <li key={task.id} className={`block-task-item ${task.completed ? "block-task-done" : ""}`}>
+                      <label className="block-task-label">
+                        <input
+                          type="checkbox"
+                          checked={task.completed}
+                          onChange={() => onToggleBlockTask?.(block.id, task.id)}
+                        />
+                        <span>{task.label}</span>
+                      </label>
+                      <button
+                        className="block-task-delete"
+                        onClick={() => onDeleteBlockTask?.(block.id, task.id)}
+                        title="Remove task"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {onAddBlockTask && (
+                <div className="block-task-add-row">
+                  <input
+                    type="text"
+                    className="block-task-input"
+                    placeholder="Add a task..."
+                    value={newTaskLabel}
+                    onChange={(e) => setNewTaskLabel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAddTask();
+                      if (e.key === "Escape") setNewTaskLabel("");
+                    }}
+                  />
+                  <button
+                    className="block-task-add-btn"
+                    onClick={handleAddTask}
+                    disabled={!newTaskLabel.trim()}
+                  >
+                    +
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Notes */}
+          {onSaveBlockNote && (
+            <div className="block-detail-section">
+              <div className="block-detail-section-label">Notes</div>
+              <textarea
+                className="block-note-textarea"
+                value={noteValue}
+                onChange={(e) => handleNoteChange(e.target.value)}
+                placeholder="Add a note..."
+                rows={2}
+                onClick={(e) => e.stopPropagation()}
+              />
+              {block.isHabitBlock && (
+                <div className="block-note-hint">Notes are also saved to habit notes</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {variant === "themed" && convertingBlockId === block.id && (
         <div className="convert-to-habit-form">

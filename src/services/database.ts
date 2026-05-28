@@ -196,6 +196,26 @@ export type BlockActivityLog = {
   created_at: string;
 };
 
+export type BlockNote = {
+  id: string;
+  block_id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BlockTask = {
+  id: string;
+  block_id: string;
+  user_id: string;
+  label: string;
+  completed: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export const database = {
   habitGroups: {
     async getAll(userId: string) {
@@ -1202,6 +1222,118 @@ export const database = {
         .eq("user_id", userId)
         .eq("item_id", itemId)
         .eq("completed_date", completedDate);
+
+      if (error) throw error;
+    },
+  },
+
+  blockNotes: {
+    async getByBlock(blockId: string) {
+      const { data, error } = await supabase
+        .from("block_notes")
+        .select("*")
+        .eq("block_id", blockId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as BlockNote | null;
+    },
+
+    async getByBlocks(blockIds: string[]) {
+      if (blockIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("block_notes")
+        .select("*")
+        .in("block_id", blockIds);
+
+      if (error) throw error;
+      return data as BlockNote[];
+    },
+
+    async upsert(userId: string, blockId: string, content: string) {
+      const { data, error } = await supabase
+        .from("block_notes")
+        .upsert(
+          {
+            block_id: blockId,
+            user_id: userId,
+            content,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "block_id,user_id" }
+        )
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as BlockNote;
+    },
+
+    async delete(blockId: string) {
+      const { error } = await supabase
+        .from("block_notes")
+        .delete()
+        .eq("block_id", blockId);
+
+      if (error) throw error;
+    },
+  },
+
+  blockTasks: {
+    async getByBlock(blockId: string) {
+      const { data, error } = await supabase
+        .from("block_tasks")
+        .select("*")
+        .eq("block_id", blockId)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      return data as BlockTask[];
+    },
+
+    async getByBlocks(blockIds: string[]) {
+      if (blockIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("block_tasks")
+        .select("*")
+        .in("block_id", blockIds)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+      return data as BlockTask[];
+    },
+
+    async create(userId: string, blockId: string, label: string, sortOrder: number) {
+      const { data, error } = await supabase
+        .from("block_tasks")
+        .insert({ user_id: userId, block_id: blockId, label, sort_order: sortOrder, completed: false })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as BlockTask;
+    },
+
+    async update(id: string, updates: Partial<Pick<BlockTask, "label" | "completed" | "sort_order">>) {
+      const { data, error } = await supabase
+        .from("block_tasks")
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as BlockTask;
+    },
+
+    async delete(id: string) {
+      const { error } = await supabase
+        .from("block_tasks")
+        .delete()
+        .eq("id", id);
 
       if (error) throw error;
     },

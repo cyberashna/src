@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 
 export let currentDragBlockId: string | null = null;
 import "./App.css";
@@ -11,7 +11,7 @@ import { ToastContainer, createToastId } from "./components/Toast";
 import type { ToastItem } from "./components/Toast";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 
-import { database, SessionGroup, Habit as DBHabit, Block as DBBlock, Meal } from "./services/database";
+import { database, SessionGroup, Habit as DBHabit, Block as DBBlock, Meal, BlockTask } from "./services/database";
 import MealForm from "./components/MealForm";
 import { updateSessionGroups } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
@@ -22,6 +22,7 @@ import GhostBlock from "./components/GhostBlock";
 import { generateGhostBlocks, dismissPattern, acceptGhostBlock, type GhostBlock as GhostBlockType } from "./services/patternAnalysis";
 import { generateStandingBlocksForWeek } from "./services/standingBlocks";
 import DailyEssentials from "./components/DailyEssentials";
+import DailyFocus from "./components/DailyFocus";
 import MoodTracker from "./components/MoodTracker";
 import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
@@ -87,9 +88,13 @@ export type Block = {
   creditedHabitIds?: string[];
   mealId?: string;
   mealType?: "breakfast" | "lunch" | "dinner";
+  blockNote?: string;
+  blockTasks?: BlockTask[];
 };
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const formatTimeSince = (timestamp: string): string => {
   const now = new Date();
@@ -128,6 +133,21 @@ const hourlySlots = [
   "10:00 PM",
 ];
 
+// Canonical hourly index for each bucket slot when saving a block.
+// Early morning=6AM(0), Morning=9AM(3), Afternoon=3PM(9), Evening=6PM(12), Night=9PM(15)
+const BUCKET_TO_HOURLY: Record<number, number> = { 0: 0, 1: 3, 2: 9, 3: 12, 4: 15 };
+
+// Maps an hourly index back to a bucket index for display in bucket view.
+// Anchors: Early morning=6AM(0), Morning=9AM(3), Afternoon=3PM(9), Evening=6PM(12), Night=9PM(15)
+// Ranges:  0–2→Early morning, 3–8→Morning, 9–11→Afternoon, 12–14→Evening, 15–16→Night
+const getBucketForHourlyIndex = (hourlyIndex: number): number => {
+  if (hourlyIndex <= 2) return 0;
+  if (hourlyIndex <= 8) return 1;
+  if (hourlyIndex <= 11) return 2;
+  if (hourlyIndex <= 14) return 3;
+  return 4;
+};
+
 type ViewMode = "hourly" | "buckets";
 
 const App: React.FC = () => {
@@ -136,6 +156,33 @@ const App: React.FC = () => {
   const [dataLoading, setDataLoading] = useState(false);
 
   const [weekOffset, setWeekOffset] = useState<number>(0);
+
+  const [leftColWidth, setLeftColWidth] = useState<number>(320);
+  const isResizing = useRef(false);
+  const resizeStartX = useRef(0);
+  const resizeStartWidth = useRef(0);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    isResizing.current = true;
+    resizeStartX.current = e.clientX;
+    resizeStartWidth.current = leftColWidth;
+    e.preventDefault();
+  }, [leftColWidth]);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isResizing.current) return;
+      const delta = e.clientX - resizeStartX.current;
+      setLeftColWidth(Math.max(240, Math.min(600, resizeStartWidth.current + delta)));
+    };
+    const onMouseUp = () => { isResizing.current = false; };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
 
   const [themes, setThemes] = useState<Theme[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -160,6 +207,7 @@ const App: React.FC = () => {
   const [newThemeHabitGroupId, setNewThemeHabitGroupId] = useState<string>("");
   const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [collapsedSubtasks, setCollapsedSubtasks] = useState<Set<string>>(new Set());
 
   const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
   const [editHabitName, setEditHabitName] = useState("");
@@ -217,6 +265,7 @@ const App: React.FC = () => {
   const [convertGroupId, setConvertGroupId] = useState("");
 
   const [ghostBlocks, setGhostBlocks] = useState<GhostBlockType[]>([]);
+  const [showGhostBlocks, setShowGhostBlocks] = useState(true);
   const [showQuickStartModal, setShowQuickStartModal] = useState(false);
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
@@ -316,10 +365,12 @@ const App: React.FC = () => {
       });
 
       const blockIds = blocksData.map((b) => b.id);
-      const [workoutDataArray, blockCreditsArray, mealBlockLinksArray] = await Promise.all([
+      const [workoutDataArray, blockCreditsArray, mealBlockLinksArray, blockNotesArray, blockTasksArray] = await Promise.all([
         blockIds.length > 0 ? database.workoutData.getByBlockIds(blockIds) : Promise.resolve([]),
         blockIds.length > 0 ? database.blockHabitCredits.getByBlocks(blockIds) : Promise.resolve([]),
         blockIds.length > 0 ? database.mealBlockLinks.getByBlocks(blockIds) : Promise.resolve([]),
+        blockIds.length > 0 ? database.blockNotes.getByBlocks(blockIds) : Promise.resolve([]),
+        blockIds.length > 0 ? database.blockTasks.getByBlocks(blockIds) : Promise.resolve([]),
       ]);
 
       const workoutDataMap = new Map(
@@ -346,6 +397,14 @@ const App: React.FC = () => {
       const mealLinkByBlock = new Map(mealBlockLinksArray.map((ml) => [ml.block_id, ml.meal_id]));
       const mealMap = new Map(mealsData.map((m) => [m.id, m]));
 
+      const blockNoteByBlock = new Map(blockNotesArray.map((n) => [n.block_id, n.content]));
+      const blockTasksByBlock = new Map<string, BlockTask[]>();
+      blockTasksArray.forEach((t) => {
+        const existing = blockTasksByBlock.get(t.block_id) ?? [];
+        existing.push(t);
+        blockTasksByBlock.set(t.block_id, existing);
+      });
+
       const convertedBlocks: Block[] = blocksData.map((b) => {
         const mealId = mealLinkByBlock.get(b.id);
         const linkedMeal = mealId ? mealMap.get(mealId) : undefined;
@@ -366,6 +425,8 @@ const App: React.FC = () => {
           creditedHabitIds: creditsByBlock.get(b.id) ?? [],
           mealId: mealId ?? undefined,
           mealType: linkedMeal?.meal_type ?? undefined,
+          blockNote: blockNoteByBlock.get(b.id),
+          blockTasks: blockTasksByBlock.get(b.id) ?? [],
           location:
             b.location_type === "slot" && b.day_index !== null && b.time_index !== null
               ? { type: "slot", dayIndex: b.day_index, timeIndex: b.time_index }
@@ -774,6 +835,8 @@ const App: React.FC = () => {
     const now = new Date().toISOString();
     const newCount = habit.doneCount + 1;
 
+    const ancestorIds = getHabitAncestorIds(habitId);
+
     try {
       await database.habits.update(habitId, {
         done_count: newCount,
@@ -790,6 +853,26 @@ const App: React.FC = () => {
           })),
         }))
       );
+
+      for (const ancestorId of ancestorIds) {
+        const ancestor = allHabits.find((h) => h.id === ancestorId);
+        if (!ancestor) continue;
+        const ancestorNewCount = ancestor.doneCount + 1;
+        await database.habits.update(ancestorId, {
+          done_count: ancestorNewCount,
+          last_done_at: now,
+        });
+        setThemes((prevThemes) =>
+          prevThemes.map((theme) => ({
+            ...theme,
+            habits: updateHabitInTree(theme.habits, ancestorId, (h) => ({
+              ...h,
+              doneCount: ancestorNewCount,
+              lastDoneAt: now,
+            })),
+          }))
+        );
+      }
 
       const theme = themes.find((t) => flattenHabits(t.habits, t.name).some((h) => h.id === habitId));
       if (theme) {
@@ -870,6 +953,18 @@ const App: React.FC = () => {
 
   const toggleHabitExpanded = (habitId: string) => {
     setExpandedHabits((prev) => {
+      const next = new Set(prev);
+      if (next.has(habitId)) {
+        next.delete(habitId);
+      } else {
+        next.add(habitId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSubtaskCollapse = (habitId: string) => {
+    setCollapsedSubtasks((prev) => {
       const next = new Set(prev);
       if (next.has(habitId)) {
         next.delete(habitId);
@@ -1150,6 +1245,8 @@ const App: React.FC = () => {
         theme_id: habitTheme?.id ?? null,
       });
 
+      const ancestorIds = getHabitAncestorIds(habitId);
+
       const newBlock: Block = {
         id: blockData.id,
         label: blockData.label,
@@ -1162,8 +1259,12 @@ const App: React.FC = () => {
         isLinkedGroup: blockData.is_linked_group,
         workoutSubmitted: blockData.workout_submitted,
         themeId: habitTheme?.id,
-        creditedHabitIds: [],
+        creditedHabitIds: ancestorIds.length > 0 ? ancestorIds : [],
       };
+
+      if (ancestorIds.length > 0) {
+        await saveBlockCredits(blockData.id, ancestorIds);
+      }
 
       setBlocks((currentBlocks) => [...currentBlocks, newBlock]);
 
@@ -1331,6 +1432,8 @@ const App: React.FC = () => {
         daily_template_id: null,
       });
 
+      const ancestorIds = getHabitAncestorIds(habitId);
+
       const newBlock: Block = {
         id: blockData.id,
         label: blockData.label,
@@ -1342,7 +1445,12 @@ const App: React.FC = () => {
         linkedBlockId: blockData.linked_block_id ?? undefined,
         isLinkedGroup: blockData.is_linked_group,
         workoutSubmitted: blockData.workout_submitted,
+        creditedHabitIds: ancestorIds.length > 0 ? ancestorIds : undefined,
       };
+
+      if (ancestorIds.length > 0) {
+        await saveBlockCredits(blockData.id, ancestorIds);
+      }
 
       setBlocks((currentBlocks) => [...currentBlocks, newBlock]);
       await refreshSessionGroups();
@@ -1641,6 +1749,17 @@ const App: React.FC = () => {
     }
   };
 
+  const markBlockDone = async (blockId: string) => {
+    const block = blocks.find((b) => b.id === blockId);
+    if (!block || block.completed) return;
+    if (block.isHabitBlock && block.habitId) {
+      await toggleBlockCompletion(blockId);
+    } else {
+      await database.blocks.update(blockId, { completed: true });
+      setBlocks((prev) => prev.map((b) => b.id === blockId ? { ...b, completed: true } : b));
+    }
+  };
+
   const saveBlockCredits = async (blockId: string, creditedHabitIds: string[]) => {
     if (!user) return;
     const block = blocks.find((b) => b.id === blockId);
@@ -1663,6 +1782,84 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error saving block credits:", error);
       showToast("Failed to save credits", "error");
+    }
+  };
+
+  const saveBlockNote = async (blockId: string, content: string) => {
+    if (!user) return;
+    try {
+      await database.blockNotes.upsert(user.id, blockId, content);
+      setBlocks((prev) =>
+        prev.map((b) => (b.id === blockId ? { ...b, blockNote: content } : b))
+      );
+
+      // If this block is a habit block, also append/sync to the habit note
+      const block = blocks.find((b) => b.id === blockId);
+      if (block?.habitId && content.trim()) {
+        const existing = await database.habitNotes.getByHabit(block.habitId);
+        const blockHeader = `[Block: ${block.label}]`;
+        const currentContent = existing?.content ?? "";
+        // Replace existing block section or append
+        const blockSectionRegex = new RegExp(`\\[Block: ${escapeRegex(block.label)}\\][^\\[]*`, "g");
+        const newContent = blockSectionRegex.test(currentContent)
+          ? currentContent.replace(blockSectionRegex, `${blockHeader}\n${content}\n\n`)
+          : currentContent
+            ? `${currentContent}\n\n${blockHeader}\n${content}`
+            : `${blockHeader}\n${content}`;
+        await database.habitNotes.upsert(user.id, block.habitId, newContent.trim());
+      }
+    } catch (error) {
+      console.error("Error saving block note:", error);
+    }
+  };
+
+  const addBlockTask = async (blockId: string, label: string) => {
+    if (!user || !label.trim()) return;
+    try {
+      const block = blocks.find((b) => b.id === blockId);
+      const existingTasks = block?.blockTasks ?? [];
+      const sortOrder = existingTasks.length;
+      const newTask = await database.blockTasks.create(user.id, blockId, label.trim(), sortOrder);
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId ? { ...b, blockTasks: [...(b.blockTasks ?? []), newTask] } : b
+        )
+      );
+    } catch (error) {
+      console.error("Error adding block task:", error);
+    }
+  };
+
+  const toggleBlockTask = async (blockId: string, taskId: string) => {
+    const block = blocks.find((b) => b.id === blockId);
+    const task = block?.blockTasks?.find((t) => t.id === taskId);
+    if (!task) return;
+    try {
+      const updated = await database.blockTasks.update(taskId, { completed: !task.completed });
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId
+            ? { ...b, blockTasks: b.blockTasks?.map((t) => (t.id === taskId ? updated : t)) }
+            : b
+        )
+      );
+    } catch (error) {
+      console.error("Error toggling block task:", error);
+    }
+  };
+
+  const deleteBlockTask = async (blockId: string, taskId: string) => {
+    try {
+      await database.blockTasks.delete(taskId);
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId
+            ? { ...b, blockTasks: b.blockTasks?.filter((t) => t.id !== taskId) }
+            : b
+        )
+      );
+    } catch (error) {
+      console.error("Error deleting block task:", error);
     }
   };
 
@@ -1786,13 +1983,15 @@ const App: React.FC = () => {
   );
 
   const getBlocksForSlot = (dayIndex: number, timeIndex: number) => {
-    return blocks.filter(
-      (b) =>
-        b.location.type === "slot" &&
-        b.location.dayIndex === dayIndex &&
-        b.location.timeIndex === timeIndex &&
-        !(b.linkedBlockId && !b.isLinkedGroup)
-    );
+    return blocks.filter((b) => {
+      if (b.location.type !== "slot") return false;
+      if (b.location.dayIndex !== dayIndex) return false;
+      if (b.linkedBlockId && !b.isLinkedGroup) return false;
+      if (viewMode === "buckets") {
+        return getBucketForHourlyIndex(b.location.timeIndex) === timeIndex;
+      }
+      return b.location.timeIndex === timeIndex;
+    });
   };
 
   const hasAdjacentBlockBelow = (block: Block): boolean => {
@@ -1820,11 +2019,12 @@ const App: React.FC = () => {
     e.preventDefault();
     e.currentTarget.classList.remove("drag-over");
 
+    const hourlyIndex = viewMode === "buckets" ? BUCKET_TO_HOURLY[timeIndex] ?? timeIndex : timeIndex;
     const droppedBlockId = currentDragBlockId || dragBlockId;
     if (droppedBlockId) {
-      moveBlockToSlot(droppedBlockId, dayIndex, timeIndex);
+      moveBlockToSlot(droppedBlockId, dayIndex, hourlyIndex);
     } else if (dragHabitId) {
-      createHabitBlockAtSlot(dragHabitId, dayIndex, timeIndex);
+      createHabitBlockAtSlot(dragHabitId, dayIndex, hourlyIndex);
     }
   };
 
@@ -2102,8 +2302,15 @@ const App: React.FC = () => {
 
   return (
     <>
-      <div className="app">
+      <div className="app" style={{ gridTemplateColumns: `${leftColWidth}px 4px 1fr` }}>
         <div className="left-column">
+          <DailyFocus
+            blocks={blocks}
+            dailyPriorities={dailyPriorities}
+            todayDayIndex={todayDayIndex}
+            weekOffset={weekOffset}
+            onComplete={markBlockDone}
+          />
           <PriorityPickerPanel
             userId={user.id}
             blocks={blocks.map(b => ({
@@ -2353,6 +2560,9 @@ const App: React.FC = () => {
                                   const target = habit.targetPerWeek;
                                   const pct = habit.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
                                   const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
+                                  const creditedBySubtask = blocks.some(
+                                    (b) => b.completed && b.creditedHabitIds?.includes(habit.id)
+                                  );
                                   return (
                                   <div style={{
                                     paddingLeft: "28px",
@@ -2392,10 +2602,18 @@ const App: React.FC = () => {
                                           <div className="habit-progress-bar-track">
                                             <div className={`habit-progress-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
                                           </div>
+                                          {creditedBySubtask && (
+                                            <span className="habit-credited-badge">+subtask</span>
+                                          )}
                                         </div>
                                       )}
                                       {habit.frequency === "none" && (
-                                        <div className="habit-meta">Done: {done}</div>
+                                        <div className="habit-meta">
+                                          Done: {done}
+                                          {creditedBySubtask && (
+                                            <span className="habit-credited-badge" style={{ marginLeft: 6 }}>+subtask</span>
+                                          )}
+                                        </div>
                                       )}
                                     </div>
                                   </div>
@@ -2587,127 +2805,190 @@ const App: React.FC = () => {
                                       </button>
                                     </div>
 
-                                    {habit.subtasks.length > 0 && (
-                                      <div className="subtask-list">
-                                        <div className="subtask-list-label">Subtasks</div>
-                                        {habit.subtasks.map((subtask) => {
-                                          const done = getHabitDoneCount(subtask.id, subtask.frequency);
-                                          const target = subtask.targetPerWeek;
-                                          const pct = subtask.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
-                                          const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
-                                          return (
-                                            <div key={subtask.id} className="subtask-item">
-                                              <div className="subtask-item-info">
-                                                <span
-                                                  className="subtask-drag-area"
-                                                  draggable
-                                                  onDragStart={(e) => handleHabitDragStart(subtask.id, e)}
-                                                  onDragEnd={handleHabitDragEnd}
-                                                  title="Drag to schedule this subtask"
-                                                >
-                                                  {subtask.name}
-                                                </span>
-                                                <span className="subtask-freq-badge" style={{
-                                                  background: subtask.frequency === "daily" ? "#fef08a" : subtask.frequency === "weekly" ? "#bfdbfe" : subtask.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
-                                                  color: subtask.frequency === "daily" ? "#713f12" : subtask.frequency === "weekly" ? "#1e3a8a" : subtask.frequency === "monthly" ? "#581c87" : "#374151",
-                                                }}>
-                                                  {subtask.frequency === "daily" ? "D" : subtask.frequency === "weekly" ? "W" : subtask.frequency === "monthly" ? "M" : "N"}
-                                                </span>
-                                              </div>
-                                              {subtask.frequency !== "none" && (
-                                                <div className="subtask-progress">
-                                                  <span className="subtask-fraction">{done}/{target}</span>
-                                                  <div className="subtask-bar-track">
-                                                    <div className={`subtask-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
-                                                  </div>
+                                    {(() => {
+                                      const themeId = themes.find((t) =>
+                                        flattenHabits(t.habits, t.name).some((h) => h.id === habit.id)
+                                      )?.id;
+
+                                      const renderSubtaskItem = (subtask: Habit, depth = 0): React.ReactNode => {
+                                        const done = getHabitDoneCount(subtask.id, subtask.frequency);
+                                        const target = subtask.targetPerWeek;
+                                        const pct = subtask.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
+                                        const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
+                                        return (
+                                          <div key={subtask.id}>
+                                            <div className="subtask-item">
+                                              <div className="subtask-item-row">
+                                                <div className="subtask-item-info">
+                                                  <span
+                                                    className="subtask-drag-area"
+                                                    draggable
+                                                    onDragStart={(e) => handleHabitDragStart(subtask.id, e)}
+                                                    onDragEnd={handleHabitDragEnd}
+                                                    title={subtask.name}
+                                                  >
+                                                    {subtask.name}
+                                                  </span>
+                                                  <span className="subtask-freq-badge" style={{
+                                                    background: subtask.frequency === "daily" ? "#fef08a" : subtask.frequency === "weekly" ? "#bfdbfe" : subtask.frequency === "monthly" ? "#d8b4fe" : "#e5e7eb",
+                                                    color: subtask.frequency === "daily" ? "#713f12" : subtask.frequency === "weekly" ? "#1e3a8a" : subtask.frequency === "monthly" ? "#581c87" : "#374151",
+                                                  }}>
+                                                    {subtask.frequency === "daily" ? "D" : subtask.frequency === "weekly" ? "W" : subtask.frequency === "monthly" ? "M" : "N"}
+                                                  </span>
                                                 </div>
-                                              )}
-                                              <div className="subtask-actions">
-                                                <button
-                                                  className="subtask-done-btn"
-                                                  onClick={() => incrementHabit(subtask.id)}
-                                                  title="Mark done"
-                                                >
-                                                  Done
-                                                </button>
-                                                <button
-                                                  className="subtask-delete-btn"
-                                                  onClick={() => deleteHabit(subtask.id)}
-                                                  title="Delete subtask"
-                                                >
-                                                  ×
-                                                </button>
+                                                {subtask.frequency !== "none" && (
+                                                  <div className="subtask-progress">
+                                                    <span className="subtask-fraction">{done}/{target}</span>
+                                                    <div className="subtask-bar-track">
+                                                      <div className={`subtask-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
+                                                    </div>
+                                                  </div>
+                                                )}
+                                                <div className="subtask-actions">
+                                                  <button
+                                                    className="subtask-done-btn"
+                                                    onClick={() => incrementHabit(subtask.id)}
+                                                    title="Mark done"
+                                                  >
+                                                    Done
+                                                  </button>
+                                                  {depth < 1 && (
+                                                  <button
+                                                    className="subtask-add-btn"
+                                                    onClick={() => {
+                                                      setAddingSubtaskForHabitId(subtask.id);
+                                                      setNewSubtaskName("");
+                                                      setNewSubtaskFrequency("weekly");
+                                                      setNewSubtaskTarget(2);
+                                                    }}
+                                                    title="Add subtask"
+                                                  >
+                                                    + Sub
+                                                  </button>
+                                                  )}
+                                                  <button
+                                                    className="subtask-delete-btn"
+                                                    onClick={() => deleteHabit(subtask.id)}
+                                                    title="Delete subtask"
+                                                  >
+                                                    ×
+                                                  </button>
+                                                </div>
                                               </div>
                                             </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
+                                            {addingSubtaskForHabitId === subtask.id && themeId && (
+                                              <div className="subtask-add-form" style={{ marginLeft: 12 }}>
+                                                <div className="subtask-list-label">New subtask</div>
+                                                <input
+                                                  type="text"
+                                                  value={newSubtaskName}
+                                                  onChange={(e) => setNewSubtaskName(e.target.value)}
+                                                  placeholder="e.g. Warm-up squats"
+                                                  className="subtask-input"
+                                                  autoFocus
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === "Enter") addSubtask(subtask, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency);
+                                                    if (e.key === "Escape") setAddingSubtaskForHabitId(null);
+                                                  }}
+                                                />
+                                                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                                  <select
+                                                    value={newSubtaskFrequency}
+                                                    onChange={(e) => setNewSubtaskFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
+                                                    style={{ fontSize: 11, padding: "2px 4px" }}
+                                                  >
+                                                    <option value="daily">Daily</option>
+                                                    <option value="weekly">Weekly</option>
+                                                    <option value="monthly">Monthly</option>
+                                                    <option value="none">No Target</option>
+                                                  </select>
+                                                  {newSubtaskFrequency !== "none" && (
+                                                    <input
+                                                      type="number"
+                                                      min={1}
+                                                      max={newSubtaskFrequency === "daily" ? 7 : newSubtaskFrequency === "weekly" ? 14 : 28}
+                                                      value={newSubtaskTarget}
+                                                      onChange={(e) => setNewSubtaskTarget(parseInt(e.target.value || "1", 10))}
+                                                      style={{ fontSize: 11, padding: "2px 4px", width: 48 }}
+                                                    />
+                                                  )}
+                                                  <button type="button" style={{ fontSize: 11 }} onClick={() => addSubtask(subtask, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency)}>Save</button>
+                                                  <button type="button" className="secondary" style={{ fontSize: 11 }} onClick={() => setAddingSubtaskForHabitId(null)}>Cancel</button>
+                                                </div>
+                                              </div>
+                                            )}
+                                            {subtask.subtasks.length > 0 && (
+                                              <div className="subtask-nested-list">
+                                                {subtask.subtasks.map((s) => renderSubtaskItem(s, depth + 1))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      };
 
-                                    {addingSubtaskForHabitId === habit.id && (
-                                      <div className="subtask-add-form">
-                                        <div className="subtask-list-label">New subtask</div>
-                                        <input
-                                          type="text"
-                                          value={newSubtaskName}
-                                          onChange={(e) => setNewSubtaskName(e.target.value)}
-                                          placeholder="e.g. Warm-up squats"
-                                          className="subtask-input"
-                                          autoFocus
-                                          onKeyDown={(e) => {
-                                            if (e.key === "Enter") {
-                                              const themeId = themes.find((t) =>
-                                                flattenHabits(t.habits, t.name).some((h) => h.id === habit.id)
-                                              )?.id;
-                                              if (themeId) addSubtask(habit, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency);
-                                            }
-                                            if (e.key === "Escape") setAddingSubtaskForHabitId(null);
-                                          }}
-                                        />
-                                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                                          <select
-                                            value={newSubtaskFrequency}
-                                            onChange={(e) => setNewSubtaskFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
-                                            style={{ fontSize: 11, padding: "2px 4px" }}
-                                          >
-                                            <option value="daily">Daily</option>
-                                            <option value="weekly">Weekly</option>
-                                            <option value="monthly">Monthly</option>
-                                            <option value="none">No Target</option>
-                                          </select>
-                                          {newSubtaskFrequency !== "none" && (
-                                            <input
-                                              type="number"
-                                              min={1}
-                                              max={newSubtaskFrequency === "daily" ? 7 : newSubtaskFrequency === "weekly" ? 14 : 28}
-                                              value={newSubtaskTarget}
-                                              onChange={(e) => setNewSubtaskTarget(parseInt(e.target.value || "1", 10))}
-                                              style={{ fontSize: 11, padding: "2px 4px", width: 48 }}
-                                            />
+                                      const subtasksCollapsed = collapsedSubtasks.has(habit.id);
+
+                                      return (
+                                        <>
+                                          {habit.subtasks.length > 0 && (
+                                            <div className="subtask-list">
+                                              <div className="subtask-list-label subtask-list-label-row">
+                                                <span>Subtasks ({habit.subtasks.length})</span>
+                                                <button
+                                                  className="subtask-collapse-btn"
+                                                  onClick={() => toggleSubtaskCollapse(habit.id)}
+                                                  title={subtasksCollapsed ? "Expand subtasks" : "Collapse subtasks"}
+                                                >
+                                                  <span style={{ display: "inline-block", transform: subtasksCollapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.2s ease" }}>▾</span>
+                                                </button>
+                                              </div>
+                                              {!subtasksCollapsed && habit.subtasks.map((s) => renderSubtaskItem(s, 0))}
+                                            </div>
                                           )}
-                                          <button
-                                            type="button"
-                                            style={{ fontSize: 11 }}
-                                            onClick={() => {
-                                              const themeId = themes.find((t) =>
-                                                flattenHabits(t.habits, t.name).some((h) => h.id === habit.id)
-                                              )?.id;
-                                              if (themeId) addSubtask(habit, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency);
-                                            }}
-                                          >
-                                            Save
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className="secondary"
-                                            style={{ fontSize: 11 }}
-                                            onClick={() => setAddingSubtaskForHabitId(null)}
-                                          >
-                                            Cancel
-                                          </button>
-                                        </div>
-                                      </div>
-                                    )}
+                                          {addingSubtaskForHabitId === habit.id && themeId && (
+                                            <div className="subtask-add-form">
+                                              <div className="subtask-list-label">New subtask</div>
+                                              <input
+                                                type="text"
+                                                value={newSubtaskName}
+                                                onChange={(e) => setNewSubtaskName(e.target.value)}
+                                                placeholder="e.g. Warm-up squats"
+                                                className="subtask-input"
+                                                autoFocus
+                                                onKeyDown={(e) => {
+                                                  if (e.key === "Enter") addSubtask(habit, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency);
+                                                  if (e.key === "Escape") setAddingSubtaskForHabitId(null);
+                                                }}
+                                              />
+                                              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                                <select
+                                                  value={newSubtaskFrequency}
+                                                  onChange={(e) => setNewSubtaskFrequency(e.target.value as "daily" | "weekly" | "monthly" | "none")}
+                                                  style={{ fontSize: 11, padding: "2px 4px" }}
+                                                >
+                                                  <option value="daily">Daily</option>
+                                                  <option value="weekly">Weekly</option>
+                                                  <option value="monthly">Monthly</option>
+                                                  <option value="none">No Target</option>
+                                                </select>
+                                                {newSubtaskFrequency !== "none" && (
+                                                  <input
+                                                    type="number"
+                                                    min={1}
+                                                    max={newSubtaskFrequency === "daily" ? 7 : newSubtaskFrequency === "weekly" ? 14 : 28}
+                                                    value={newSubtaskTarget}
+                                                    onChange={(e) => setNewSubtaskTarget(parseInt(e.target.value || "1", 10))}
+                                                    style={{ fontSize: 11, padding: "2px 4px", width: 48 }}
+                                                  />
+                                                )}
+                                                <button type="button" style={{ fontSize: 11 }} onClick={() => addSubtask(habit, themeId, newSubtaskName, newSubtaskTarget, newSubtaskFrequency)}>Save</button>
+                                                <button type="button" className="secondary" style={{ fontSize: 11 }} onClick={() => setAddingSubtaskForHabitId(null)}>Cancel</button>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
                                   </>
                                 )}
                               </div>
@@ -2978,6 +3259,10 @@ const App: React.FC = () => {
                                   themes={themes}
                                   mealPopoverBlockId={mealPopoverBlockId}
                                   onSetMealPopover={setMealPopoverBlockId}
+                                  onSaveBlockNote={saveBlockNote}
+                                  onAddBlockTask={addBlockTask}
+                                  onToggleBlockTask={toggleBlockTask}
+                                  onDeleteBlockTask={deleteBlockTask}
                                 />
                               ))}
                             </div>
@@ -3095,12 +3380,18 @@ const App: React.FC = () => {
                     themes={themes}
                     mealPopoverBlockId={mealPopoverBlockId}
                     onSetMealPopover={setMealPopoverBlockId}
+                    onSaveBlockNote={saveBlockNote}
+                    onAddBlockTask={addBlockTask}
+                    onToggleBlockTask={toggleBlockTask}
+                    onDeleteBlockTask={deleteBlockTask}
                   />
                 ))}
               </div>
             </div>
           </div>
         </div>
+
+        <div className="col-resize-handle" onMouseDown={handleResizeMouseDown} />
 
         <div className="right-column">
           <div className="card">
@@ -3166,6 +3457,15 @@ const App: React.FC = () => {
                   style={{ background: '#0f172a', color: 'white', border: 'none' }}
                 >
                   Analytics
+                </button>
+                <button
+                  type="button"
+                  className="copy-week-btn"
+                  onClick={() => setShowGhostBlocks((v) => !v)}
+                  title={showGhostBlocks ? "Hide suggestions" : "Show suggestions"}
+                  style={{ background: showGhostBlocks ? '#64748b' : undefined, color: showGhostBlocks ? 'white' : undefined, border: showGhostBlocks ? 'none' : undefined }}
+                >
+                  {showGhostBlocks ? "Hide Suggestions" : "Show Suggestions"}
                 </button>
                 <button
                   type="button"
@@ -3321,10 +3621,14 @@ const App: React.FC = () => {
                                   isStrengthTraining={isStrengthTrainingBlock}
                                   onUpdateWorkout={updateWorkoutData}
                                   onSubmitWorkout={submitWorkout}
+                                  onSaveBlockNote={saveBlockNote}
+                                  onAddBlockTask={addBlockTask}
+                                  onToggleBlockTask={toggleBlockTask}
+                                  onDeleteBlockTask={deleteBlockTask}
                                 />
                               );
                             })}
-                            {ghostBlocks
+                            {showGhostBlocks && ghostBlocks
                               .filter(ghost => ghost.day_index === dayIndex && ghost.time_index === slotIndex)
                               .map((ghost, idx) => (
                                 <GhostBlock
@@ -3480,6 +3784,7 @@ const App: React.FC = () => {
             userId={user.id}
             getHabitDoneCount={getHabitDoneCount}
             onClose={() => setNotesThemeId(null)}
+            blocks={blocks.filter((b) => b.habitId && theme.habits.some((h) => h.id === b.habitId))}
           />
         );
       })()}

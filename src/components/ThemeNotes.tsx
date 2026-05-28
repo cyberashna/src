@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { database } from "../services/database";
 import type { WorkoutHistoryEntry } from "../services/database";
+import type { Block } from "../App";
 
 type HabitGroup = {
   id: string;
@@ -27,6 +28,7 @@ type ThemeNotesProps = {
   userId: string;
   getHabitDoneCount: (habitId: string, frequency: Habit["frequency"]) => number;
   onClose: () => void;
+  blocks?: Block[];
 };
 
 type NoteState = {
@@ -42,6 +44,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   userId,
   getHabitDoneCount,
   onClose,
+  blocks = [],
 }) => {
   const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState<Record<string, NoteState>>({});
@@ -306,6 +309,28 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                             rows={3}
                           />
                         </div>
+
+                        {(() => {
+                          const habitBlocks = blocks.filter(
+                            (b) => b.habitId === habit.id && (b.blockNote ?? "").trim()
+                          );
+                          if (habitBlocks.length === 0) return null;
+                          return (
+                            <div style={{ marginTop: "10px" }}>
+                              <label style={{ fontSize: "12px", fontWeight: 600, color: "#555", marginBottom: "4px", display: "block" }}>
+                                Block Notes
+                              </label>
+                              <div className="theme-notes-block-notes">
+                                {habitBlocks.map((b) => (
+                                  <div key={b.id} className="theme-notes-block-note-item">
+                                    <div className="theme-notes-block-note-label">{b.label}</div>
+                                    <div className="theme-notes-block-note-content">{b.blockNote}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         {isStrength && (
                           <div style={{ marginTop: "12px" }}>
