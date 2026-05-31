@@ -1,8 +1,11 @@
-import 'drag-drop-touch'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+  void import('drag-drop-touch')
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
