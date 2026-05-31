@@ -1582,10 +1582,6 @@ table.planner td.slot.col-past .block {
 table.planner td.slot.col-past .slot-inner > * {
   pointer-events: none;
 }
-/* hide ghost blocks in condensed past cols */
-table.planner td.slot.col-past .ghost-block {
-  display: none;
-}
 /* mood and essentials cells condensed */
 table.planner td.col-past.mood-cell,
 table.planner td.col-past.essentials-cell {

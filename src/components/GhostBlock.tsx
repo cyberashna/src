@@ -26,57 +26,81 @@ export default function GhostBlock({ label, confidenceScore, onAccept, onDismiss
       <style>{`
         .ghost-block {
           position: relative;
-          padding: 8px 10px;
+          padding: 4px 6px;
           border: 2px dashed #b8b8b8;
           border-radius: 4px;
-          background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+          background: rgba(102, 126, 234, 0.05);
           cursor: pointer;
           opacity: 0.6;
           transition: all 0.2s;
           animation: ghostPulse 2s ease-in-out infinite;
+          overflow: hidden;
+          min-width: 0;
+          width: 100%;
+          box-sizing: border-box;
         }
 
         .ghost-block:hover {
           opacity: 1;
-          border-color: #667eea;
-          background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
-          transform: scale(1.02);
+          border-color: #4b6fff;
+          background: rgba(75, 111, 255, 0.1);
         }
 
         .ghost-content {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          gap: 8px;
-          padding-right: 20px;
+          gap: 4px;
+          padding-right: 16px;
+          min-width: 0;
         }
 
         .ghost-label {
           font-weight: 500;
-          color: #667eea;
+          color: #4b6fff;
           flex: 1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          min-width: 0;
+          font-size: 11px;
         }
 
         .ghost-confidence {
-          font-size: 10px;
+          font-size: 9px;
           font-weight: 700;
-          padding: 2px 6px;
-          background: #667eea;
+          padding: 1px 4px;
+          background: #4b6fff;
           color: white;
           border-radius: 10px;
+          flex-shrink: 0;
+        }
+
+        /* In condensed past columns, show only the dashed border strip */
+        td.col-past .ghost-block {
+          padding: 2px 2px;
+          border-width: 1px;
+          height: 8px;
+          opacity: 0.4;
+          animation: none;
+        }
+
+        td.col-past .ghost-content,
+        td.col-past .ghost-dismiss {
+          display: none;
         }
 
         .ghost-dismiss {
           position: absolute;
-          top: 4px;
-          right: 4px;
-          width: 18px;
-          height: 18px;
+          top: 3px;
+          right: 3px;
+          width: 16px;
+          height: 16px;
           border: none;
           background: rgba(220, 53, 69, 0.9);
           color: white;
           border-radius: 50%;
-          font-size: 14px;
+          font-size: 13px;
           cursor: pointer;
           display: none;
           align-items: center;
@@ -94,10 +118,10 @@ export default function GhostBlock({ label, confidenceScore, onAccept, onDismiss
 
         @keyframes ghostPulse {
           0%, 100% {
-            box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.3);
+            box-shadow: 0 0 0 0 rgba(75, 111, 255, 0.3);
           }
           50% {
-            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0);
+            box-shadow: 0 0 0 4px rgba(75, 111, 255, 0);
           }
         }
       `}</style>
