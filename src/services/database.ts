@@ -103,6 +103,8 @@ export type Block = {
   session_group_id: string | null;
   is_daily_template: boolean;
   daily_template_id: string | null;
+  is_standing?: boolean;
+  standing_block_id?: string | null;
   theme_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -449,6 +451,18 @@ export const database = {
 
       if (error) throw error;
       return data as Block;
+    },
+
+    async createMany(userId: string, blocks: Omit<Block, "id" | "user_id" | "created_at" | "updated_at">[]) {
+      if (blocks.length === 0) return [] as Block[];
+
+      const { data, error } = await supabase
+        .from("blocks")
+        .insert(blocks.map((block) => ({ ...block, user_id: userId })))
+        .select();
+
+      if (error) throw error;
+      return data as Block[];
     },
 
     async update(id: string, updates: Partial<Block>) {
