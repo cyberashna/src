@@ -162,6 +162,17 @@ const App: React.FC = () => {
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(0);
 
+  const [expandedCols, setExpandedCols] = useState<Set<number>>(new Set());
+
+  const toggleColExpanded = useCallback((dayIndex: number) => {
+    setExpandedCols(prev => {
+      const next = new Set(prev);
+      if (next.has(dayIndex)) next.delete(dayIndex);
+      else next.add(dayIndex);
+      return next;
+    });
+  }, []);
+
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     isResizing.current = true;
     resizeStartX.current = e.clientX;
@@ -2281,6 +2292,13 @@ const App: React.FC = () => {
 
   const todayDayIndex = getTodayDayIndex(weekOffset);
 
+  const colCategory = useCallback((dayIndex: number): "past" | "today" | "future" | "normal" => {
+    if (todayDayIndex === -1) return "normal";
+    if (dayIndex === todayDayIndex) return "today";
+    if (dayIndex < todayDayIndex) return expandedCols.has(dayIndex) ? "normal" : "past";
+    return "future";
+  }, [todayDayIndex, expandedCols]);
+
   if (loading) {
     return (
       <div style={{
@@ -3552,14 +3570,39 @@ const App: React.FC = () => {
 
           <div className="planner-wrapper">
             <table className="planner">
+              <colgroup>
+                <col style={{ width: "60px" }} />
+                {days.map((_, idx) => {
+                  const cat = colCategory(idx);
+                  const w = cat === "past" ? "38px" : cat === "future" ? "110px" : undefined;
+                  return <col key={idx} style={w ? { width: w } : undefined} />;
+                })}
+              </colgroup>
               <thead>
                 <tr>
                   <th className="time-col">Time</th>
-                  {days.map((day, idx) => (
-                    <th key={day} className={idx === todayDayIndex ? "today-col" : ""}>
-                      {day}
-                    </th>
-                  ))}
+                  {days.map((day, idx) => {
+                    const cat = colCategory(idx);
+                    const isPast = cat === "past";
+                    return (
+                      <th
+                        key={day}
+                        className={`col-${cat}`}
+                        onClick={isPast ? () => toggleColExpanded(idx) : undefined}
+                        title={isPast ? `${day} — click to expand` : undefined}
+                        style={isPast ? { cursor: "pointer" } : undefined}
+                      >
+                        {isPast ? (
+                          <span className="past-col-header">
+                            <span className="past-col-initial">{day[0]}</span>
+                            <span className="past-col-expand-icon">›</span>
+                          </span>
+                        ) : (
+                          day
+                        )}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -3568,12 +3611,14 @@ const App: React.FC = () => {
                   weekStartDate={getWeekStartDateString(weekOffset)}
                   days={days}
                   todayDayIndex={todayDayIndex}
+                  colCategory={colCategory}
                 />
                 <DailyEssentials
                   userId={user!.id}
                   weekStartDate={getWeekStartDateString(weekOffset)}
                   days={days}
                   todayDayIndex={todayDayIndex}
+                  colCategory={colCategory}
                 />
                 {slotLabels.map((slotLabel, slotIndex) => (
                   <tr key={slotLabel + slotIndex}>
@@ -3583,7 +3628,7 @@ const App: React.FC = () => {
                       return (
                         <td
                           key={`${dayIndex}-${slotIndex}`}
-                          className={`slot${dayIndex === todayDayIndex ? " today-col" : ""}`}
+                          className={`slot col-${colCategory(dayIndex)}`}
                           onDragOver={handleSlotDragOver}
                           onDragLeave={handleSlotDragLeave}
                           onDrop={(e) =>

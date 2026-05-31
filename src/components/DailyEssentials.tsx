@@ -19,6 +19,7 @@ type Props = {
   weekStartDate: string;
   days: string[];
   todayDayIndex: number;
+  colCategory: (dayIndex: number) => "past" | "today" | "future" | "normal";
 };
 
 const DEFAULT_ESSENTIALS = [
@@ -33,7 +34,7 @@ function getDateForDay(weekStartDate: string, dayIndex: number): string {
   return d.toISOString().split("T")[0];
 }
 
-const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDayIndex }) => {
+const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, colCategory }) => {
   const [essentials, setEssentials] = useState<Essential[]>([]);
   const [completions, setCompletions] = useState<Map<string, boolean>>(new Map());
   const [adding, setAdding] = useState(false);
@@ -178,7 +179,7 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDa
               return (
                 <td
                   key={dayIndex}
-                  className={`slot essentials-cell${dayIndex === todayDayIndex ? " today-col" : ""}${done ? " essentials-done" : ""}`}
+                  className={`slot essentials-cell col-${colCategory(dayIndex)}${done ? " essentials-done" : ""}`}
                   onClick={() => toggleCompletion(essential.id, dayIndex)}
                 >
                   <div className="essentials-check">
@@ -224,7 +225,7 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, todayDa
           {days.map((_, dayIndex) => (
             <td
               key={dayIndex}
-              className={`slot essentials-cell essentials-summary-cell${dayIndex === todayDayIndex ? " today-col" : ""}`}
+              className={`slot essentials-cell essentials-summary-cell col-${colCategory(dayIndex)}`}
             />
           ))}
         </tr>

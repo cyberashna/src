@@ -11,6 +11,7 @@ type Props = {
   weekStartDate: string;
   days: string[];
   todayDayIndex: number;
+  colCategory: (dayIndex: number) => "past" | "today" | "future" | "normal";
 };
 
 const MOOD_OPTIONS = [
@@ -28,7 +29,7 @@ function getDateForDay(weekStartDate: string, dayIndex: number): string {
   return d.toISOString().split("T")[0];
 }
 
-const MoodTracker: React.FC<Props> = ({ userId, weekStartDate, days, todayDayIndex }) => {
+const MoodTracker: React.FC<Props> = ({ userId, weekStartDate, days, colCategory }) => {
   const [moods, setMoods] = useState<Map<string, string>>(new Map());
   const [openPicker, setOpenPicker] = useState<number | null>(null);
 
@@ -114,7 +115,7 @@ const MoodTracker: React.FC<Props> = ({ userId, weekStartDate, days, todayDayInd
         return (
           <td
             key={dayIndex}
-            className={`slot mood-cell${dayIndex === todayDayIndex ? " today-col" : ""}`}
+            className={`slot mood-cell col-${colCategory(dayIndex)}`}
           >
             <button
               className={`mood-cell-btn${mood ? " has-mood" : ""}`}
