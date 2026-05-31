@@ -236,6 +236,7 @@ button:disabled {
 
 table.planner {
   border-collapse: collapse;
+  table-layout: fixed;
   width: 100%;
   min-width: 500px;
   font-size: 12px;
@@ -1560,6 +1561,7 @@ table.planner td.col-past {
   background: #f9f9f9;
   padding: 2px 1px;
   overflow: hidden;
+  max-width: 38px;
 }
 table.planner td.slot.col-past .slot-inner {
   display: flex;
