@@ -20,7 +20,7 @@ import QuickStartTemplateModal from "./components/QuickStartTemplateModal";
 import QuickHabitForm from "./components/QuickHabitForm";
 import GhostBlock from "./components/GhostBlock";
 import { generateGhostBlocks, dismissPattern, acceptGhostBlock, type GhostBlock as GhostBlockType } from "./services/patternAnalysis";
-import { generateStandingBlocksForWeek } from "./services/standingBlocks";
+import { generateStandingBlocksForWeek, getActiveStandingBlocks } from "./services/standingBlocks";
 import DailyEssentials from "./components/DailyEssentials";
 import DailyFocus from "./components/DailyFocus";
 import MoodTracker from "./components/MoodTracker";
@@ -29,6 +29,8 @@ import type { Suggestion } from "./components/EventSuggestions";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import TemplateStickyNote from "./components/TemplateStickyNote";
 import BlockCard from "./components/BlockCard";
+import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
+import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
 
 type HabitGroup = {
@@ -283,6 +285,10 @@ const App: React.FC = () => {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showTemplateNote, setShowTemplateNote] = useState(true);
   const [showQuickHabit, setShowQuickHabit] = useState(false);
+  const [showSmartWeeklySetup, setShowSmartWeeklySetup] = useState(false);
+  const [smartWeeklyLoading, setSmartWeeklyLoading] = useState(false);
+  const [smartWeeklyApplying, setSmartWeeklyApplying] = useState(false);
+  const [smartWeeklySuggestions, setSmartWeeklySuggestions] = useState<SmartWeekSuggestion[]>([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -2290,6 +2296,207 @@ const App: React.FC = () => {
     }
   };
 
+  const getSmartSetupOccupiedSlots = () =>
+    new Set(
+      blocks
+        .filter((b) => b.location.type === "slot")
+        .map((b) => {
+          const location = b.location as { type: "slot"; dayIndex: number; timeIndex: number };
+          return `${location.dayIndex}-${location.timeIndex}`;
+        })
+    );
+
+  const findNextSmartSetupSlot = (occupiedSlots: Set<string>) => {
+    const startDay = Math.max(0, getTodayDayIndex(weekOffset));
+    const preferredTimes = [3, 9, 12, 15, 1, 6, 10, 13, 16];
+
+    for (let dayOffset = 0; dayOffset < days.length; dayOffset++) {
+      const dayIndex = (startDay + dayOffset) % days.length;
+      for (const timeIndex of preferredTimes) {
+        const slotKey = `${dayIndex}-${timeIndex}`;
+        if (timeIndex < hourlySlots.length && !occupiedSlots.has(slotKey)) {
+          occupiedSlots.add(slotKey);
+          return { dayIndex, timeIndex };
+        }
+      }
+    }
+
+    for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
+      for (let timeIndex = 0; timeIndex < hourlySlots.length; timeIndex++) {
+        const slotKey = `${dayIndex}-${timeIndex}`;
+        if (!occupiedSlots.has(slotKey)) {
+          occupiedSlots.add(slotKey);
+          return { dayIndex, timeIndex };
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const openSmartWeeklySetup = async () => {
+    if (!user) return;
+
+    setShowSmartWeeklySetup(true);
+    setSmartWeeklyLoading(true);
+
+    try {
+      const prevWeekStart = getWeekStartDateString(weekOffset - 1);
+      const [prevBlocks, standingBlocks] = await Promise.all([
+        database.blocks.getForWeek(user.id, prevWeekStart),
+        getActiveStandingBlocks(user.id),
+      ]);
+      const occupiedSlots = getSmartSetupOccupiedSlots();
+      const currentScheduledKeys = new Set(
+        blocks
+          .filter((b) => b.location.type === "slot")
+          .map((b) => `${b.label.toLowerCase()}-${(b.location as { type: "slot"; dayIndex: number; timeIndex: number }).dayIndex}-${(b.location as { type: "slot"; dayIndex: number; timeIndex: number }).timeIndex}`)
+      );
+      const suggestions: SmartWeekSuggestion[] = [];
+
+      standingBlocks.forEach((standing) => {
+        const slotKey = `${standing.day_index}-${standing.time_index}`;
+        if (
+          standing.time_index >= hourlySlots.length ||
+          occupiedSlots.has(slotKey) ||
+          currentScheduledKeys.has(`${standing.block_label.toLowerCase()}-${slotKey}`)
+        ) {
+          return;
+        }
+
+        occupiedSlots.add(slotKey);
+        suggestions.push({
+          id: `standing-${standing.id}`,
+          source: "standing",
+          label: standing.block_label,
+          dayIndex: standing.day_index,
+          timeIndex: standing.time_index,
+          isHabitBlock: false,
+          standingBlockId: standing.id,
+          reason: "Repeats weekly",
+        });
+      });
+
+      prevBlocks
+        .filter((b) => b.location_type === "slot" && b.week_start_date === prevWeekStart)
+        .forEach((block) => {
+          if (block.day_index === null || block.time_index === null) return;
+          const slotKey = `${block.day_index}-${block.time_index}`;
+          if (
+            block.time_index >= hourlySlots.length ||
+            occupiedSlots.has(slotKey) ||
+            currentScheduledKeys.has(`${block.label.toLowerCase()}-${slotKey}`)
+          ) {
+            return;
+          }
+
+          occupiedSlots.add(slotKey);
+          suggestions.push({
+            id: `last-week-${block.id}`,
+            source: "last-week",
+            sourceBlockId: block.id,
+            label: block.label,
+            dayIndex: block.day_index,
+            timeIndex: block.time_index,
+            isHabitBlock: block.is_habit_block,
+            habitId: block.habit_id ?? undefined,
+            hashtag: block.hashtag ?? undefined,
+            reason: "Scheduled last week",
+          });
+        });
+
+      blocks
+        .filter((b) => b.location.type === "unscheduled" && !b.themeId)
+        .slice(0, 8)
+        .forEach((block) => {
+          const slot = findNextSmartSetupSlot(occupiedSlots);
+          if (!slot) return;
+
+          suggestions.push({
+            id: `unscheduled-${block.id}`,
+            source: "unscheduled",
+            sourceBlockId: block.id,
+            label: block.label,
+            dayIndex: slot.dayIndex,
+            timeIndex: slot.timeIndex,
+            isHabitBlock: block.isHabitBlock,
+            habitId: block.habitId,
+            hashtag: block.hashtag,
+            reason: "Waiting in unscheduled",
+          });
+        });
+
+      setSmartWeeklySuggestions(suggestions.slice(0, 20));
+      if (suggestions.length === 0) {
+        showToast("No smart weekly setup suggestions found.", "info");
+      }
+    } catch (error) {
+      console.error("Error building smart weekly setup:", error);
+      showToast("Failed to build weekly setup suggestions", "error");
+    } finally {
+      setSmartWeeklyLoading(false);
+    }
+  };
+
+  const applySmartWeeklySetup = async (suggestions: SmartWeekSuggestion[]) => {
+    if (!user || suggestions.length === 0) return;
+
+    setSmartWeeklyApplying(true);
+
+    try {
+      const currentWeekStart = getWeekStartDateString(weekOffset);
+      const createPayloads: Omit<DBBlock, "id" | "user_id" | "created_at" | "updated_at">[] = [];
+      const unscheduledSuggestions = suggestions.filter(
+        (suggestion) => suggestion.source === "unscheduled" && suggestion.sourceBlockId
+      );
+
+      suggestions
+        .filter((suggestion) => suggestion.source !== "unscheduled")
+        .forEach((suggestion) => {
+          createPayloads.push({
+            label: suggestion.label,
+            is_habit_block: suggestion.isHabitBlock,
+            habit_id: suggestion.habitId ?? null,
+            location_type: "slot",
+            day_index: suggestion.dayIndex,
+            time_index: suggestion.timeIndex,
+            completed: false,
+            hashtag: suggestion.hashtag ?? null,
+            week_start_date: currentWeekStart,
+            linked_block_id: null,
+            is_linked_group: false,
+            workout_submitted: false,
+            session_group_id: null,
+            is_daily_template: false,
+            daily_template_id: null,
+            is_standing: suggestion.source === "standing",
+            standing_block_id: suggestion.standingBlockId ?? null,
+          });
+        });
+
+      await Promise.all([
+        database.blocks.createMany(user.id, createPayloads),
+        ...unscheduledSuggestions.map((suggestion) =>
+          database.blocks.update(suggestion.sourceBlockId!, {
+            location_type: "slot",
+            day_index: suggestion.dayIndex,
+            time_index: suggestion.timeIndex,
+            week_start_date: currentWeekStart,
+          })
+        ),
+      ]);
+
+      await loadUserData();
+      setShowSmartWeeklySetup(false);
+      showToast(`Applied ${suggestions.length} smart setup suggestion(s)`, "success");
+    } catch (error) {
+      console.error("Error applying smart weekly setup:", error);
+      showToast("Failed to apply smart weekly setup", "error");
+    } finally {
+      setSmartWeeklyApplying(false);
+    }
+  };
+
   const todayDayIndex = getTodayDayIndex(weekOffset);
 
   const colCategory = useCallback((dayIndex: number): "past" | "today" | "future" | "normal" => {
@@ -3461,6 +3668,15 @@ const App: React.FC = () => {
                 <button
                   type="button"
                   className="copy-week-btn"
+                  onClick={openSmartWeeklySetup}
+                  title="Build this week from smart suggestions"
+                  style={{ background: '#16a34a', color: 'white', border: 'none' }}
+                >
+                  Smart Setup
+                </button>
+                <button
+                  type="button"
+                  className="copy-week-btn"
                   onClick={() => setShowQuickStartModal(true)}
                   title="Create a routine from templates"
                   style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none' }}
@@ -3842,6 +4058,19 @@ const App: React.FC = () => {
             .map(b => ({ id: b.id, label: b.label }))}
           onClose={() => setShowQuickStartModal(false)}
           onApplyTemplate={handleApplyTemplate}
+        />
+      )}
+
+      {showSmartWeeklySetup && (
+        <SmartWeeklySetupModal
+          suggestions={smartWeeklySuggestions}
+          days={days}
+          timeSlots={hourlySlots}
+          loading={smartWeeklyLoading}
+          applying={smartWeeklyApplying}
+          onRefresh={openSmartWeeklySetup}
+          onApply={applySmartWeeklySetup}
+          onClose={() => setShowSmartWeeklySetup(false)}
         />
       )}
 

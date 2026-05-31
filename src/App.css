@@ -2291,6 +2291,146 @@ table.planner th.col-normal {
   color: #fff;
 }
 
+/* Smart Weekly Setup */
+.smart-weekly-modal {
+  max-width: 760px;
+}
+
+.smart-weekly-subtitle {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.smart-weekly-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.smart-weekly-empty {
+  padding: 24px;
+  text-align: center;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.smart-weekly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(54vh, 520px);
+  overflow: auto;
+}
+
+.smart-weekly-item {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) auto minmax(120px, 0.9fr) minmax(220px, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.smart-weekly-item.selected {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.smart-weekly-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+.smart-weekly-check input {
+  flex-shrink: 0;
+}
+
+.smart-weekly-check span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smart-weekly-check em {
+  color: #64748b;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.smart-weekly-source {
+  justify-self: start;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.smart-weekly-source.source-standing {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.smart-weekly-source.source-last-week {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.smart-weekly-source.source-unscheduled {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.smart-weekly-reason {
+  font-size: 12px;
+  color: #64748b;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smart-weekly-controls {
+  display: grid;
+  grid-template-columns: 82px minmax(120px, 1fr);
+  gap: 6px;
+}
+
+.smart-weekly-controls select {
+  font-size: 12px;
+  padding: 5px 7px;
+}
+
+.smart-weekly-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .smart-weekly-item {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .smart-weekly-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 /* -- Theme block drop zones -- */
 .theme-card-drop-target {
   outline: 2px dashed #4b6fff;
