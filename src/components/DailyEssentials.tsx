@@ -51,16 +51,13 @@ const DailyEssentials: React.FC<Props> = ({ userId, weekStartDate, days, colCate
     if (data && data.length > 0) {
       setEssentials(data);
     } else if (data && data.length === 0) {
-      const inserted = [];
-      for (const def of DEFAULT_ESSENTIALS) {
-        const { data: row } = await supabase
-          .from("daily_essentials")
-          .insert({ user_id: userId, ...def })
-          .select()
-          .single();
-        if (row) inserted.push(row);
-      }
-      setEssentials(inserted);
+      const { data: inserted } = await supabase
+        .from("daily_essentials")
+        .insert(DEFAULT_ESSENTIALS.map((def) => ({ user_id: userId, ...def })))
+        .select()
+        .order("sort_order");
+
+      setEssentials(inserted ?? []);
     }
   }, [userId]);
 

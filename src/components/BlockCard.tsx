@@ -125,6 +125,14 @@ export const BlockCard: React.FC<BlockCardProps> = ({
     setNoteValue(block.blockNote ?? "");
   }, [block.blockNote]);
 
+  useEffect(() => {
+    return () => {
+      if (noteSaveTimer.current) {
+        clearTimeout(noteSaveTimer.current);
+      }
+    };
+  }, []);
+
   const handleNoteChange = (val: string) => {
     setNoteValue(val);
     if (noteSaveTimer.current) clearTimeout(noteSaveTimer.current);

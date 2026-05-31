@@ -121,35 +121,36 @@ export async function generateStandingBlocksForWeek(
       .map(b => `${b.day_index}-${b.time_index}`)
   );
 
-  const createdBlockIds: string[] = [];
+  const blocksToCreate = standingBlocks
+    .filter((standing) => {
+      const slotKey = `${standing.day_index}-${standing.time_index}`;
+      return !occupiedSlots.has(slotKey);
+    })
+    .map((standing) => ({
+      user_id: userId,
+      habit_id: habitId,
+      label: standing.block_label,
+      day_index: standing.day_index,
+      time_index: standing.time_index,
+      week_start_date: weekStartDate,
+      is_standing: true,
+      standing_block_id: standing.id,
+      completed: false
+    }));
 
-  for (const standing of standingBlocks) {
-    const slotKey = `${standing.day_index}-${standing.time_index}`;
-
-    if (!occupiedSlots.has(slotKey)) {
-      const { data, error } = await supabase
-        .from('blocks')
-        .insert({
-          user_id: userId,
-          habit_id: habitId,
-          label: standing.block_label,
-          day_index: standing.day_index,
-          time_index: standing.time_index,
-          week_start_date: weekStartDate,
-          is_standing: true,
-          standing_block_id: standing.id,
-          completed: false
-        })
-        .select()
-        .single();
-
-      if (data) {
-        createdBlockIds.push(data.id);
-      } else if (error) {
-        console.error('Error creating standing block instance:', error);
-      }
-    }
+  if (blocksToCreate.length === 0) {
+    return [];
   }
 
-  return createdBlockIds;
+  const { data, error } = await supabase
+    .from('blocks')
+    .insert(blocksToCreate)
+    .select('id');
+
+  if (error) {
+    console.error('Error creating standing block instances:', error);
+    return [];
+  }
+
+  return data?.map((block) => block.id) ?? [];
 }
