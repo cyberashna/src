@@ -3847,9 +3847,11 @@ const App: React.FC = () => {
             <table className="planner">
               <colgroup>
                 <col style={{ width: "60px" }} />
-                {days.map((_, idx) => (
-                  <col key={idx} style={{ width: `${getDayColumnWidth(idx)}px` }} />
-                ))}
+                {days.map((_, idx) => {
+                  const cat = colCategory(idx);
+                  const w = cat === "past" ? "38px" : cat === "future" ? "110px" : cat === "today" ? "140px" : undefined;
+                  return <col key={idx} style={w ? { width: w } : undefined} />;
+                })}
               </colgroup>
               <thead>
                 <tr>

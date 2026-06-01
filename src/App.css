@@ -1592,9 +1592,11 @@ table.planner th.col-today {
   background: #e8f4fd;
   border-bottom: 3px solid var(--color-primary);
   font-weight: 700;
+  min-width: 130px;
 }
 table.planner td.col-today {
   background: #f0f7ff;
+  min-width: 130px;
 }
 table.planner td.slot.col-today.drag-over {
   background: #dbeafe;
@@ -1635,11 +1637,16 @@ table.planner td.col-past {
   padding: 2px 1px;
   overflow: visible;
 }
+/* allow ghost block hover popup to overflow the condensed cell */
+table.planner td.col-past:has(.ghost-block:hover) {
+  overflow: visible;
+}
 table.planner td.slot.col-past .slot-inner {
   display: flex;
   flex-direction: column;
   gap: 1px;
   align-items: center;
+  overflow: visible;
 }
 table.planner td.slot.col-past .block {
   width: 100%;
@@ -1653,6 +1660,10 @@ table.planner td.slot.col-past .block {
 }
 table.planner td.slot.col-past .block:hover {
   overflow: visible;
+}
+/* ghost blocks in past cols keep pointer events so hover works */
+table.planner td.slot.col-past .slot-inner > .ghost-block {
+  pointer-events: auto;
 }
 /* mood and essentials cells condensed */
 table.planner td.col-past.mood-cell,

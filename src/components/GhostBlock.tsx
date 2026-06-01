@@ -83,11 +83,35 @@ export default function GhostBlock({ label, confidenceScore, onAccept, onDismiss
           height: 8px;
           opacity: 0.4;
           animation: none;
+          overflow: hidden;
         }
 
         td.col-past .ghost-content,
         td.col-past .ghost-dismiss {
           display: none;
+        }
+
+        /* On hover inside a past column, expand to full display */
+        td.col-past .ghost-block:hover {
+          position: absolute;
+          z-index: 200;
+          width: max-content;
+          min-width: 120px;
+          max-width: 200px;
+          height: auto;
+          padding: 4px 6px;
+          border-width: 2px;
+          opacity: 1;
+          overflow: visible;
+          animation: ghostPulse 2s ease-in-out infinite;
+        }
+
+        td.col-past .ghost-block:hover .ghost-content {
+          display: flex;
+        }
+
+        td.col-past .ghost-block:hover .ghost-dismiss {
+          display: flex;
         }
 
         .ghost-dismiss {
