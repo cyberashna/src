@@ -3790,7 +3790,7 @@ const App: React.FC = () => {
                 <col style={{ width: "60px" }} />
                 {days.map((_, idx) => {
                   const cat = colCategory(idx);
-                  const w = cat === "past" ? "38px" : cat === "future" ? "110px" : undefined;
+                  const w = cat === "past" ? "38px" : cat === "future" ? "110px" : cat === "today" ? "140px" : undefined;
                   return <col key={idx} style={w ? { width: w } : undefined} />;
                 })}
               </colgroup>
