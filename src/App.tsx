@@ -165,6 +165,8 @@ const App: React.FC = () => {
   const resizeStartWidth = useRef(0);
 
   const [expandedCols, setExpandedCols] = useState<Set<number>>(new Set());
+  const [dayColWidths, setDayColWidths] = useState<Record<number, number>>({});
+  const dayResizeState = useRef<{ dayIndex: number; startX: number; startWidth: number } | null>(null);
 
   const toggleColExpanded = useCallback((dayIndex: number) => {
     setExpandedCols(prev => {
@@ -182,6 +184,16 @@ const App: React.FC = () => {
     e.preventDefault();
   }, [leftColWidth]);
 
+  const handleDayResizeMouseDown = useCallback((dayIndex: number, currentWidth: number, e: React.MouseEvent) => {
+    dayResizeState.current = {
+      dayIndex,
+      startX: e.clientX,
+      startWidth: currentWidth,
+    };
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!isResizing.current) return;
@@ -189,6 +201,29 @@ const App: React.FC = () => {
       setLeftColWidth(Math.max(240, Math.min(600, resizeStartWidth.current + delta)));
     };
     const onMouseUp = () => { isResizing.current = false; };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      const resizeState = dayResizeState.current;
+      if (!resizeState) return;
+
+      const delta = e.clientX - resizeState.startX;
+      const nextWidth = Math.max(46, Math.min(360, resizeState.startWidth + delta));
+      setDayColWidths((prev) => ({
+        ...prev,
+        [resizeState.dayIndex]: nextWidth,
+      }));
+    };
+    const onMouseUp = () => {
+      dayResizeState.current = null;
+    };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
     return () => {
@@ -2011,6 +2046,29 @@ const App: React.FC = () => {
     });
   };
 
+  const getDayColumnWidth = (dayIndex: number) => {
+    const manualWidth = dayColWidths[dayIndex];
+    if (manualWidth) return manualWidth;
+
+    const cat = colCategory(dayIndex);
+    if (cat === "past") return 38;
+
+    const baseWidth = cat === "future" ? 118 : 142;
+    const longestLabel = blocks
+      .filter(
+        (b) =>
+          b.location.type === "slot" &&
+          b.location.dayIndex === dayIndex &&
+          !(b.linkedBlockId && !b.isLinkedGroup)
+      )
+      .reduce((longest, block) => {
+        const blockTextLength = block.label.length + (block.hashtag?.length ?? 0);
+        return Math.max(longest, blockTextLength);
+      }, 0);
+
+    return Math.min(320, Math.max(baseWidth, longestLabel * 7 + 72));
+  };
+
   const hasAdjacentBlockBelow = (block: Block): boolean => {
     if (block.location.type !== "slot" || !block.sessionGroupId) return false;
 
@@ -2500,11 +2558,12 @@ const App: React.FC = () => {
   const todayDayIndex = getTodayDayIndex(weekOffset);
 
   const colCategory = useCallback((dayIndex: number): "past" | "today" | "future" | "normal" => {
+    if (dayColWidths[dayIndex]) return "normal";
     if (todayDayIndex === -1) return "normal";
     if (dayIndex === todayDayIndex) return "today";
     if (dayIndex < todayDayIndex) return expandedCols.has(dayIndex) ? "normal" : "past";
     return "future";
-  }, [todayDayIndex, expandedCols]);
+  }, [todayDayIndex, expandedCols, dayColWidths]);
 
   if (loading) {
     return (
@@ -3788,11 +3847,9 @@ const App: React.FC = () => {
             <table className="planner">
               <colgroup>
                 <col style={{ width: "60px" }} />
-                {days.map((_, idx) => {
-                  const cat = colCategory(idx);
-                  const w = cat === "past" ? "38px" : cat === "future" ? "110px" : undefined;
-                  return <col key={idx} style={w ? { width: w } : undefined} />;
-                })}
+                {days.map((_, idx) => (
+                  <col key={idx} style={{ width: `${getDayColumnWidth(idx)}px` }} />
+                ))}
               </colgroup>
               <thead>
                 <tr>
@@ -3800,22 +3857,31 @@ const App: React.FC = () => {
                   {days.map((day, idx) => {
                     const cat = colCategory(idx);
                     const isPast = cat === "past";
+                    const currentWidth = getDayColumnWidth(idx);
                     return (
                       <th
                         key={day}
-                        className={`col-${cat}`}
+                        className={`col-${cat} day-header`}
                         onClick={isPast ? () => toggleColExpanded(idx) : undefined}
                         title={isPast ? `${day} — click to expand` : undefined}
                         style={isPast ? { cursor: "pointer" } : undefined}
                       >
-                        {isPast ? (
-                          <span className="past-col-header">
-                            <span className="past-col-initial">{day[0]}</span>
-                            <span className="past-col-expand-icon">›</span>
-                          </span>
-                        ) : (
-                          day
-                        )}
+                        <span className="day-header-content">
+                          {isPast ? (
+                            <span className="past-col-header">
+                              <span className="past-col-initial">{day[0]}</span>
+                              <span className="past-col-expand-icon">›</span>
+                            </span>
+                          ) : (
+                            day
+                          )}
+                        </span>
+                        <span
+                          className="day-col-resize-handle"
+                          title={`Resize ${day}`}
+                          onMouseDown={(e) => handleDayResizeMouseDown(idx, currentWidth, e)}
+                          aria-hidden="true"
+                        />
                       </th>
                     );
                   })}

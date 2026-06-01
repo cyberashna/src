@@ -151,6 +151,15 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const completedTaskCount = tasks.filter((t) => t.completed).length;
   const hasNoteContent = (block.blockNote ?? "").trim().length > 0;
   const hasDetailContent = tasks.length > 0 || hasNoteContent;
+  const hoverInfo = [
+    block.label,
+    block.hashtag ? `#${block.hashtag}` : null,
+    block.completed ? "Completed" : null,
+    tasks.length > 0 ? `${completedTaskCount}/${tasks.length} tasks done` : null,
+    hasNoteContent ? block.blockNote : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const blockClass = [
     "block",
@@ -176,6 +185,8 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         onDragStart={(e) => onDragStart(block.id, e)}
         onDragEnd={onDragEnd}
         onDoubleClick={onDoubleClick ? () => onDoubleClick(block.id) : undefined}
+        title={hoverInfo}
+        data-tooltip={hoverInfo}
         style={{ position: "relative" }}
       >
         {priorityRank && <PriorityBadge rank={priorityRank} />}
