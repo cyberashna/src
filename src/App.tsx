@@ -1729,7 +1729,17 @@ const App: React.FC = () => {
     try {
       await database.blocks.update(blockId, { completed: newCompleted });
 
-      const now = new Date().toISOString();
+      // Use the block's assigned day as the completion timestamp, not the current click time
+      const blockDate = (() => {
+        if (block.location.type === "slot") {
+          const weekStart = getWeekStartDateString(weekOffset);
+          const d = new Date(weekStart + "T12:00:00");
+          d.setDate(d.getDate() + block.location.dayIndex);
+          return d.toISOString();
+        }
+        return new Date().toISOString();
+      })();
+      const now = newCompleted ? blockDate : new Date().toISOString();
 
       for (const habitId of allAffectedHabitIds) {
         const habit = allHabits.find((h) => h.id === habitId);
