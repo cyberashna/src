@@ -177,6 +177,10 @@ button:disabled {
   user-select: none;
   white-space: nowrap;
   position: relative;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .block.habit-block {
@@ -194,6 +198,32 @@ button:disabled {
 .slot-inner .block {
   padding-right: 24px;
   align-self: stretch;
+}
+
+.slot-inner .block:hover {
+  overflow: visible;
+  z-index: 30;
+}
+
+.slot-inner .block:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  min-width: 180px;
+  max-width: 280px;
+  width: max-content;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #111827;
+  color: #fff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.24);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+  white-space: pre-wrap;
+  pointer-events: none;
+  z-index: 1000;
 }
 
 .block-delete-btn {
@@ -237,12 +267,12 @@ button:disabled {
 table.planner {
   border-collapse: collapse;
   table-layout: fixed;
-  width: 100%;
-  min-width: 500px;
+  width: max-content;
+  min-width: 100%;
   font-size: 12px;
   background: #fff;
   border-radius: 10px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
 }
 
@@ -259,6 +289,48 @@ table.planner td {
   padding: 4px;
   text-align: left;
   vertical-align: top;
+}
+
+table.planner th.day-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  padding-right: 10px;
+}
+
+.day-header-content {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+
+.day-col-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.day-col-resize-handle:hover::after {
+  background: #94a3b8;
 }
 
 table.planner th.time-col {
@@ -284,10 +356,11 @@ table.planner td.slot.drag-over {
 }
 
 .slot-inner {
-   display: flex;
+  display: flex;
   flex-direction: column;   /* stack blocks vertically */
-  align-items: flex-start;
-  gap: 4px                 /* space between blocks */
+  align-items: stretch;
+  gap: 4px;                 /* space between blocks */
+  min-width: 0;
 }
 
 .small-label {
@@ -1562,8 +1635,7 @@ table.planner th.col-past:hover {
 table.planner td.col-past {
   background: #f9f9f9;
   padding: 2px 1px;
-  overflow: hidden;
-  max-width: 38px;
+  overflow: visible;
 }
 /* allow ghost block hover popup to overflow the condensed cell */
 table.planner td.col-past:has(.ghost-block:hover) {
@@ -1586,8 +1658,8 @@ table.planner td.slot.col-past .block {
   height: 8px;
   overflow: hidden;
 }
-table.planner td.slot.col-past .slot-inner > * {
-  pointer-events: none;
+table.planner td.slot.col-past .block:hover {
+  overflow: visible;
 }
 /* ghost blocks in past cols keep pointer events so hover works */
 table.planner td.slot.col-past .slot-inner > .ghost-block {
