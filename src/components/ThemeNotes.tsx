@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { database } from "../services/database";
 import type { WorkoutHistoryEntry } from "../services/database";
 import type { Block } from "../App";
@@ -18,6 +18,7 @@ type Habit = {
   lastDoneAt?: string;
   frequency: "daily" | "weekly" | "monthly" | "none";
   habitGroupId?: string;
+  subtasks?: Habit[];
 };
 
 type ThemeNotesProps = {
@@ -28,6 +29,8 @@ type ThemeNotesProps = {
   userId: string;
   getHabitDoneCount: (habitId: string, frequency: Habit["frequency"]) => number;
   onClose: () => void;
+  onCreateBlockFromNote: (label: string) => Promise<void>;
+  onCreateHabitFromNote: (name: string) => Promise<void>;
   blocks?: Block[];
 };
 
@@ -37,37 +40,80 @@ type NoteState = {
   saved: boolean;
 };
 
+type PinnedInsight = {
+  id: string;
+  text: string;
+  source: string;
+  createdAt: string;
+};
+
+type ThemeNotesPrefs = {
+  generalNote: string;
+  pinnedInsights: PinnedInsight[];
+  hiddenBlockNoteIds: string[];
+};
+
+const createThemeNotesPrefsKey = (userId: string, themeId: string) =>
+  `theme-notes:${userId}:${themeId}`;
+
+const getActionLabel = (text: string) =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/^[-*[\]\sx]+/i, "")
+    .slice(0, 80) ?? "";
+
+const flattenHabits = (habits: Habit[]): Habit[] =>
+  habits.flatMap((habit) => [habit, ...flattenHabits(habit.subtasks ?? [])]);
+
 export const ThemeNotes: React.FC<ThemeNotesProps> = ({
+  themeId,
   themeName,
   habits,
   groups,
   userId,
   getHabitDoneCount,
   onClose,
+  onCreateBlockFromNote,
+  onCreateHabitFromNote,
   blocks = [],
 }) => {
   const [expandedHabits, setExpandedHabits] = useState<Set<string>>(new Set());
   const [notes, setNotes] = useState<Record<string, NoteState>>({});
   const [workoutHistories, setWorkoutHistories] = useState<Record<string, WorkoutHistoryEntry[]>>({});
   const [loading, setLoading] = useState(true);
+  const [themePrefs, setThemePrefs] = useState<ThemeNotesPrefs>({
+    generalNote: "",
+    pinnedInsights: [],
+    hiddenBlockNoteIds: [],
+  });
   const debounceTimers = useRef<Record<string, number>>({});
+  const themeNoteTimer = useRef<number | null>(null);
+  const prefsKey = createThemeNotesPrefsKey(userId, themeId);
+  const allHabits = useMemo(() => flattenHabits(habits), [habits]);
 
-  const strengthTrainingHabitIds = habits
+  const strengthTrainingHabitIds = useMemo(() => allHabits
     .filter((h) => {
       if (!h.habitGroupId) return false;
       const group = groups.find((g) => g.id === h.habitGroupId);
       return group?.groupType === "strength_training";
     })
-    .map((h) => h.id);
+    .map((h) => h.id), [allHabits, groups]);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const habitIds = habits.map((h) => h.id);
+        const savedPrefs = window.localStorage.getItem(prefsKey);
+        if (savedPrefs) {
+          setThemePrefs(JSON.parse(savedPrefs) as ThemeNotesPrefs);
+        }
+
+        const habitIds = allHabits.map((h) => h.id);
         const notesData = await database.habitNotes.getByHabitIds(habitIds);
 
         const notesMap: Record<string, NoteState> = {};
-        for (const habit of habits) {
+        for (const habit of allHabits) {
           const existing = notesData.find((n) => n.habit_id === habit.id);
           notesMap[habit.id] = {
             content: existing?.content ?? "",
@@ -96,8 +142,24 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
 
     return () => {
       Object.values(debounceTimers.current).forEach(clearTimeout);
+      if (themeNoteTimer.current) clearTimeout(themeNoteTimer.current);
     };
-  }, []);
+  }, [allHabits, prefsKey, strengthTrainingHabitIds]);
+
+  const saveThemePrefs = useCallback((nextPrefs: ThemeNotesPrefs) => {
+    setThemePrefs(nextPrefs);
+    window.localStorage.setItem(prefsKey, JSON.stringify(nextPrefs));
+  }, [prefsKey]);
+
+  const updateGeneralNote = (content: string) => {
+    const nextPrefs = { ...themePrefs, generalNote: content };
+    setThemePrefs(nextPrefs);
+
+    if (themeNoteTimer.current) clearTimeout(themeNoteTimer.current);
+    themeNoteTimer.current = window.setTimeout(() => {
+      window.localStorage.setItem(prefsKey, JSON.stringify(nextPrefs));
+    }, 600);
+  };
 
   const saveNote = useCallback(async (habitId: string, content: string) => {
     setNotes((prev) => ({
@@ -161,6 +223,57 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
     }
   };
 
+  const pinInsight = (text: string, source: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    saveThemePrefs({
+      ...themePrefs,
+      pinnedInsights: [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          text: trimmed,
+          source,
+          createdAt: new Date().toISOString(),
+        },
+        ...themePrefs.pinnedInsights,
+      ].slice(0, 12),
+    });
+  };
+
+  const removePinnedInsight = (id: string) => {
+    saveThemePrefs({
+      ...themePrefs,
+      pinnedInsights: themePrefs.pinnedInsights.filter((insight) => insight.id !== id),
+    });
+  };
+
+  const hideBlockNote = (blockId: string) => {
+    saveThemePrefs({
+      ...themePrefs,
+      hiddenBlockNoteIds: Array.from(new Set([...themePrefs.hiddenBlockNoteIds, blockId])),
+    });
+  };
+
+  const restoreHiddenBlockNotes = () => {
+    saveThemePrefs({
+      ...themePrefs,
+      hiddenBlockNoteIds: [],
+    });
+  };
+
+  const createBlockFromText = async (text: string) => {
+    const label = getActionLabel(text);
+    if (!label) return;
+    await onCreateBlockFromNote(label);
+  };
+
+  const createHabitFromText = async (text: string) => {
+    const label = getActionLabel(text);
+    if (!label) return;
+    await onCreateHabitFromNote(label);
+  };
+
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr + "T12:00:00");
     return d.toLocaleDateString("en-US", {
@@ -186,6 +299,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   };
 
   const isStrengthHabit = (habitId: string) => strengthTrainingHabitIds.includes(habitId);
+  const hiddenCount = themePrefs.hiddenBlockNoteIds.length;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -205,13 +319,68 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
             <div style={{ textAlign: "center", color: "#666", padding: "24px" }}>
               Loading...
             </div>
-          ) : habits.length === 0 ? (
-            <div style={{ textAlign: "center", color: "#999", padding: "24px", fontSize: "13px" }}>
-              No habits in this theme yet.
-            </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {habits.map((habit) => {
+            <div className="theme-notes-layout">
+              <section className="theme-notes-section">
+                <div className="theme-notes-section-header">
+                  <h3>Theme Notes</h3>
+                  <div className="theme-notes-actions">
+                    <button className="secondary small-btn" onClick={() => pinInsight(themePrefs.generalNote, "Theme note")}>
+                      Pin insight
+                    </button>
+                    <button className="secondary small-btn" onClick={() => createBlockFromText(themePrefs.generalNote)}>
+                      Turn into block
+                    </button>
+                    <button className="secondary small-btn" onClick={() => createHabitFromText(themePrefs.generalNote)}>
+                      Turn into habit
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  className="theme-notes-textarea"
+                  value={themePrefs.generalNote}
+                  onChange={(e) => updateGeneralNote(e.target.value)}
+                  placeholder={`General thoughts about ${themeName}...`}
+                  rows={4}
+                />
+              </section>
+
+              {themePrefs.pinnedInsights.length > 0 && (
+                <section className="theme-notes-section">
+                  <div className="theme-notes-section-header">
+                    <h3>Pinned Insights</h3>
+                  </div>
+                  <div className="theme-notes-pinned-list">
+                    {themePrefs.pinnedInsights.map((insight) => (
+                      <div key={insight.id} className="theme-notes-pinned-item">
+                        <div>
+                          <div className="theme-notes-pinned-source">{insight.source}</div>
+                          <div className="theme-notes-pinned-text">{insight.text}</div>
+                        </div>
+                        <button className="theme-notes-inline-btn" onClick={() => removePinnedInsight(insight.id)}>
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <section className="theme-notes-section">
+                <div className="theme-notes-section-header">
+                  <h3>Linked Habit Notes</h3>
+                  {hiddenCount > 0 && (
+                    <button className="secondary small-btn" onClick={restoreHiddenBlockNotes}>
+                      Show {hiddenCount} archived
+                    </button>
+                  )}
+                </div>
+              {allHabits.length === 0 && (
+                <div style={{ textAlign: "center", color: "#999", padding: "16px", fontSize: "13px" }}>
+                  No habits in this theme yet.
+                </div>
+              )}
+              {allHabits.map((habit) => {
                 const isOpen = expandedHabits.has(habit.id);
                 const note = notes[habit.id];
                 const done = getHabitDoneCount(habit.id, habit.frequency);
@@ -296,11 +465,24 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                         </div>
 
                         <div style={{ marginTop: "10px" }}>
-                          <label style={{ fontSize: "12px", fontWeight: 600, color: "#555", marginBottom: "4px", display: "block" }}>
+                          <div className="theme-notes-subsection-header">
+                            <label style={{ fontSize: "12px", fontWeight: 600, color: "#555", marginBottom: "4px", display: "block" }}>
                             Notes
                             {note?.saving && <span style={{ fontWeight: 400, color: "#999", marginLeft: "8px" }}>Saving...</span>}
                             {note?.saved && <span style={{ fontWeight: 400, color: "#16a34a", marginLeft: "8px" }}>Saved</span>}
-                          </label>
+                            </label>
+                            <div className="theme-notes-actions">
+                              <button className="secondary small-btn" onClick={() => pinInsight(note?.content ?? "", `${habit.name} note`)}>
+                                Pin
+                              </button>
+                              <button className="secondary small-btn" onClick={() => createBlockFromText(note?.content ?? "")}>
+                                Block
+                              </button>
+                              <button className="secondary small-btn" onClick={() => createHabitFromText(note?.content ?? "")}>
+                                Habit
+                              </button>
+                            </div>
+                          </div>
                           <textarea
                             className="theme-notes-textarea"
                             value={note?.content ?? ""}
@@ -312,7 +494,10 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
 
                         {(() => {
                           const habitBlocks = blocks.filter(
-                            (b) => b.habitId === habit.id && (b.blockNote ?? "").trim()
+                            (b) =>
+                              b.habitId === habit.id &&
+                              (b.blockNote ?? "").trim() &&
+                              !themePrefs.hiddenBlockNoteIds.includes(b.id)
                           );
                           if (habitBlocks.length === 0) return null;
                           return (
@@ -325,6 +510,20 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                                   <div key={b.id} className="theme-notes-block-note-item">
                                     <div className="theme-notes-block-note-label">{b.label}</div>
                                     <div className="theme-notes-block-note-content">{b.blockNote}</div>
+                                    <div className="theme-notes-note-actions">
+                                      <button className="theme-notes-inline-btn" onClick={() => pinInsight(b.blockNote ?? "", `${habit.name} block`)}>
+                                        Pin insight
+                                      </button>
+                                      <button className="theme-notes-inline-btn" onClick={() => createBlockFromText(b.blockNote ?? "")}>
+                                        Turn into block
+                                      </button>
+                                      <button className="theme-notes-inline-btn" onClick={() => createHabitFromText(b.blockNote ?? "")}>
+                                        Turn into habit
+                                      </button>
+                                      <button className="theme-notes-inline-btn" onClick={() => hideBlockNote(b.id)}>
+                                        Archive
+                                      </button>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -369,6 +568,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                   </div>
                 );
               })}
+              </section>
             </div>
           )}
         </div>
