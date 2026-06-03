@@ -4114,6 +4114,7 @@ const App: React.FC = () => {
       {notesThemeId && (() => {
         const theme = themes.find((t) => t.id === notesThemeId);
         if (!theme || !user) return null;
+        const themeHabitIds = new Set(flattenHabits(theme.habits, theme.name).map((h) => h.id));
         return (
           <ThemeNotes
             themeId={theme.id}
@@ -4123,7 +4124,14 @@ const App: React.FC = () => {
             userId={user.id}
             getHabitDoneCount={getHabitDoneCount}
             onClose={() => setNotesThemeId(null)}
-            blocks={blocks.filter((b) => b.habitId && theme.habits.some((h) => h.id === b.habitId))}
+            onCreateBlockFromNote={async (label) => {
+              const id = await createBlock(label);
+              if (id) showToast("Note turned into an unscheduled block", "success");
+            }}
+            onCreateHabitFromNote={async (name) => {
+              await addHabitToTheme(theme.id, name, 1, "weekly");
+            }}
+            blocks={blocks.filter((b) => b.habitId && themeHabitIds.has(b.habitId))}
           />
         );
       })()}
