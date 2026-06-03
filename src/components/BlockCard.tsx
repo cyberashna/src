@@ -171,6 +171,12 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const canBuildWorkout = isWorkoutLike && !!onAddExerciseToBlock && !!onUpdateBlockExercise && !!onDeleteBlockExercise;
   const hasExerciseContent = blockExercises.length > 0;
   const hasDetailContent = tasks.length > 0 || hasNoteContent || hasExerciseContent;
+
+  useEffect(() => {
+    if (canBuildWorkout && !hasExerciseContent) {
+      setDetailOpen(true);
+    }
+  }, [canBuildWorkout, hasExerciseContent]);
   const hoverInfo = [
     block.label,
     block.hashtag ? `#${block.hashtag}` : null,
@@ -389,7 +395,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
             </span>
           )}
 
-          {isStrengthTraining(block) && onUpdateWorkout && onSubmitWorkout && (
+          {isStrengthTraining(block) && !canBuildWorkout && onUpdateWorkout && onSubmitWorkout && (
             <WorkoutInputs
               workoutData={block.workoutData}
               workoutSubmitted={block.workoutSubmitted}
@@ -411,13 +417,13 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           </div>
         )}
 
-        {hasExerciseContent && !detailOpen && (
+        {canBuildWorkout && !detailOpen && (
           <div
-            className="block-exercises-pill"
+            className={`block-exercises-pill ${hasExerciseContent ? "has-exercises" : ""}`}
             onClick={(e) => { e.stopPropagation(); setDetailOpen(true); }}
-            title="View exercises"
+            title={hasExerciseContent ? "View exercises" : "Build workout"}
           >
-            {blockExercises.length} ex
+            {hasExerciseContent ? `${blockExercises.length} ex` : "Build workout"}
           </div>
         )}
 

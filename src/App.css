@@ -3392,8 +3392,18 @@ table.planner th.col-normal {
   transition: background 0.15s ease;
 }
 
+.block-exercises-pill.has-exercises {
+  color: #047857;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
 .block-exercises-pill:hover {
   background: #cffafe;
+}
+
+.block-exercises-pill.has-exercises:hover {
+  background: #d1fae5;
 }
 
 .block-detail-panel {
