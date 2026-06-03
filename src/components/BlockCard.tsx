@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from "react";
-import type { Block, WorkoutData } from "../App";
+import type { Block, ExerciseLibraryItem, WorkoutBlockExercise, WorkoutData } from "../App";
 import type { BlockTask } from "../services/database";
 import PriorityBadge from "./PriorityBadge";
 import BlockCreditPopover from "./BlockCreditPopover";
 import { WorkoutInputs } from "./WorkoutInputs";
+import WorkoutExerciseBuilder from "./WorkoutExerciseBuilder";
 import { getSessionDisplayName } from "../services/sessionGrouping";
 
 type HabitNode = { id: string; name: string; subtasks: HabitNode[] };
@@ -44,8 +45,18 @@ type BlockCardProps = {
   onDragEnd: () => void;
   onDelete: (blockId: string) => void;
   isStrengthTraining: (block: Block) => boolean;
+  isWorkoutBlock?: (block: Block) => boolean;
   onUpdateWorkout?: (blockId: string, data: WorkoutData) => void;
   onSubmitWorkout?: (blockId: string) => void;
+  exerciseLibrary?: ExerciseLibraryItem[];
+  blockExercises?: WorkoutBlockExercise[];
+  onAddExerciseToBlock?: (blockId: string, exerciseName: string) => void;
+  onUpdateBlockExercise?: (
+    blockId: string,
+    rowId: string,
+    updates: Partial<WorkoutBlockExercise>
+  ) => void;
+  onDeleteBlockExercise?: (blockId: string, rowId: string) => void;
 
   // notes + tasks
   onSaveBlockNote?: (blockId: string, content: string) => void;
@@ -92,8 +103,14 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onDragEnd,
   onDelete,
   isStrengthTraining,
+  isWorkoutBlock,
   onUpdateWorkout,
   onSubmitWorkout,
+  exerciseLibrary = [],
+  blockExercises = [],
+  onAddExerciseToBlock,
+  onUpdateBlockExercise,
+  onDeleteBlockExercise,
   onSaveBlockNote,
   onAddBlockTask,
   onToggleBlockTask,
@@ -150,7 +167,10 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const tasks: BlockTask[] = block.blockTasks ?? [];
   const completedTaskCount = tasks.filter((t) => t.completed).length;
   const hasNoteContent = (block.blockNote ?? "").trim().length > 0;
-  const hasDetailContent = tasks.length > 0 || hasNoteContent;
+  const isWorkoutLike = isWorkoutBlock?.(block) ?? isStrengthTraining(block);
+  const canBuildWorkout = isWorkoutLike && !!onAddExerciseToBlock && !!onUpdateBlockExercise && !!onDeleteBlockExercise;
+  const hasExerciseContent = blockExercises.length > 0;
+  const hasDetailContent = tasks.length > 0 || hasNoteContent || hasExerciseContent;
   const hoverInfo = [
     block.label,
     block.hashtag ? `#${block.hashtag}` : null,
@@ -391,6 +411,16 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           </div>
         )}
 
+        {hasExerciseContent && !detailOpen && (
+          <div
+            className="block-exercises-pill"
+            onClick={(e) => { e.stopPropagation(); setDetailOpen(true); }}
+            title="View exercises"
+          >
+            {blockExercises.length} ex
+          </div>
+        )}
+
         {/* Notes/Tasks toggle button */}
         {(onSaveBlockNote || onAddBlockTask) && (
           <button
@@ -448,6 +478,21 @@ export const BlockCard: React.FC<BlockCardProps> = ({
       {/* Inline notes + tasks panel */}
       {detailOpen && (
         <div className="block-detail-panel" onClick={(e) => e.stopPropagation()}>
+          {canBuildWorkout && (
+            <div className="block-detail-section">
+              <div className="block-detail-section-label">Workout exercises</div>
+              <WorkoutExerciseBuilder
+                blockId={block.id}
+                blockLabel={block.label}
+                exerciseLibrary={exerciseLibrary}
+                blockExercises={blockExercises}
+                onAddExercise={onAddExerciseToBlock}
+                onUpdateExercise={onUpdateBlockExercise}
+                onDeleteExercise={onDeleteBlockExercise}
+              />
+            </div>
+          )}
+
           {/* Tasks */}
           {(onAddBlockTask || tasks.length > 0) && (
             <div className="block-detail-section">
