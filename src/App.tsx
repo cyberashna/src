@@ -91,6 +91,7 @@ export type Block = {
   mealId?: string;
   mealType?: "breakfast" | "lunch" | "dinner";
   blockNote?: string;
+  blockNoteUpdatedAt?: string;
   blockTasks?: BlockTask[];
 };
 
@@ -450,6 +451,7 @@ const App: React.FC = () => {
       const mealMap = new Map(mealsData.map((m) => [m.id, m]));
 
       const blockNoteByBlock = new Map(blockNotesArray.map((n) => [n.block_id, n.content]));
+      const blockNoteUpdatedAtByBlock = new Map(blockNotesArray.map((n) => [n.block_id, n.updated_at]));
       const blockTasksByBlock = new Map<string, BlockTask[]>();
       blockTasksArray.forEach((t) => {
         const existing = blockTasksByBlock.get(t.block_id) ?? [];
@@ -478,6 +480,7 @@ const App: React.FC = () => {
           mealId: mealId ?? undefined,
           mealType: linkedMeal?.meal_type ?? undefined,
           blockNote: blockNoteByBlock.get(b.id),
+          blockNoteUpdatedAt: blockNoteUpdatedAtByBlock.get(b.id),
           blockTasks: blockTasksByBlock.get(b.id) ?? [],
           location:
             b.location_type === "slot" && b.day_index !== null && b.time_index !== null
@@ -1850,9 +1853,13 @@ const App: React.FC = () => {
   const saveBlockNote = async (blockId: string, content: string) => {
     if (!user) return;
     try {
-      await database.blockNotes.upsert(user.id, blockId, content);
+      const savedNote = await database.blockNotes.upsert(user.id, blockId, content);
       setBlocks((prev) =>
-        prev.map((b) => (b.id === blockId ? { ...b, blockNote: content } : b))
+        prev.map((b) => (
+          b.id === blockId
+            ? { ...b, blockNote: content, blockNoteUpdatedAt: savedNote.updated_at }
+            : b
+        ))
       );
 
       // If this block is a habit block, also append/sync to the habit note
