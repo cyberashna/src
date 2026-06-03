@@ -1657,6 +1657,12 @@ table.planner td.slot.col-past .block {
   min-height: 6px;
   height: 8px;
   overflow: hidden;
+  background: #b3cde8 !important;
+  border-color: #7aaed4 !important;
+}
+table.planner td.slot.col-past .block.block-done {
+  background: #86c9a0 !important;
+  border-color: #5aad7a !important;
 }
 table.planner td.slot.col-past .block:hover {
   overflow: visible;
