@@ -1871,6 +1871,12 @@ table.planner th.col-normal {
   color: #334155;
 }
 
+.theme-notes-timestamp {
+  font-size: 10px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
 .theme-notes-actions,
 .theme-notes-note-actions {
   display: flex;
@@ -3431,6 +3437,14 @@ table.planner th.col-normal {
   margin-bottom: 2px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
+}
+
+.theme-notes-block-note-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
 }
 
 .theme-notes-block-note-content {

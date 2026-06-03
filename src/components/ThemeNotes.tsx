@@ -38,6 +38,7 @@ type NoteState = {
   content: string;
   saving: boolean;
   saved: boolean;
+  updatedAt?: string;
 };
 
 type PinnedInsight = {
@@ -49,6 +50,7 @@ type PinnedInsight = {
 
 type ThemeNotesPrefs = {
   generalNote: string;
+  generalUpdatedAt?: string;
   pinnedInsights: PinnedInsight[];
   hiddenBlockNoteIds: string[];
 };
@@ -85,6 +87,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   const [loading, setLoading] = useState(true);
   const [themePrefs, setThemePrefs] = useState<ThemeNotesPrefs>({
     generalNote: "",
+    generalUpdatedAt: undefined,
     pinnedInsights: [],
     hiddenBlockNoteIds: [],
   });
@@ -119,6 +122,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
             content: existing?.content ?? "",
             saving: false,
             saved: false,
+            updatedAt: existing?.updated_at,
           };
         }
         setNotes(notesMap);
@@ -152,7 +156,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   }, [prefsKey]);
 
   const updateGeneralNote = (content: string) => {
-    const nextPrefs = { ...themePrefs, generalNote: content };
+    const nextPrefs = { ...themePrefs, generalNote: content, generalUpdatedAt: new Date().toISOString() };
     setThemePrefs(nextPrefs);
 
     if (themeNoteTimer.current) clearTimeout(themeNoteTimer.current);
@@ -168,10 +172,10 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
     }));
 
     try {
-      await database.habitNotes.upsert(userId, habitId, content);
+      const savedNote = await database.habitNotes.upsert(userId, habitId, content);
       setNotes((prev) => ({
         ...prev,
-        [habitId]: { ...prev[habitId], saving: false, saved: true },
+        [habitId]: { ...prev[habitId], saving: false, saved: true, updatedAt: savedNote.updated_at },
       }));
       setTimeout(() => {
         setNotes((prev) => ({
@@ -283,6 +287,17 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
     });
   };
 
+  const formatTimestamp = (timestamp?: string) => {
+    if (!timestamp) return null;
+    const date = new Date(timestamp);
+    return date.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
+
   const formatTimeSince = (timestamp: string): string => {
     const now = new Date();
     const then = new Date(timestamp);
@@ -324,6 +339,11 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
               <section className="theme-notes-section">
                 <div className="theme-notes-section-header">
                   <h3>Theme Notes</h3>
+                  {themePrefs.generalUpdatedAt && (
+                    <span className="theme-notes-timestamp">
+                      Last edited {formatTimestamp(themePrefs.generalUpdatedAt)}
+                    </span>
+                  )}
                   <div className="theme-notes-actions">
                     <button className="secondary small-btn" onClick={() => pinInsight(themePrefs.generalNote, "Theme note")}>
                       Pin insight
@@ -355,6 +375,9 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                       <div key={insight.id} className="theme-notes-pinned-item">
                         <div>
                           <div className="theme-notes-pinned-source">{insight.source}</div>
+                          <div className="theme-notes-timestamp">
+                            Pinned {formatTimestamp(insight.createdAt)}
+                          </div>
                           <div className="theme-notes-pinned-text">{insight.text}</div>
                         </div>
                         <button className="theme-notes-inline-btn" onClick={() => removePinnedInsight(insight.id)}>
@@ -471,6 +494,11 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                             {note?.saving && <span style={{ fontWeight: 400, color: "#999", marginLeft: "8px" }}>Saving...</span>}
                             {note?.saved && <span style={{ fontWeight: 400, color: "#16a34a", marginLeft: "8px" }}>Saved</span>}
                             </label>
+                            {note?.updatedAt && (
+                              <span className="theme-notes-timestamp">
+                                Last edited {formatTimestamp(note.updatedAt)}
+                              </span>
+                            )}
                             <div className="theme-notes-actions">
                               <button className="secondary small-btn" onClick={() => pinInsight(note?.content ?? "", `${habit.name} note`)}>
                                 Pin
@@ -508,7 +536,14 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                               <div className="theme-notes-block-notes">
                                 {habitBlocks.map((b) => (
                                   <div key={b.id} className="theme-notes-block-note-item">
-                                    <div className="theme-notes-block-note-label">{b.label}</div>
+                                    <div className="theme-notes-block-note-label-row">
+                                      <div className="theme-notes-block-note-label">{b.label}</div>
+                                      {b.blockNoteUpdatedAt && (
+                                        <span className="theme-notes-timestamp">
+                                          {formatTimestamp(b.blockNoteUpdatedAt)}
+                                        </span>
+                                      )}
+                                    </div>
                                     <div className="theme-notes-block-note-content">{b.blockNote}</div>
                                     <div className="theme-notes-note-actions">
                                       <button className="theme-notes-inline-btn" onClick={() => pinInsight(b.blockNote ?? "", `${habit.name} block`)}>
