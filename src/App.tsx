@@ -72,6 +72,30 @@ export type WorkoutData = {
   unit: "lbs" | "kg" | null;
 };
 
+export type ExerciseCategory = "strength" | "mobility" | "core" | "cardio" | "recovery";
+
+export type ExerciseLibraryItem = {
+  id: string;
+  name: string;
+  category: ExerciseCategory;
+  bodyArea?: "upper" | "lower" | "core" | "full";
+  pattern?: "push" | "pull" | "squat" | "hinge" | "carry" | "rotation" | "stretch" | "cardio";
+  defaultSets?: number | null;
+  defaultReps?: number | null;
+  defaultDuration?: number | null;
+};
+
+export type WorkoutBlockExercise = {
+  id: string;
+  exerciseId: string;
+  sets: number | null;
+  reps: number | null;
+  weight: number | null;
+  unit: "lbs" | "kg" | null;
+  duration: number | null;
+  notes: string;
+};
+
 export type Block = {
   id: string;
   label: string;
@@ -98,6 +122,34 @@ export type Block = {
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const createClientId = (prefix: string) =>
+  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+const defaultExerciseLibrary: ExerciseLibraryItem[] = [
+  { id: "exercise-rdl", name: "Romanian deadlift", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-goblet-squat", name: "Goblet squat", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-split-squat", name: "Split squat", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-hip-thrust", name: "Hip thrust", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-hamstring-curl", name: "Hamstring curl", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-calf-raise", name: "Calf raise", category: "strength", bodyArea: "lower", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-chest-press", name: "Chest press", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-shoulder-press", name: "Shoulder press", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-push-up", name: "Push-up", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-row", name: "Row", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-lat-pulldown", name: "Lat pulldown", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-dead-bug", name: "Dead bug", category: "core", bodyArea: "core", pattern: "rotation", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-plank", name: "Plank", category: "core", bodyArea: "core", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-side-plank", name: "Side plank", category: "core", bodyArea: "core", defaultSets: 2, defaultDuration: 1 },
+  { id: "exercise-pallof-press", name: "Pallof press", category: "core", bodyArea: "core", pattern: "rotation", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-hip-flexor-stretch", name: "Hip flexor stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-thoracic-rotation", name: "Thoracic rotation", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultReps: 10 },
+  { id: "exercise-ankle-rocks", name: "Ankle rocks", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultReps: 15 },
+  { id: "exercise-90-90", name: "90/90 hip switch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultReps: 8 },
+  { id: "exercise-walk", name: "Walk", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 20 },
+  { id: "exercise-bike", name: "Bike", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 20 },
+  { id: "exercise-foam-roll", name: "Foam rolling", category: "recovery", bodyArea: "full", defaultDuration: 10 },
+];
 
 const formatTimeSince = (timestamp: string): string => {
   const now = new Date();
@@ -235,6 +287,8 @@ const App: React.FC = () => {
 
   const [themes, setThemes] = useState<Theme[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
+  const [exerciseLibrary, setExerciseLibrary] = useState<ExerciseLibraryItem[]>(defaultExerciseLibrary);
+  const [blockExercises, setBlockExercises] = useState<Record<string, WorkoutBlockExercise[]>>({});
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dragHabitId, setDragHabitId] = useState<string | null>(null);
   const [dragOverThemeId, setDragOverThemeId] = useState<string | null>(null);
@@ -359,6 +413,37 @@ const App: React.FC = () => {
       loadUserData();
     }
   }, [user, weekOffset]);
+
+  useEffect(() => {
+    if (!user) {
+      setExerciseLibrary(defaultExerciseLibrary);
+      setBlockExercises({});
+      return;
+    }
+
+    try {
+      const savedLibrary = window.localStorage.getItem(`exercise-library:${user.id}`);
+      const savedBlockExercises = window.localStorage.getItem(`workout-block-exercises:${user.id}`);
+      const parsedLibrary = savedLibrary
+        ? (JSON.parse(savedLibrary) as ExerciseLibraryItem[])
+        : defaultExerciseLibrary;
+      setExerciseLibrary([
+        ...defaultExerciseLibrary,
+        ...parsedLibrary.filter(
+          (saved) => !defaultExerciseLibrary.some((item) => item.id === saved.id)
+        ),
+      ]);
+      setBlockExercises(
+        savedBlockExercises
+          ? (JSON.parse(savedBlockExercises) as Record<string, WorkoutBlockExercise[]>)
+          : {}
+      );
+    } catch (error) {
+      console.error("Error loading exercise library:", error);
+      setExerciseLibrary(defaultExerciseLibrary);
+      setBlockExercises({});
+    }
+  }, [user]);
 
   const loadUserData = async () => {
     if (!user) return;
@@ -1988,6 +2073,79 @@ const App: React.FC = () => {
     }
   };
 
+  const saveExerciseLibrary = (nextLibrary: ExerciseLibraryItem[]) => {
+    setExerciseLibrary(nextLibrary);
+    if (user) {
+      window.localStorage.setItem(`exercise-library:${user.id}`, JSON.stringify(nextLibrary));
+    }
+  };
+
+  const saveBlockExercises = (nextExercises: Record<string, WorkoutBlockExercise[]>) => {
+    setBlockExercises(nextExercises);
+    if (user) {
+      window.localStorage.setItem(`workout-block-exercises:${user.id}`, JSON.stringify(nextExercises));
+    }
+  };
+
+  const addExerciseToBlock = (blockId: string, exerciseName: string) => {
+    const trimmed = exerciseName.trim();
+    if (!trimmed) return;
+
+    let nextLibrary = exerciseLibrary;
+    let libraryItem = exerciseLibrary.find(
+      (exercise) => exercise.name.toLowerCase() === trimmed.toLowerCase()
+    );
+
+    if (!libraryItem) {
+      libraryItem = {
+        id: createClientId("exercise"),
+        name: trimmed,
+        category: "strength",
+        defaultSets: 3,
+        defaultReps: 10,
+      };
+      nextLibrary = [...exerciseLibrary, libraryItem];
+      saveExerciseLibrary(nextLibrary);
+      showToast(`Added ${trimmed} to your exercise library`, "success");
+    }
+
+    const nextRow: WorkoutBlockExercise = {
+      id: createClientId("block-exercise"),
+      exerciseId: libraryItem.id,
+      sets: libraryItem.defaultSets ?? null,
+      reps: libraryItem.defaultReps ?? null,
+      weight: null,
+      unit: "lbs",
+      duration: libraryItem.defaultDuration ?? null,
+      notes: "",
+    };
+
+    saveBlockExercises({
+      ...blockExercises,
+      [blockId]: [...(blockExercises[blockId] ?? []), nextRow],
+    });
+  };
+
+  const updateBlockExercise = (
+    blockId: string,
+    rowId: string,
+    updates: Partial<WorkoutBlockExercise>
+  ) => {
+    saveBlockExercises({
+      ...blockExercises,
+      [blockId]: (blockExercises[blockId] ?? []).map((row) =>
+        row.id === rowId ? { ...row, ...updates } : row
+      ),
+    });
+  };
+
+  const deleteBlockExercise = (blockId: string, rowId: string) => {
+    saveBlockExercises({
+      ...blockExercises,
+      [blockId]: (blockExercises[blockId] ?? []).filter((row) => row.id !== rowId),
+    });
+  };
+
   const isStrengthTrainingBlock = (block: Block): boolean => {
     if (!block.isHabitBlock || !block.habitId) return false;
 
@@ -1999,6 +2157,24 @@ const App: React.FC = () => {
       .find((g) => g.id === habit.habitGroupId);
 
     return habitGroup?.groupType === "strength_training";
+  };
+
+  const isWorkoutBlock = (block: Block): boolean => {
+    if (isStrengthTrainingBlock(block)) return true;
+
+    const habit = block.habitId ? allHabits.find((h) => h.id === block.habitId) : undefined;
+    const theme = block.themeId ? themes.find((t) => t.id === block.themeId) : undefined;
+    const searchableText = [
+      block.label,
+      block.hashtag,
+      habit?.name,
+      theme?.name,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return /\b(workout|training|strength|full body|upper|lower|core|mobility|stretch|cardio|walk|legs?|glutes?|push|pull)\b/.test(searchableText);
   };
 
   const handleViewModeChange = (mode: ViewMode) => {
@@ -3543,8 +3719,14 @@ const App: React.FC = () => {
                                   onDragEnd={handleDragEnd}
                                   onDelete={deleteBlockWithUndo}
                                   isStrengthTraining={isStrengthTrainingBlock}
+                                  isWorkoutBlock={isWorkoutBlock}
                                   onUpdateWorkout={updateWorkoutData}
                                   onSubmitWorkout={submitWorkout}
+                                  exerciseLibrary={exerciseLibrary}
+                                  blockExercises={blockExercises[block.id] ?? []}
+                                  onAddExerciseToBlock={addExerciseToBlock}
+                                  onUpdateBlockExercise={updateBlockExercise}
+                                  onDeleteBlockExercise={deleteBlockExercise}
                                   convertingBlockId={convertingBlockId}
                                   convertFrequency={convertFrequency}
                                   convertTarget={convertTarget}
@@ -3676,8 +3858,14 @@ const App: React.FC = () => {
                     onDragEnd={handleDragEnd}
                     onDelete={deleteBlockWithUndo}
                     isStrengthTraining={isStrengthTrainingBlock}
+                    isWorkoutBlock={isWorkoutBlock}
                     onUpdateWorkout={updateWorkoutData}
                     onSubmitWorkout={submitWorkout}
+                    exerciseLibrary={exerciseLibrary}
+                    blockExercises={blockExercises[block.id] ?? []}
+                    onAddExerciseToBlock={addExerciseToBlock}
+                    onUpdateBlockExercise={updateBlockExercise}
+                    onDeleteBlockExercise={deleteBlockExercise}
                     themes={themes}
                     mealPopoverBlockId={mealPopoverBlockId}
                     onSetMealPopover={setMealPopoverBlockId}
@@ -3965,8 +4153,14 @@ const App: React.FC = () => {
                                   onDragEnd={handleDragEnd}
                                   onDelete={deleteBlockWithUndo}
                                   isStrengthTraining={isStrengthTrainingBlock}
+                                  isWorkoutBlock={isWorkoutBlock}
                                   onUpdateWorkout={updateWorkoutData}
                                   onSubmitWorkout={submitWorkout}
+                                  exerciseLibrary={exerciseLibrary}
+                                  blockExercises={blockExercises[block.id] ?? []}
+                                  onAddExerciseToBlock={addExerciseToBlock}
+                                  onUpdateBlockExercise={updateBlockExercise}
+                                  onDeleteBlockExercise={deleteBlockExercise}
                                   onSaveBlockNote={saveBlockNote}
                                   onAddBlockTask={addBlockTask}
                                   onToggleBlockTask={toggleBlockTask}

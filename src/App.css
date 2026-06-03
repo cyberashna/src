@@ -3376,6 +3376,26 @@ table.planner th.col-normal {
   font-size: 9px;
 }
 
+.block-exercises-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: #0e7490;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 999px;
+  padding: 1px 6px;
+  margin-top: 3px;
+  margin-left: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.block-exercises-pill:hover {
+  background: #cffafe;
+}
+
 .block-detail-panel {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -3522,6 +3542,145 @@ table.planner th.col-normal {
   font-size: 9px;
   color: #94a3b8;
   margin-top: 3px;
+}
+
+.workout-exercise-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workout-exercise-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workout-exercise-row {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  padding: 6px;
+}
+
+.workout-exercise-main,
+.workout-exercise-fields,
+.workout-exercise-add-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workout-exercise-main {
+  margin-bottom: 5px;
+}
+
+.workout-exercise-select,
+.workout-exercise-add-row input,
+.workout-exercise-note {
+  min-width: 0;
+  flex: 1;
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+}
+
+.workout-exercise-fields {
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.workout-exercise-fields input,
+.workout-exercise-fields select {
+  width: 50px;
+  font-size: 10px;
+  padding: 3px 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+}
+
+.workout-exercise-fields input:last-child {
+  width: 46px;
+}
+
+.workout-exercise-note {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.workout-exercise-tag {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.workout-exercise-strength {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.workout-exercise-mobility {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.workout-exercise-core {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.workout-exercise-cardio {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.workout-exercise-recovery {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.workout-exercise-delete {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 1px 3px;
+}
+
+.workout-exercise-delete:hover {
+  color: #ef4444;
+}
+
+.workout-exercise-add-row input {
+  height: 24px;
+}
+
+.workout-exercise-add-row button {
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.workout-exercise-add-row button:disabled {
+  background: #cbd5e1;
+  cursor: default;
 }
 
 /* Block notes in ThemeNotes modal */
