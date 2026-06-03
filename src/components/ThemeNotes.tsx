@@ -55,6 +55,8 @@ type ThemeNotesPrefs = {
   hiddenBlockNoteIds: string[];
 };
 
+type MarkdownCommand = "heading" | "bold" | "italic" | "bullet" | "check";
+
 const createThemeNotesPrefsKey = (userId: string, themeId: string) =>
   `theme-notes:${userId}:${themeId}`;
 
@@ -68,6 +70,78 @@ const getActionLabel = (text: string) =>
 
 const flattenHabits = (habits: Habit[]): Habit[] =>
   habits.flatMap((habit) => [habit, ...flattenHabits(habit.subtasks ?? [])]);
+
+const applyMarkdownEdit = (
+  value: string,
+  start: number,
+  end: number,
+  command: MarkdownCommand
+) => {
+  const selected = value.slice(start, end);
+  const hasSelection = selected.length > 0;
+  const selectedOrPlaceholder = selected || (
+    command === "heading" ? "Heading" :
+    command === "bullet" ? "List item" :
+    command === "check" ? "Action item" :
+    "text"
+  );
+
+  let replacement = selectedOrPlaceholder;
+  let selectStart = start;
+  let selectEnd = start + replacement.length;
+
+  if (command === "bold" || command === "italic") {
+    const marker = command === "bold" ? "**" : "*";
+    replacement = `${marker}${selectedOrPlaceholder}${marker}`;
+    selectStart = start + marker.length;
+    selectEnd = selectStart + selectedOrPlaceholder.length;
+  }
+
+  if (command === "heading") {
+    replacement = selectedOrPlaceholder
+      .split("\n")
+      .map((line) => line.startsWith("#") ? line : `## ${line}`)
+      .join("\n");
+    selectStart = start + 3;
+    selectEnd = start + replacement.length;
+  }
+
+  if (command === "bullet" || command === "check") {
+    const prefix = command === "bullet" ? "- " : "- [ ] ";
+    replacement = selectedOrPlaceholder
+      .split("\n")
+      .map((line) => line.startsWith(prefix) ? line : `${prefix}${line}`)
+      .join("\n");
+    selectStart = start + prefix.length;
+    selectEnd = hasSelection ? start + replacement.length : selectStart + selectedOrPlaceholder.length;
+  }
+
+  return {
+    nextValue: `${value.slice(0, start)}${replacement}${value.slice(end)}`,
+    selectStart,
+    selectEnd,
+  };
+};
+
+const MarkdownToolbar: React.FC<{ onCommand: (command: MarkdownCommand) => void }> = ({ onCommand }) => (
+  <div className="theme-notes-markdown-toolbar" aria-label="Markdown formatting">
+    <button type="button" className="theme-notes-format-btn" onClick={() => onCommand("heading")} title="Heading">
+      H
+    </button>
+    <button type="button" className="theme-notes-format-btn" onClick={() => onCommand("bold")} title="Bold">
+      B
+    </button>
+    <button type="button" className="theme-notes-format-btn italic" onClick={() => onCommand("italic")} title="Italic">
+      I
+    </button>
+    <button type="button" className="theme-notes-format-btn" onClick={() => onCommand("bullet")} title="Bulleted list">
+      List
+    </button>
+    <button type="button" className="theme-notes-format-btn" onClick={() => onCommand("check")} title="Checkbox">
+      Check
+    </button>
+  </div>
+);
 
 export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   themeId,
@@ -93,6 +167,8 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   });
   const debounceTimers = useRef<Record<string, number>>({});
   const themeNoteTimer = useRef<number | null>(null);
+  const themeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const habitTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const prefsKey = createThemeNotesPrefsKey(userId, themeId);
   const allHabits = useMemo(() => flattenHabits(habits), [habits]);
 
@@ -204,6 +280,25 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
     debounceTimers.current[habitId] = window.setTimeout(() => {
       saveNote(habitId, value);
     }, 1000);
+  };
+
+  const applyMarkdownCommand = (target: "theme" | string, command: MarkdownCommand) => {
+    const textarea = target === "theme" ? themeTextareaRef.current : habitTextareaRefs.current[target];
+    const value = target === "theme" ? themePrefs.generalNote : notes[target]?.content ?? "";
+    const start = textarea?.selectionStart ?? value.length;
+    const end = textarea?.selectionEnd ?? value.length;
+    const { nextValue, selectStart, selectEnd } = applyMarkdownEdit(value, start, end, command);
+
+    if (target === "theme") {
+      updateGeneralNote(nextValue);
+    } else {
+      handleNoteChange(target, nextValue);
+    }
+
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(selectStart, selectEnd);
+    });
   };
 
   const toggleHabit = (habitId: string) => {
@@ -357,12 +452,14 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                   </div>
                 </div>
                 <textarea
+                  ref={themeTextareaRef}
                   className="theme-notes-textarea"
                   value={themePrefs.generalNote}
                   onChange={(e) => updateGeneralNote(e.target.value)}
                   placeholder={`General thoughts about ${themeName}...`}
                   rows={4}
                 />
+                <MarkdownToolbar onCommand={(command) => applyMarkdownCommand("theme", command)} />
               </section>
 
               {themePrefs.pinnedInsights.length > 0 && (
@@ -512,12 +609,14 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                             </div>
                           </div>
                           <textarea
+                            ref={(node) => { habitTextareaRefs.current[habit.id] = node; }}
                             className="theme-notes-textarea"
                             value={note?.content ?? ""}
                             onChange={(e) => handleNoteChange(habit.id, e.target.value)}
                             placeholder={`Write notes about ${habit.name}...`}
                             rows={3}
                           />
+                          <MarkdownToolbar onCommand={(command) => applyMarkdownCommand(habit.id, command)} />
                         </div>
 
                         {(() => {
