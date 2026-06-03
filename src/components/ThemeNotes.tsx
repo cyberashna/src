@@ -123,6 +123,107 @@ const applyMarkdownEdit = (
   };
 };
 
+const parseInlineMarkdown = (text: string, keyPrefix: string): React.ReactNode[] => {
+  const nodes: React.ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    if (token.startsWith("**")) {
+      nodes.push(<strong key={`${keyPrefix}-strong-${match.index}`}>{token.slice(2, -2)}</strong>);
+    } else {
+      nodes.push(<em key={`${keyPrefix}-em-${match.index}`}>{token.slice(1, -1)}</em>);
+    }
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes.length > 0 ? nodes : [text];
+};
+
+const renderMarkdownPreview = (content: string) => {
+  const lines = content.split("\n");
+  const elements: React.ReactNode[] = [];
+  let listItems: React.ReactNode[] = [];
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    elements.push(<ul key={`list-${elements.length}`}>{listItems}</ul>);
+    listItems = [];
+  };
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushList();
+      return;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      flushList();
+      const HeadingTag = headingMatch[1].length === 1 ? "h3" : "h4";
+      elements.push(
+        <HeadingTag key={`heading-${index}`}>
+          {parseInlineMarkdown(headingMatch[2], `heading-${index}`)}
+        </HeadingTag>
+      );
+      return;
+    }
+
+    const checkboxMatch = trimmed.match(/^-\s+\[([ xX])\]\s+(.+)$/);
+    if (checkboxMatch) {
+      listItems.push(
+        <li key={`checkbox-${index}`} className="theme-notes-preview-checkbox">
+          <input type="checkbox" checked={checkboxMatch[1].toLowerCase() === "x"} readOnly />
+          <span>{parseInlineMarkdown(checkboxMatch[2], `checkbox-${index}`)}</span>
+        </li>
+      );
+      return;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bulletMatch) {
+      listItems.push(
+        <li key={`bullet-${index}`}>
+          {parseInlineMarkdown(bulletMatch[1], `bullet-${index}`)}
+        </li>
+      );
+      return;
+    }
+
+    flushList();
+    elements.push(
+      <p key={`paragraph-${index}`}>
+        {parseInlineMarkdown(trimmed, `paragraph-${index}`)}
+      </p>
+    );
+  });
+
+  flushList();
+  return elements;
+};
+
+const MarkdownPreview: React.FC<{ content: string }> = ({ content }) => {
+  if (!content.trim()) return null;
+
+  return (
+    <div className="theme-notes-markdown-preview">
+      {renderMarkdownPreview(content)}
+    </div>
+  );
+};
+
 const MarkdownToolbar: React.FC<{ onCommand: (command: MarkdownCommand) => void }> = ({ onCommand }) => (
   <div className="theme-notes-markdown-toolbar" aria-label="Markdown formatting">
     <button type="button" className="theme-notes-format-btn" onClick={() => onCommand("heading")} title="Heading">
@@ -143,6 +244,70 @@ const MarkdownToolbar: React.FC<{ onCommand: (command: MarkdownCommand) => void 
   </div>
 );
 
+const MarkdownNoteEditor: React.FC<{
+  value: string;
+  placeholder: string;
+  rows: number;
+  textareaRef: React.Ref<HTMLTextAreaElement>;
+  isEditing: boolean;
+  onChange: (value: string) => void;
+  onCommand: (command: MarkdownCommand) => void;
+  onStartEdit: () => void;
+  onStopEdit: () => void;
+}> = ({
+  value,
+  placeholder,
+  rows,
+  textareaRef,
+  isEditing,
+  onChange,
+  onCommand,
+  onStartEdit,
+  onStopEdit,
+}) => {
+  const hasContent = value.trim().length > 0;
+
+  if (!isEditing && hasContent) {
+    return (
+      <button
+        type="button"
+        className="theme-notes-preview-button"
+        onClick={onStartEdit}
+        title="Click to edit"
+      >
+        <MarkdownPreview content={value} />
+      </button>
+    );
+  }
+
+  return (
+    <div
+      className="theme-notes-editor"
+      onBlur={(event) => {
+        const nextFocus = event.relatedTarget as Node | null;
+        if (nextFocus && event.currentTarget.contains(nextFocus)) return;
+        onStopEdit();
+      }}
+    >
+      <textarea
+        ref={textareaRef}
+        className="theme-notes-textarea"
+        value={value}
+        onFocus={onStartEdit}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+      />
+      <MarkdownToolbar onCommand={onCommand} />
+      {hasContent && (
+        <div className="theme-notes-live-preview">
+          <MarkdownPreview content={value} />
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   themeId,
   themeName,
@@ -159,6 +324,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   const [notes, setNotes] = useState<Record<string, NoteState>>({});
   const [workoutHistories, setWorkoutHistories] = useState<Record<string, WorkoutHistoryEntry[]>>({});
   const [loading, setLoading] = useState(true);
+  const [activeNoteEditor, setActiveNoteEditor] = useState<"theme" | string | null>(null);
   const [themePrefs, setThemePrefs] = useState<ThemeNotesPrefs>({
     generalNote: "",
     generalUpdatedAt: undefined,
@@ -451,15 +617,17 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                     </button>
                   </div>
                 </div>
-                <textarea
-                  ref={themeTextareaRef}
-                  className="theme-notes-textarea"
+                <MarkdownNoteEditor
                   value={themePrefs.generalNote}
-                  onChange={(e) => updateGeneralNote(e.target.value)}
                   placeholder={`General thoughts about ${themeName}...`}
                   rows={4}
+                  textareaRef={themeTextareaRef}
+                  isEditing={activeNoteEditor === "theme" || !themePrefs.generalNote.trim()}
+                  onChange={updateGeneralNote}
+                  onCommand={(command) => applyMarkdownCommand("theme", command)}
+                  onStartEdit={() => setActiveNoteEditor("theme")}
+                  onStopEdit={() => setActiveNoteEditor((current) => current === "theme" ? null : current)}
                 />
-                <MarkdownToolbar onCommand={(command) => applyMarkdownCommand("theme", command)} />
               </section>
 
               {themePrefs.pinnedInsights.length > 0 && (
@@ -608,15 +776,17 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                               </button>
                             </div>
                           </div>
-                          <textarea
-                            ref={(node) => { habitTextareaRefs.current[habit.id] = node; }}
-                            className="theme-notes-textarea"
+                          <MarkdownNoteEditor
                             value={note?.content ?? ""}
-                            onChange={(e) => handleNoteChange(habit.id, e.target.value)}
                             placeholder={`Write notes about ${habit.name}...`}
                             rows={3}
+                            textareaRef={(node) => { habitTextareaRefs.current[habit.id] = node; }}
+                            isEditing={activeNoteEditor === habit.id || !(note?.content ?? "").trim()}
+                            onChange={(value) => handleNoteChange(habit.id, value)}
+                            onCommand={(command) => applyMarkdownCommand(habit.id, command)}
+                            onStartEdit={() => setActiveNoteEditor(habit.id)}
+                            onStopEdit={() => setActiveNoteEditor((current) => current === habit.id ? null : current)}
                           />
-                          <MarkdownToolbar onCommand={(command) => applyMarkdownCommand(habit.id, command)} />
                         </div>
 
                         {(() => {
