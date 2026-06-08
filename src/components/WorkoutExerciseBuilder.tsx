@@ -15,6 +15,14 @@ type WorkoutExerciseBuilderProps = {
   onDeleteExercise: (blockId: string, rowId: string) => void;
 };
 
+type WorkoutFocus = "full" | "upper" | "lower" | "core" | "mobility" | "cardio";
+
+type CoverageItem = {
+  id: string;
+  label: string;
+  met: boolean;
+};
+
 const categoryLabels: Record<ExerciseLibraryItem["category"], string> = {
   strength: "Strength",
   mobility: "Mobility",
@@ -23,7 +31,16 @@ const categoryLabels: Record<ExerciseLibraryItem["category"], string> = {
   recovery: "Recovery",
 };
 
-const getWorkoutFocus = (blockLabel: string) => {
+const focusLabels: Record<WorkoutFocus, string> = {
+  full: "Full body",
+  upper: "Upper",
+  lower: "Lower",
+  core: "Core",
+  mobility: "Mobility",
+  cardio: "Cardio",
+};
+
+const getWorkoutFocus = (blockLabel: string): WorkoutFocus => {
   const label = blockLabel.toLowerCase();
   if (label.includes("mobility") || label.includes("stretch")) return "mobility";
   if (label.includes("core") || label.includes("abs")) return "core";
@@ -33,7 +50,7 @@ const getWorkoutFocus = (blockLabel: string) => {
   return "full";
 };
 
-const exerciseScore = (exercise: ExerciseLibraryItem, focus: string) => {
+const exerciseScore = (exercise: ExerciseLibraryItem, focus: WorkoutFocus) => {
   if (focus === "full") return 0;
   if (exercise.category === focus) return -3;
   if (exercise.bodyArea === focus) return -2;
@@ -41,6 +58,76 @@ const exerciseScore = (exercise: ExerciseLibraryItem, focus: string) => {
   if (focus === "upper" && ["push", "pull"].includes(exercise.pattern ?? "")) return -1;
   if (focus === "lower" && ["squat", "hinge"].includes(exercise.pattern ?? "")) return -1;
   return 0;
+};
+
+const buildCoverageItems = (
+  focus: WorkoutFocus,
+  exercises: ExerciseLibraryItem[],
+  rows: WorkoutBlockExercise[]
+): CoverageItem[] => {
+  const hasCategory = (category: ExerciseLibraryItem["category"]) =>
+    exercises.some((exercise) => exercise.category === category);
+  const hasBodyArea = (bodyArea: NonNullable<ExerciseLibraryItem["bodyArea"]>) =>
+    exercises.some((exercise) => exercise.bodyArea === bodyArea || exercise.bodyArea === "full");
+  const hasPattern = (patterns: NonNullable<ExerciseLibraryItem["pattern"]>[]) =>
+    exercises.some((exercise) => exercise.pattern && patterns.includes(exercise.pattern));
+  const hasDuration = rows.some((row) => (row.duration ?? 0) > 0);
+
+  const lower = hasBodyArea("lower") || hasPattern(["squat", "hinge"]);
+  const upper = hasBodyArea("upper") || hasPattern(["push", "pull"]);
+  const push = hasPattern(["push"]);
+  const pull = hasPattern(["pull"]);
+  const squat = hasPattern(["squat"]);
+  const hinge = hasPattern(["hinge"]);
+  const core = hasCategory("core") || hasBodyArea("core") || hasPattern(["brace", "rotation", "carry"]);
+  const mobility = hasCategory("mobility") || hasPattern(["stretch"]);
+  const cardio = hasCategory("cardio") || hasPattern(["cardio"]);
+
+  if (focus === "upper") {
+    return [
+      { id: "push", label: "Push", met: push },
+      { id: "pull", label: "Pull", met: pull },
+      { id: "upper", label: "Upper body", met: upper },
+    ];
+  }
+
+  if (focus === "lower") {
+    return [
+      { id: "squat", label: "Squat/lunge", met: squat },
+      { id: "hinge", label: "Hinge", met: hinge },
+      { id: "lower", label: "Lower body", met: lower },
+    ];
+  }
+
+  if (focus === "core") {
+    return [
+      { id: "core", label: "Core", met: core },
+      { id: "brace", label: "Brace/stability", met: hasPattern(["brace", "carry"]) },
+      { id: "rotation", label: "Rotation", met: hasPattern(["rotation"]) },
+    ];
+  }
+
+  if (focus === "mobility") {
+    return [
+      { id: "mobility", label: "Mobility", met: mobility },
+      { id: "stretch", label: "Stretch/drill", met: hasPattern(["stretch"]) },
+      { id: "duration", label: "Duration", met: hasDuration },
+    ];
+  }
+
+  if (focus === "cardio") {
+    return [
+      { id: "cardio", label: "Cardio", met: cardio },
+      { id: "duration", label: "Duration", met: hasDuration },
+    ];
+  }
+
+  return [
+    { id: "lower", label: "Lower", met: lower },
+    { id: "push", label: "Push", met: push },
+    { id: "pull", label: "Pull", met: pull },
+    { id: "core", label: "Core", met: core },
+  ];
 };
 
 export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
@@ -56,6 +143,9 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
   const workoutFocus = getWorkoutFocus(blockLabel);
   const datalistId = `exercise-library-${blockId}`;
   const exerciseById = new Map(exerciseLibrary.map((exercise) => [exercise.id, exercise]));
+  const selectedExercises = blockExercises
+    .map((row) => exerciseById.get(row.exerciseId))
+    .filter((exercise): exercise is ExerciseLibraryItem => !!exercise);
 
   const sortedLibrary = useMemo(
     () =>
@@ -66,6 +156,13 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
     [exerciseLibrary, workoutFocus]
   );
 
+  const coverageItems = useMemo(
+    () => buildCoverageItems(workoutFocus, selectedExercises, blockExercises),
+    [blockExercises, selectedExercises, workoutFocus]
+  );
+  const coveredCount = coverageItems.filter((item) => item.met).length;
+  const isCoverageComplete = coverageItems.length > 0 && coveredCount === coverageItems.length;
+
   const addExercise = () => {
     const trimmed = exerciseName.trim();
     if (!trimmed) return;
@@ -75,6 +172,23 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
 
   return (
     <div className="workout-exercise-builder">
+      <div className={`workout-coverage-panel ${isCoverageComplete ? "complete" : ""}`}>
+        <div className="workout-coverage-header">
+          <span>{focusLabels[workoutFocus]} coverage</span>
+          <span>{coveredCount}/{coverageItems.length}</span>
+        </div>
+        <div className="workout-coverage-chips">
+          {coverageItems.map((item) => (
+            <span
+              key={item.id}
+              className={`workout-coverage-chip ${item.met ? "met" : "missing"}`}
+            >
+              {item.met ? "✓" : "+"} {item.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
       {blockExercises.length > 0 && (
         <div className="workout-exercise-list">
           {blockExercises.map((row) => {
