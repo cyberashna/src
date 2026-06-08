@@ -79,7 +79,7 @@ export type ExerciseLibraryItem = {
   name: string;
   category: ExerciseCategory;
   bodyArea?: "upper" | "lower" | "core" | "full";
-  pattern?: "push" | "pull" | "squat" | "hinge" | "carry" | "rotation" | "stretch" | "cardio";
+  pattern?: "push" | "pull" | "squat" | "hinge" | "carry" | "rotation" | "brace" | "stretch" | "cardio";
   defaultSets?: number | null;
   defaultReps?: number | null;
   defaultDuration?: number | null;
@@ -138,9 +138,10 @@ const defaultExerciseLibrary: ExerciseLibraryItem[] = [
   { id: "exercise-push-up", name: "Push-up", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-row", name: "Row", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-lat-pulldown", name: "Lat pulldown", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
-  { id: "exercise-dead-bug", name: "Dead bug", category: "core", bodyArea: "core", pattern: "rotation", defaultSets: 3, defaultReps: 10 },
-  { id: "exercise-plank", name: "Plank", category: "core", bodyArea: "core", defaultSets: 3, defaultDuration: 1 },
-  { id: "exercise-side-plank", name: "Side plank", category: "core", bodyArea: "core", defaultSets: 2, defaultDuration: 1 },
+  { id: "exercise-farmer-carry", name: "Farmer carry", category: "strength", bodyArea: "full", pattern: "carry", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-dead-bug", name: "Dead bug", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-plank", name: "Plank", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-side-plank", name: "Side plank", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 2, defaultDuration: 1 },
   { id: "exercise-pallof-press", name: "Pallof press", category: "core", bodyArea: "core", pattern: "rotation", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-hip-flexor-stretch", name: "Hip flexor stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
   { id: "exercise-thoracic-rotation", name: "Thoracic rotation", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultReps: 10 },
