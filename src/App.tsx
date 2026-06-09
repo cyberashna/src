@@ -28,6 +28,7 @@ import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import TemplateStickyNote from "./components/TemplateStickyNote";
+import RoutineNotesPopup from "./components/RoutineNotesPopup";
 import BlockCard from "./components/BlockCard";
 import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
@@ -374,6 +375,7 @@ const App: React.FC = () => {
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showTemplateNote, setShowTemplateNote] = useState(true);
+  const [showRoutineNotes, setShowRoutineNotes] = useState(false);
   const [showQuickHabit, setShowQuickHabit] = useState(false);
   const [showSmartWeeklySetup, setShowSmartWeeklySetup] = useState(false);
   const [smartWeeklyLoading, setSmartWeeklyLoading] = useState(false);
@@ -3977,6 +3979,15 @@ const App: React.FC = () => {
                 <button
                   type="button"
                   className="copy-week-btn"
+                  onClick={() => setShowRoutineNotes((v) => !v)}
+                  title="Toggle routine notes"
+                  style={{ background: showRoutineNotes ? '#0f766e' : undefined, color: showRoutineNotes ? 'white' : undefined, border: showRoutineNotes ? 'none' : undefined }}
+                >
+                  Routines
+                </button>
+                <button
+                  type="button"
+                  className="copy-week-btn"
                   onClick={() => setShowQuickHabit((v) => !v)}
                   title="Quick add habit"
                   style={{ background: showQuickHabit ? '#2563eb' : undefined, color: showQuickHabit ? 'white' : undefined, border: showQuickHabit ? 'none' : undefined }}
@@ -4388,6 +4399,18 @@ const App: React.FC = () => {
           onCreateBlock={async (label) => {
             const id = await createBlock(label);
             if (id) showToast("Block added to unscheduled", "success");
+          }}
+        />
+      )}
+
+      {showRoutineNotes && user && (
+        <RoutineNotesPopup
+          userId={user.id}
+          todayDate={new Date().toISOString().split('T')[0]}
+          onClose={() => setShowRoutineNotes(false)}
+          onCreateBlock={async (label) => {
+            const id = await createBlock(label);
+            if (id) showToast("Routine item added to unscheduled", "success");
           }}
         />
       )}
