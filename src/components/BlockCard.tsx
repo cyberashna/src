@@ -17,6 +17,8 @@ type Theme = {
   meals: { id: string; name: string; meal_type: string; calories?: number | null; protein_g?: number | null; carbs_g?: number | null; fat_g?: number | null; vitamins_notes?: string | null }[];
 };
 
+type DetailTab = "workout" | "tasks" | "notes";
+
 type BlockCardProps = {
   block: Block;
   variant: "slot" | "unscheduled" | "themed";
@@ -133,6 +135,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const hasMeal = !!block.mealId && !!block.mealType;
 
   const [detailOpen, setDetailOpen] = useState(false);
+  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("notes");
   const [noteValue, setNoteValue] = useState(block.blockNote ?? "");
   const [newTaskLabel, setNewTaskLabel] = useState("");
   const noteSaveTimer = useRef<number | null>(null);
@@ -171,12 +174,43 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const canBuildWorkout = isWorkoutLike && !!onAddExerciseToBlock && !!onUpdateBlockExercise && !!onDeleteBlockExercise;
   const hasExerciseContent = blockExercises.length > 0;
   const hasDetailContent = tasks.length > 0 || hasNoteContent || hasExerciseContent;
+  const canManageTasks = !!onAddBlockTask || tasks.length > 0;
+  const canManageNotes = !!onSaveBlockNote;
+  const getDefaultDetailTab = (): DetailTab => {
+    if (canBuildWorkout) return "workout";
+    if (canManageTasks) return "tasks";
+    return "notes";
+  };
+  const openBlockDetails = (tab?: DetailTab) => {
+    setActiveDetailTab(tab ?? getDefaultDetailTab());
+    setDetailOpen(true);
+  };
 
   useEffect(() => {
     if (canBuildWorkout && !hasExerciseContent) {
-      setDetailOpen(true);
+      openBlockDetails("workout");
     }
   }, [canBuildWorkout, hasExerciseContent]);
+
+  useEffect(() => {
+    if (!detailOpen) return;
+    if (activeDetailTab === "workout" && !canBuildWorkout) {
+      setActiveDetailTab(getDefaultDetailTab());
+    }
+    if (activeDetailTab === "tasks" && !canManageTasks) {
+      setActiveDetailTab(getDefaultDetailTab());
+    }
+    if (activeDetailTab === "notes" && !canManageNotes) {
+      setActiveDetailTab(getDefaultDetailTab());
+    }
+  }, [detailOpen, activeDetailTab, canBuildWorkout, canManageTasks, canManageNotes]);
+
+  const detailTabs: Array<{ id: DetailTab; label: string; meta?: string }> = [
+    ...(canBuildWorkout ? [{ id: "workout" as DetailTab, label: "Workout", meta: hasExerciseContent ? `${blockExercises.length}` : undefined }] : []),
+    ...(canManageTasks ? [{ id: "tasks" as DetailTab, label: "Tasks", meta: tasks.length > 0 ? `${completedTaskCount}/${tasks.length}` : undefined }] : []),
+    ...(canManageNotes ? [{ id: "notes" as DetailTab, label: "Notes", meta: hasNoteContent ? "1" : undefined }] : []),
+  ];
+
   const hoverInfo = [
     block.label,
     block.hashtag ? `#${block.hashtag}` : null,
@@ -409,7 +443,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         {tasks.length > 0 && !detailOpen && (
           <div
             className="block-tasks-pill"
-            onClick={(e) => { e.stopPropagation(); setDetailOpen(true); }}
+            onClick={(e) => { e.stopPropagation(); openBlockDetails("tasks"); }}
             title="View tasks"
           >
             <span className="block-tasks-pill-check">&#10003;</span>
@@ -420,7 +454,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         {canBuildWorkout && !detailOpen && (
           <div
             className={`block-exercises-pill ${hasExerciseContent ? "has-exercises" : ""}`}
-            onClick={(e) => { e.stopPropagation(); setDetailOpen(true); }}
+            onClick={(e) => { e.stopPropagation(); openBlockDetails("workout"); }}
             title={hasExerciseContent ? "View exercises" : "Build workout"}
           >
             {hasExerciseContent ? `${blockExercises.length} ex` : "Build workout"}
@@ -431,8 +465,12 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         {(onSaveBlockNote || onAddBlockTask) && (
           <button
             className={`block-detail-toggle ${detailOpen ? "active" : ""} ${hasDetailContent ? "has-content" : ""}`}
-            onClick={(e) => { e.stopPropagation(); setDetailOpen((v) => !v); }}
-            title={detailOpen ? "Hide notes & tasks" : "Notes & tasks"}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (detailOpen) setDetailOpen(false);
+              else openBlockDetails();
+            }}
+            title={detailOpen ? "Close details" : "Block details"}
           >
             &#9776;
           </button>
@@ -481,93 +519,126 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         )}
       </div>
 
-      {/* Inline notes + tasks panel */}
       {detailOpen && (
-        <div className="block-detail-panel" onClick={(e) => e.stopPropagation()}>
-          {canBuildWorkout && (
-            <div className="block-detail-section">
-              <div className="block-detail-section-label">Workout exercises</div>
-              <WorkoutExerciseBuilder
-                blockId={block.id}
-                blockLabel={block.label}
-                exerciseLibrary={exerciseLibrary}
-                blockExercises={blockExercises}
-                onAddExercise={onAddExerciseToBlock}
-                onUpdateExercise={onUpdateBlockExercise}
-                onDeleteExercise={onDeleteBlockExercise}
-              />
+        <div className="block-detail-backdrop" onClick={() => setDetailOpen(false)}>
+          <div className="block-detail-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="block-detail-modal-header">
+              <div>
+                <div className="block-detail-modal-kicker">Block details</div>
+                <div className="block-detail-modal-title">{block.label}</div>
+              </div>
+              <button
+                type="button"
+                className="block-detail-modal-close"
+                onClick={() => setDetailOpen(false)}
+                aria-label="Close block details"
+              >
+                x
+              </button>
             </div>
-          )}
 
-          {/* Tasks */}
-          {(onAddBlockTask || tasks.length > 0) && (
-            <div className="block-detail-section">
-              <div className="block-detail-section-label">Tasks</div>
-              {tasks.length > 0 && (
-                <ul className="block-task-list">
-                  {tasks.map((task) => (
-                    <li key={task.id} className={`block-task-item ${task.completed ? "block-task-done" : ""}`}>
-                      <label className="block-task-label">
-                        <input
-                          type="checkbox"
-                          checked={task.completed}
-                          onChange={() => onToggleBlockTask?.(block.id, task.id)}
-                        />
-                        <span>{task.label}</span>
-                      </label>
-                      <button
-                        className="block-task-delete"
-                        onClick={() => onDeleteBlockTask?.(block.id, task.id)}
-                        title="Remove task"
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {onAddBlockTask && (
-                <div className="block-task-add-row">
-                  <input
-                    type="text"
-                    className="block-task-input"
-                    placeholder="Add a task..."
-                    value={newTaskLabel}
-                    onChange={(e) => setNewTaskLabel(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleAddTask();
-                      if (e.key === "Escape") setNewTaskLabel("");
-                    }}
+            <div className="block-detail-tabs">
+              {detailTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`block-detail-tab ${activeDetailTab === tab.id ? "active" : ""}`}
+                  onClick={() => setActiveDetailTab(tab.id)}
+                >
+                  <span>{tab.label}</span>
+                  {tab.meta && <em>{tab.meta}</em>}
+                </button>
+              ))}
+            </div>
+
+            <div className="block-detail-modal-body">
+              {activeDetailTab === "workout" && canBuildWorkout && (
+                <div className="block-detail-section">
+                  <div className="block-detail-section-label">Workout exercises</div>
+                  <WorkoutExerciseBuilder
+                    blockId={block.id}
+                    blockLabel={block.label}
+                    exerciseLibrary={exerciseLibrary}
+                    blockExercises={blockExercises}
+                    onAddExercise={onAddExerciseToBlock}
+                    onUpdateExercise={onUpdateBlockExercise}
+                    onDeleteExercise={onDeleteBlockExercise}
                   />
-                  <button
-                    className="block-task-add-btn"
-                    onClick={handleAddTask}
-                    disabled={!newTaskLabel.trim()}
-                  >
-                    +
-                  </button>
+                </div>
+              )}
+
+              {activeDetailTab === "tasks" && canManageTasks && (
+                <div className="block-detail-section">
+                  <div className="block-detail-section-label">Tasks</div>
+                  {tasks.length > 0 && (
+                    <ul className="block-task-list">
+                      {tasks.map((task) => (
+                        <li key={task.id} className={`block-task-item ${task.completed ? "block-task-done" : ""}`}>
+                          <label className="block-task-label">
+                            <input
+                              type="checkbox"
+                              checked={task.completed}
+                              onChange={() => onToggleBlockTask?.(block.id, task.id)}
+                            />
+                            <span>{task.label}</span>
+                          </label>
+                          <button
+                            className="block-task-delete"
+                            onClick={() => onDeleteBlockTask?.(block.id, task.id)}
+                            title="Remove task"
+                          >
+                            x
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {tasks.length === 0 && (
+                    <div className="block-detail-empty">No tasks yet.</div>
+                  )}
+                  {onAddBlockTask && (
+                    <div className="block-task-add-row">
+                      <input
+                        type="text"
+                        className="block-task-input"
+                        placeholder="Add a task..."
+                        value={newTaskLabel}
+                        onChange={(e) => setNewTaskLabel(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleAddTask();
+                          if (e.key === "Escape") setNewTaskLabel("");
+                        }}
+                      />
+                      <button
+                        className="block-task-add-btn"
+                        onClick={handleAddTask}
+                        disabled={!newTaskLabel.trim()}
+                      >
+                        +
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeDetailTab === "notes" && canManageNotes && (
+                <div className="block-detail-section">
+                  <div className="block-detail-section-label">Notes</div>
+                  <textarea
+                    className="block-note-textarea block-note-textarea-large"
+                    value={noteValue}
+                    onChange={(e) => handleNoteChange(e.target.value)}
+                    placeholder="Add a note..."
+                    rows={5}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  {block.isHabitBlock && (
+                    <div className="block-note-hint">Notes are also saved to habit notes</div>
+                  )}
                 </div>
               )}
             </div>
-          )}
-
-          {/* Notes */}
-          {onSaveBlockNote && (
-            <div className="block-detail-section">
-              <div className="block-detail-section-label">Notes</div>
-              <textarea
-                className="block-note-textarea"
-                value={noteValue}
-                onChange={(e) => handleNoteChange(e.target.value)}
-                placeholder="Add a note..."
-                rows={2}
-                onClick={(e) => e.stopPropagation()}
-              />
-              {block.isHabitBlock && (
-                <div className="block-note-hint">Notes are also saved to habit notes</div>
-              )}
-            </div>
-          )}
+          </div>
         </div>
       )}
 
