@@ -58,6 +58,11 @@ type ThemeNotesPrefs = {
 
 type MarkdownCommand = "heading" | "bold" | "italic" | "bullet" | "check";
 type ThemeNotesTab = "all" | "theme" | "habits" | "blocks" | "pinned";
+type NoteActionItem = {
+  label: string;
+  onClick: () => void;
+  destructive?: boolean;
+};
 
 const createThemeNotesPrefsKey = (userId: string, themeId: string) =>
   `theme-notes:${userId}:${themeId}`;
@@ -310,6 +315,52 @@ const MarkdownNoteEditor: React.FC<{
   );
 };
 
+const NoteActionMenu: React.FC<{
+  id: string;
+  actions: NoteActionItem[];
+  openMenuId: string | null;
+  setOpenMenuId: (id: string | null) => void;
+}> = ({ id, actions, openMenuId, setOpenMenuId }) => {
+  const isOpen = openMenuId === id;
+
+  if (actions.length === 0) return null;
+
+  return (
+    <div className="theme-notes-action-menu">
+      <button
+        type="button"
+        className="theme-notes-action-trigger"
+        aria-label="Note actions"
+        aria-expanded={isOpen}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpenMenuId(isOpen ? null : id);
+        }}
+      >
+        ...
+      </button>
+      {isOpen && (
+        <div className="theme-notes-action-panel">
+          {actions.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              className={action.destructive ? "danger" : undefined}
+              onClick={(event) => {
+                event.stopPropagation();
+                action.onClick();
+                setOpenMenuId(null);
+              }}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   themeId,
   themeName,
@@ -328,6 +379,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   const [loading, setLoading] = useState(true);
   const [activeNoteEditor, setActiveNoteEditor] = useState<"theme" | string | null>(null);
   const [activeTab, setActiveTab] = useState<ThemeNotesTab>("all");
+  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [routineTabs, setRoutineTabs] = useState<RoutineTab[]>([]);
   const [selectedRoutineId, setSelectedRoutineId] = useState("");
@@ -344,6 +396,23 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   const habitTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const prefsKey = createThemeNotesPrefsKey(userId, themeId);
   const allHabits = useMemo(() => flattenHabits(habits), [habits]);
+
+  useEffect(() => {
+    if (!openActionMenuId) return;
+
+    const closeMenu = () => setOpenActionMenuId(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openActionMenuId]);
   const normalizedSearch = searchQuery.trim().toLowerCase();
 
   const strengthTrainingHabitIds = useMemo(() => allHabits
@@ -694,20 +763,19 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                       Last edited {formatTimestamp(themePrefs.generalUpdatedAt)}
                     </span>
                   )}
-                  <div className="theme-notes-actions">
-                    <button className="secondary small-btn" onClick={() => pinInsight(themePrefs.generalNote, "Theme note")}>
-                      Pin insight
-                    </button>
-                    <button className="secondary small-btn" onClick={() => createBlockFromText(themePrefs.generalNote)}>
-                      Turn into block
-                    </button>
-                    <button className="secondary small-btn" onClick={() => createHabitFromText(themePrefs.generalNote)}>
-                      Turn into habit
-                    </button>
-                    <button className="secondary small-btn" onClick={() => copyToRoutine(themePrefs.generalNote)}>
-                      Add to routine
-                    </button>
-                  </div>
+                  {themePrefs.generalNote.trim() && (
+                    <NoteActionMenu
+                      id="theme-note"
+                      actions={[
+                        { label: "Pin insight", onClick: () => pinInsight(themePrefs.generalNote, "Theme note") },
+                        { label: "Turn into block", onClick: () => createBlockFromText(themePrefs.generalNote) },
+                        { label: "Turn into habit", onClick: () => createHabitFromText(themePrefs.generalNote) },
+                        { label: "Add to routine", onClick: () => copyToRoutine(themePrefs.generalNote) },
+                      ]}
+                      openMenuId={openActionMenuId}
+                      setOpenMenuId={setOpenActionMenuId}
+                    />
+                  )}
                 </div>
                 <MarkdownNoteEditor
                   value={themePrefs.generalNote}
@@ -738,14 +806,15 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                           </div>
                           <div className="theme-notes-pinned-text">{insight.text}</div>
                         </div>
-                        <div className="theme-notes-note-actions">
-                          <button className="theme-notes-inline-btn" onClick={() => copyToRoutine(insight.text)}>
-                            Routine
-                          </button>
-                          <button className="theme-notes-inline-btn" onClick={() => removePinnedInsight(insight.id)}>
-                            Remove
-                          </button>
-                        </div>
+                        <NoteActionMenu
+                          id={`pinned-${insight.id}`}
+                          actions={[
+                            { label: "Add to routine", onClick: () => copyToRoutine(insight.text) },
+                            { label: "Remove", onClick: () => removePinnedInsight(insight.id), destructive: true },
+                          ]}
+                          openMenuId={openActionMenuId}
+                          setOpenMenuId={setOpenActionMenuId}
+                        />
                       </div>
                     ))}
                   </div>
@@ -863,24 +932,19 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                                 Last edited {formatTimestamp(note.updatedAt)}
                               </span>
                             )}
-                            <div className="theme-notes-actions">
-                              {!onlyBlockNotes && (
-                              <>
-                              <button className="secondary small-btn" onClick={() => pinInsight(note?.content ?? "", `${habit.name} note`)}>
-                                Pin
-                              </button>
-                              <button className="secondary small-btn" onClick={() => createBlockFromText(note?.content ?? "")}>
-                                Block
-                              </button>
-                              <button className="secondary small-btn" onClick={() => createHabitFromText(note?.content ?? "")}>
-                                Habit
-                              </button>
-                              <button className="secondary small-btn" onClick={() => copyToRoutine(note?.content ?? "")}>
-                                Routine
-                              </button>
-                              </>
-                              )}
-                            </div>
+                            {!onlyBlockNotes && (note?.content ?? "").trim() && (
+                              <NoteActionMenu
+                                id={`habit-note-${habit.id}`}
+                                actions={[
+                                  { label: "Pin insight", onClick: () => pinInsight(note?.content ?? "", `${habit.name} note`) },
+                                  { label: "Turn into block", onClick: () => createBlockFromText(note?.content ?? "") },
+                                  { label: "Turn into habit", onClick: () => createHabitFromText(note?.content ?? "") },
+                                  { label: "Add to routine", onClick: () => copyToRoutine(note?.content ?? "") },
+                                ]}
+                                openMenuId={openActionMenuId}
+                                setOpenMenuId={setOpenActionMenuId}
+                              />
+                            )}
                           </div>
                           {!onlyBlockNotes && (
                           <MarkdownNoteEditor
@@ -922,23 +986,18 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                                       )}
                                     </div>
                                     <div className="theme-notes-block-note-content">{b.blockNote}</div>
-                                    <div className="theme-notes-note-actions">
-                                      <button className="theme-notes-inline-btn" onClick={() => pinInsight(b.blockNote ?? "", `${habit.name} block`)}>
-                                        Pin insight
-                                      </button>
-                                      <button className="theme-notes-inline-btn" onClick={() => createBlockFromText(b.blockNote ?? "")}>
-                                        Turn into block
-                                      </button>
-                                      <button className="theme-notes-inline-btn" onClick={() => createHabitFromText(b.blockNote ?? "")}>
-                                        Turn into habit
-                                      </button>
-                                      <button className="theme-notes-inline-btn" onClick={() => copyToRoutine(b.blockNote ?? "")}>
-                                        Add to routine
-                                      </button>
-                                      <button className="theme-notes-inline-btn" onClick={() => hideBlockNote(b.id)}>
-                                        Archive
-                                      </button>
-                                    </div>
+                                    <NoteActionMenu
+                                      id={`block-note-${b.id}`}
+                                      actions={[
+                                        { label: "Pin insight", onClick: () => pinInsight(b.blockNote ?? "", `${habit.name} block`) },
+                                        { label: "Turn into block", onClick: () => createBlockFromText(b.blockNote ?? "") },
+                                        { label: "Turn into habit", onClick: () => createHabitFromText(b.blockNote ?? "") },
+                                        { label: "Add to routine", onClick: () => copyToRoutine(b.blockNote ?? "") },
+                                        { label: "Archive", onClick: () => hideBlockNote(b.id), destructive: true },
+                                      ]}
+                                      openMenuId={openActionMenuId}
+                                      setOpenMenuId={setOpenActionMenuId}
+                                    />
                                   </div>
                                 ))}
                               </div>
