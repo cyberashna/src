@@ -165,21 +165,30 @@ export async function acceptGhostBlock(
   userId: string,
   ghostBlock: GhostBlock,
   weekStartDate: string,
-  habitId: string
+  habit: { id: string; name: string; hashtag?: string; themeId?: string }
 ): Promise<string | null> {
   const { data, error } = await supabase
     .from('blocks')
     .insert({
       user_id: userId,
-      habit_id: habitId,
-      label: ghostBlock.label,
+      habit_id: habit.id,
+      label: `Habit: ${habit.name}`,
+      is_habit_block: true,
       day_index: ghostBlock.day_index,
       time_index: ghostBlock.time_index,
       week_start_date: weekStartDate,
       location_type: 'slot',
+      hashtag: habit.hashtag ?? null,
+      theme_id: habit.themeId ?? null,
       pattern_id: ghostBlock.pattern_id,
       is_suggested: false,
-      completed: false
+      completed: false,
+      linked_block_id: null,
+      is_linked_group: false,
+      workout_submitted: false,
+      session_group_id: null,
+      is_daily_template: false,
+      daily_template_id: null,
     })
     .select()
     .single();
