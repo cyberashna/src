@@ -609,17 +609,29 @@ const App: React.FC = () => {
     if (!user) return;
 
     const weekStartDate = getWeekStartDateString(weekOffset);
-    const habit = allHabits[0];
-    if (!habit) return;
+    const habit = findHabitByBlockLabel(ghost.label);
+    if (!habit) {
+      showToast("No matching habit found for this suggestion.", "info");
+      return;
+    }
 
-    const blockId = await acceptGhostBlock(user.id, ghost, weekStartDate, habit.id);
+    const blockId = await acceptGhostBlock(user.id, ghost, weekStartDate, {
+      id: habit.id,
+      name: habit.name,
+      hashtag: habit.themeName,
+      themeId: habit.themeId,
+    });
 
     if (blockId) {
+      const ancestorIds = getHabitAncestorIds(habit.id);
+      if (ancestorIds.length > 0) {
+        await saveBlockCredits(blockId, ancestorIds);
+      }
       setGhostBlocks(prev => prev.filter(g =>
         !(g.day_index === ghost.day_index && g.time_index === ghost.time_index && g.label === ghost.label)
       ));
       await loadUserData();
-      showToast('Block added to calendar');
+      showToast('Habit block added to calendar');
     }
   };
 
@@ -654,10 +666,22 @@ const App: React.FC = () => {
     showToast(`Applied template with ${templateBlocks.length} blocks`);
   };
 
-  const flattenHabits = (habits: Habit[], themeName: string): (Habit & { themeName: string })[] =>
-    habits.flatMap((h) => [{ ...h, themeName }, ...flattenHabits(h.subtasks, themeName)]);
+  const normalizeHabitBlockLabel = (label: string) =>
+    label
+      .replace(/^habit:\s*/i, "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
 
-  const allHabits = themes.flatMap((theme) => flattenHabits(theme.habits, theme.name));
+  const flattenHabits = (habits: Habit[], themeName: string, themeId: string): (Habit & { themeName: string; themeId: string })[] =>
+    habits.flatMap((h) => [{ ...h, themeName, themeId }, ...flattenHabits(h.subtasks, themeName, themeId)]);
+
+  const allHabits = themes.flatMap((theme) => flattenHabits(theme.habits, theme.name, theme.id));
+
+  const findHabitByBlockLabel = (label: string) => {
+    const normalizedLabel = normalizeHabitBlockLabel(label);
+    return allHabits.find((habit) => normalizeHabitBlockLabel(habit.name) === normalizedLabel);
+  };
 
   const refreshSessionGroups = async () => {
     if (!user) return;
@@ -1013,7 +1037,7 @@ const App: React.FC = () => {
         );
       }
 
-      const theme = themes.find((t) => flattenHabits(t.habits, t.name).some((h) => h.id === habitId));
+      const theme = themes.find((t) => flattenHabits(t.habits, t.name, t.id).some((h) => h.id === habitId));
       if (theme) {
         const goals = await database.themeGoals.getByTheme(theme.id);
         const completedDate = now.split('T')[0];
@@ -1360,7 +1384,7 @@ const App: React.FC = () => {
 
       const habitTheme = themes.find((t) =>
         t.habits.some((h) => {
-          const flat = flattenHabits([h], t.name);
+          const flat = flattenHabits([h], t.name, t.id);
           return flat.some((fh) => fh.id === habitId);
         })
       );
@@ -1872,7 +1896,7 @@ const App: React.FC = () => {
           );
         }
 
-        const theme = themes.find((t) => flattenHabits(t.habits, t.name).some((h) => h.id === primaryHabitId));
+        const theme = themes.find((t) => flattenHabits(t.habits, t.name, t.id).some((h) => h.id === primaryHabitId));
         if (theme) {
           const goals = await database.themeGoals.getByTheme(theme.id);
           const completedDate = now.split('T')[0];
@@ -2659,17 +2683,20 @@ const App: React.FC = () => {
         .forEach((block) => {
           const slot = findNextSmartSetupSlot(occupiedSlots);
           if (!slot) return;
+          const matchedHabit = block.habitId
+            ? allHabits.find((habit) => habit.id === block.habitId) ?? findHabitByBlockLabel(block.label)
+            : findHabitByBlockLabel(block.label);
 
           suggestions.push({
             id: `unscheduled-${block.id}`,
             source: "unscheduled",
             sourceBlockId: block.id,
-            label: block.label,
+            label: matchedHabit ? `Habit: ${matchedHabit.name}` : block.label,
             dayIndex: slot.dayIndex,
             timeIndex: slot.timeIndex,
-            isHabitBlock: block.isHabitBlock,
-            habitId: block.habitId,
-            hashtag: block.hashtag,
+            isHabitBlock: block.isHabitBlock || !!matchedHabit,
+            habitId: block.habitId ?? matchedHabit?.id,
+            hashtag: block.hashtag ?? matchedHabit?.themeName,
             reason: "Waiting in unscheduled",
           });
         });
@@ -2694,6 +2721,10 @@ const App: React.FC = () => {
     try {
       const currentWeekStart = getWeekStartDateString(weekOffset);
       const createPayloads: Omit<DBBlock, "id" | "user_id" | "created_at" | "updated_at">[] = [];
+      const getSuggestionHabit = (suggestion: SmartWeekSuggestion) =>
+        suggestion.habitId
+          ? allHabits.find((habit) => habit.id === suggestion.habitId) ?? findHabitByBlockLabel(suggestion.label)
+          : findHabitByBlockLabel(suggestion.label);
       const unscheduledSuggestions = suggestions.filter(
         (suggestion) => suggestion.source === "unscheduled" && suggestion.sourceBlockId
       );
@@ -2701,15 +2732,16 @@ const App: React.FC = () => {
       suggestions
         .filter((suggestion) => suggestion.source !== "unscheduled")
         .forEach((suggestion) => {
+          const matchedHabit = getSuggestionHabit(suggestion);
           createPayloads.push({
-            label: suggestion.label,
-            is_habit_block: suggestion.isHabitBlock,
-            habit_id: suggestion.habitId ?? null,
+            label: matchedHabit ? `Habit: ${matchedHabit.name}` : suggestion.label,
+            is_habit_block: suggestion.isHabitBlock || !!matchedHabit,
+            habit_id: suggestion.habitId ?? matchedHabit?.id ?? null,
             location_type: "slot",
             day_index: suggestion.dayIndex,
             time_index: suggestion.timeIndex,
             completed: false,
-            hashtag: suggestion.hashtag ?? null,
+            hashtag: suggestion.hashtag ?? matchedHabit?.themeName ?? null,
             week_start_date: currentWeekStart,
             linked_block_id: null,
             is_linked_group: false,
@@ -2719,20 +2751,37 @@ const App: React.FC = () => {
             daily_template_id: null,
             is_standing: suggestion.source === "standing",
             standing_block_id: suggestion.standingBlockId ?? null,
+            theme_id: matchedHabit?.themeId ?? null,
           });
         });
 
-      await Promise.all([
-        database.blocks.createMany(user.id, createPayloads),
-        ...unscheduledSuggestions.map((suggestion) =>
-          database.blocks.update(suggestion.sourceBlockId!, {
+      const createdBlocks = await database.blocks.createMany(user.id, createPayloads);
+      const updatedBlocks = await Promise.all(
+        unscheduledSuggestions.map((suggestion) => {
+          const matchedHabit = getSuggestionHabit(suggestion);
+          return database.blocks.update(suggestion.sourceBlockId!, {
+            label: matchedHabit ? `Habit: ${matchedHabit.name}` : suggestion.label,
+            is_habit_block: suggestion.isHabitBlock || !!matchedHabit,
+            habit_id: suggestion.habitId ?? matchedHabit?.id ?? null,
             location_type: "slot",
             day_index: suggestion.dayIndex,
             time_index: suggestion.timeIndex,
             week_start_date: currentWeekStart,
+            hashtag: suggestion.hashtag ?? matchedHabit?.themeName ?? null,
+            theme_id: matchedHabit?.themeId ?? null,
+          });
+        })
+      );
+
+      const acceptedBlocks = [...createdBlocks, ...updatedBlocks];
+      await Promise.all(
+        acceptedBlocks
+          .filter((block) => block.is_habit_block && block.habit_id)
+          .map((block) => {
+            const ancestorIds = getHabitAncestorIds(block.habit_id!);
+            return ancestorIds.length > 0 ? saveBlockCredits(block.id, ancestorIds) : Promise.resolve();
           })
-        ),
-      ]);
+      );
 
       await loadUserData();
       setShowSmartWeeklySetup(false);
@@ -3297,7 +3346,7 @@ const App: React.FC = () => {
 
                                     {(() => {
                                       const themeId = themes.find((t) =>
-                                        flattenHabits(t.habits, t.name).some((h) => h.id === habit.id)
+                                        flattenHabits(t.habits, t.name, t.id).some((h) => h.id === habit.id)
                                       )?.id;
 
                                       const renderSubtaskItem = (subtask: Habit, depth = 0): React.ReactNode => {
@@ -4356,7 +4405,7 @@ const App: React.FC = () => {
       {notesThemeId && (() => {
         const theme = themes.find((t) => t.id === notesThemeId);
         if (!theme || !user) return null;
-        const themeHabitIds = new Set(flattenHabits(theme.habits, theme.name).map((h) => h.id));
+        const themeHabitIds = new Set(flattenHabits(theme.habits, theme.name, theme.id).map((h) => h.id));
         return (
           <ThemeNotes
             themeId={theme.id}
