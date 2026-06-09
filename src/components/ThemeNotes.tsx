@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { database } from "../services/database";
 import type { WorkoutHistoryEntry } from "../services/database";
+import { addRoutineItem, loadRoutineNotes, type RoutineTab } from "../services/routineNotes";
 import type { Block } from "../App";
 
 type HabitGroup = {
@@ -56,6 +57,7 @@ type ThemeNotesPrefs = {
 };
 
 type MarkdownCommand = "heading" | "bold" | "italic" | "bullet" | "check";
+type ThemeNotesTab = "all" | "theme" | "habits" | "blocks" | "pinned";
 
 const createThemeNotesPrefsKey = (userId: string, themeId: string) =>
   `theme-notes:${userId}:${themeId}`;
@@ -325,6 +327,11 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   const [workoutHistories, setWorkoutHistories] = useState<Record<string, WorkoutHistoryEntry[]>>({});
   const [loading, setLoading] = useState(true);
   const [activeNoteEditor, setActiveNoteEditor] = useState<"theme" | string | null>(null);
+  const [activeTab, setActiveTab] = useState<ThemeNotesTab>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [routineTabs, setRoutineTabs] = useState<RoutineTab[]>([]);
+  const [selectedRoutineId, setSelectedRoutineId] = useState("");
+  const [routineStatus, setRoutineStatus] = useState("");
   const [themePrefs, setThemePrefs] = useState<ThemeNotesPrefs>({
     generalNote: "",
     generalUpdatedAt: undefined,
@@ -337,6 +344,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   const habitTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const prefsKey = createThemeNotesPrefsKey(userId, themeId);
   const allHabits = useMemo(() => flattenHabits(habits), [habits]);
+  const normalizedSearch = searchQuery.trim().toLowerCase();
 
   const strengthTrainingHabitIds = useMemo(() => allHabits
     .filter((h) => {
@@ -391,6 +399,12 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
       if (themeNoteTimer.current) clearTimeout(themeNoteTimer.current);
     };
   }, [allHabits, prefsKey, strengthTrainingHabitIds]);
+
+  useEffect(() => {
+    const routines = loadRoutineNotes(userId);
+    setRoutineTabs(routines);
+    setSelectedRoutineId((current) => current || routines[0]?.id || "");
+  }, [userId]);
 
   const saveThemePrefs = useCallback((nextPrefs: ThemeNotesPrefs) => {
     setThemePrefs(nextPrefs);
@@ -539,6 +553,19 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
     await onCreateHabitFromNote(label);
   };
 
+  const copyToRoutine = (text: string) => {
+    const label = getActionLabel(text);
+    const targetRoutineId = selectedRoutineId || routineTabs[0]?.id;
+    if (!label || !targetRoutineId) return;
+
+    const nextRoutines = addRoutineItem(userId, targetRoutineId, label);
+    setRoutineTabs(nextRoutines);
+    setSelectedRoutineId(targetRoutineId);
+    const targetRoutine = nextRoutines.find((routine) => routine.id === targetRoutineId);
+    setRoutineStatus(`Copied to ${targetRoutine?.name ?? "routine"}`);
+    window.setTimeout(() => setRoutineStatus(""), 2000);
+  };
+
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr + "T12:00:00");
     return d.toLocaleDateString("en-US", {
@@ -576,6 +603,31 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
 
   const isStrengthHabit = (habitId: string) => strengthTrainingHabitIds.includes(habitId);
   const hiddenCount = themePrefs.hiddenBlockNoteIds.length;
+  const matchesSearch = (...values: Array<string | undefined | null>) =>
+    !normalizedSearch || values.some((value) => (value ?? "").toLowerCase().includes(normalizedSearch));
+  const visiblePinnedInsights = themePrefs.pinnedInsights.filter((insight) =>
+    matchesSearch(insight.text, insight.source)
+  );
+  const visibleHabits = allHabits.filter((habit) => {
+    const note = notes[habit.id]?.content ?? "";
+    const habitBlockNotes = blocks
+      .filter((block) => block.habitId === habit.id)
+      .map((block) => `${block.label} ${block.blockNote ?? ""}`)
+      .join(" ");
+    return matchesSearch(habit.name, note, habitBlockNotes);
+  });
+  const showThemeSection = activeTab === "all" || activeTab === "theme";
+  const showPinnedSection = (activeTab === "all" || activeTab === "pinned") && visiblePinnedInsights.length > 0;
+  const showHabitSection = activeTab === "all" || activeTab === "habits" || activeTab === "blocks";
+  const onlyBlockNotes = activeTab === "blocks";
+  const themeNoteMatchesSearch = matchesSearch(themePrefs.generalNote, themeName);
+  const tabs: Array<{ id: ThemeNotesTab; label: string }> = [
+    { id: "all", label: "All" },
+    { id: "theme", label: "Theme" },
+    { id: "habits", label: "Habits" },
+    { id: "blocks", label: "Blocks" },
+    { id: "pinned", label: "Pinned" },
+  ];
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -597,6 +649,43 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
             </div>
           ) : (
             <div className="theme-notes-layout">
+              <div className="theme-notes-controls">
+                <div className="theme-notes-tabs">
+                  {tabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`theme-notes-tab ${activeTab === tab.id ? "active" : ""}`}
+                      onClick={() => setActiveTab(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  className="theme-notes-search"
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search notes..."
+                />
+                <div className="theme-notes-routine-target">
+                  <span>Routine</span>
+                  <select
+                    value={selectedRoutineId}
+                    onChange={(event) => setSelectedRoutineId(event.target.value)}
+                  >
+                    {routineTabs.map((routine) => (
+                      <option key={routine.id} value={routine.id}>
+                        {routine.name}
+                      </option>
+                    ))}
+                  </select>
+                  {routineStatus && <em>{routineStatus}</em>}
+                </div>
+              </div>
+
+              {showThemeSection && themeNoteMatchesSearch && (
               <section className="theme-notes-section">
                 <div className="theme-notes-section-header">
                   <h3>Theme Notes</h3>
@@ -615,6 +704,9 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                     <button className="secondary small-btn" onClick={() => createHabitFromText(themePrefs.generalNote)}>
                       Turn into habit
                     </button>
+                    <button className="secondary small-btn" onClick={() => copyToRoutine(themePrefs.generalNote)}>
+                      Add to routine
+                    </button>
                   </div>
                 </div>
                 <MarkdownNoteEditor
@@ -629,14 +721,15 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                   onStopEdit={() => setActiveNoteEditor((current) => current === "theme" ? null : current)}
                 />
               </section>
+              )}
 
-              {themePrefs.pinnedInsights.length > 0 && (
+              {showPinnedSection && (
                 <section className="theme-notes-section">
                   <div className="theme-notes-section-header">
                     <h3>Pinned Insights</h3>
                   </div>
                   <div className="theme-notes-pinned-list">
-                    {themePrefs.pinnedInsights.map((insight) => (
+                    {visiblePinnedInsights.map((insight) => (
                       <div key={insight.id} className="theme-notes-pinned-item">
                         <div>
                           <div className="theme-notes-pinned-source">{insight.source}</div>
@@ -645,30 +738,36 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                           </div>
                           <div className="theme-notes-pinned-text">{insight.text}</div>
                         </div>
-                        <button className="theme-notes-inline-btn" onClick={() => removePinnedInsight(insight.id)}>
-                          Remove
-                        </button>
+                        <div className="theme-notes-note-actions">
+                          <button className="theme-notes-inline-btn" onClick={() => copyToRoutine(insight.text)}>
+                            Routine
+                          </button>
+                          <button className="theme-notes-inline-btn" onClick={() => removePinnedInsight(insight.id)}>
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
                 </section>
               )}
 
+              {showHabitSection && (
               <section className="theme-notes-section">
                 <div className="theme-notes-section-header">
-                  <h3>Linked Habit Notes</h3>
+                  <h3>{onlyBlockNotes ? "Block Notes" : "Linked Habit Notes"}</h3>
                   {hiddenCount > 0 && (
                     <button className="secondary small-btn" onClick={restoreHiddenBlockNotes}>
                       Show {hiddenCount} archived
                     </button>
                   )}
                 </div>
-              {allHabits.length === 0 && (
+              {visibleHabits.length === 0 && (
                 <div style={{ textAlign: "center", color: "#999", padding: "16px", fontSize: "13px" }}>
-                  No habits in this theme yet.
+                  {normalizedSearch ? "No matching notes found." : "No habits in this theme yet."}
                 </div>
               )}
-              {allHabits.map((habit) => {
+              {visibleHabits.map((habit) => {
                 const isOpen = expandedHabits.has(habit.id);
                 const note = notes[habit.id];
                 const done = getHabitDoneCount(habit.id, habit.frequency);
@@ -765,6 +864,8 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                               </span>
                             )}
                             <div className="theme-notes-actions">
+                              {!onlyBlockNotes && (
+                              <>
                               <button className="secondary small-btn" onClick={() => pinInsight(note?.content ?? "", `${habit.name} note`)}>
                                 Pin
                               </button>
@@ -774,8 +875,14 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                               <button className="secondary small-btn" onClick={() => createHabitFromText(note?.content ?? "")}>
                                 Habit
                               </button>
+                              <button className="secondary small-btn" onClick={() => copyToRoutine(note?.content ?? "")}>
+                                Routine
+                              </button>
+                              </>
+                              )}
                             </div>
                           </div>
+                          {!onlyBlockNotes && (
                           <MarkdownNoteEditor
                             value={note?.content ?? ""}
                             placeholder={`Write notes about ${habit.name}...`}
@@ -787,6 +894,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                             onStartEdit={() => setActiveNoteEditor(habit.id)}
                             onStopEdit={() => setActiveNoteEditor((current) => current === habit.id ? null : current)}
                           />
+                          )}
                         </div>
 
                         {(() => {
@@ -823,6 +931,9 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                                       </button>
                                       <button className="theme-notes-inline-btn" onClick={() => createHabitFromText(b.blockNote ?? "")}>
                                         Turn into habit
+                                      </button>
+                                      <button className="theme-notes-inline-btn" onClick={() => copyToRoutine(b.blockNote ?? "")}>
+                                        Add to routine
                                       </button>
                                       <button className="theme-notes-inline-btn" onClick={() => hideBlockNote(b.id)}>
                                         Archive
@@ -873,6 +984,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                 );
               })}
               </section>
+              )}
             </div>
           )}
         </div>

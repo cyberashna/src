@@ -1,17 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type RoutineItem = {
-  id: string;
-  label: string;
-};
-
-type RoutineTab = {
-  id: string;
-  name: string;
-  notes: string;
-  items: RoutineItem[];
-  completedByDate: Record<string, string[]>;
-};
+import {
+  createRoutineId,
+  loadRoutineNotes,
+  saveRoutineNotes,
+  type RoutineTab,
+} from "../services/routineNotes";
 
 type Props = {
   userId: string;
@@ -20,40 +13,7 @@ type Props = {
   onCreateBlock: (label: string) => Promise<void>;
 };
 
-const createId = (prefix: string) =>
-  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-const defaultRoutines = (): RoutineTab[] => [
-  {
-    id: createId("routine"),
-    name: "Morning",
-    notes: "Keep this visible while setting up the day.",
-    items: [
-      { id: createId("routine-item"), label: "Water" },
-      { id: createId("routine-item"), label: "Skincare" },
-      { id: createId("routine-item"), label: "Stretch or mobility" },
-      { id: createId("routine-item"), label: "Review calendar" },
-      { id: createId("routine-item"), label: "Breakfast" },
-    ],
-    completedByDate: {},
-  },
-  {
-    id: createId("routine"),
-    name: "Evening",
-    notes: "Use this as a shutdown checklist before tomorrow.",
-    items: [
-      { id: createId("routine-item"), label: "Kitchen reset" },
-      { id: createId("routine-item"), label: "Prep clothes" },
-      { id: createId("routine-item"), label: "Skincare" },
-      { id: createId("routine-item"), label: "Plan tomorrow" },
-      { id: createId("routine-item"), label: "Read" },
-    ],
-    completedByDate: {},
-  },
-];
-
 export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreateBlock }: Props) {
-  const storageKey = `routine-notes:${userId}`;
   const [routines, setRoutines] = useState<RoutineTab[]>([]);
   const [activeRoutineId, setActiveRoutineId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -73,17 +33,10 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
   const openItems = activeRoutine?.items.filter((item) => !completedItemIds.has(item.id)) ?? [];
 
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(storageKey);
-      const loaded = saved ? (JSON.parse(saved) as RoutineTab[]) : defaultRoutines();
-      setRoutines(loaded);
-      setActiveRoutineId(loaded[0]?.id ?? null);
-    } catch {
-      const defaults = defaultRoutines();
-      setRoutines(defaults);
-      setActiveRoutineId(defaults[0]?.id ?? null);
-    }
-  }, [storageKey]);
+    const loaded = loadRoutineNotes(userId);
+    setRoutines(loaded);
+    setActiveRoutineId(loaded[0]?.id ?? null);
+  }, [userId]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -98,7 +51,7 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
 
   const saveRoutines = (next: RoutineTab[]) => {
     setRoutines(next);
-    window.localStorage.setItem(storageKey, JSON.stringify(next));
+    saveRoutineNotes(userId, next);
   };
 
   const updateRoutine = (routineId: string, updates: Partial<RoutineTab>) => {
@@ -113,7 +66,7 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
     const name = newRoutineName.trim();
     if (!name) return;
     const routine: RoutineTab = {
-      id: createId("routine"),
+      id: createRoutineId("routine"),
       name,
       notes: "",
       items: [],
@@ -146,7 +99,7 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
     const label = newItemLabel.trim();
     if (!label) return;
     updateRoutine(activeRoutine.id, {
-      items: [...activeRoutine.items, { id: createId("routine-item"), label }],
+      items: [...activeRoutine.items, { id: createRoutineId("routine-item"), label }],
     });
     setNewItemLabel("");
   };
