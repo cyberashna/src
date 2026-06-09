@@ -2040,6 +2040,73 @@ table.planner th.col-normal {
   font-size: 10px;
 }
 
+.theme-notes-action-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.theme-notes-action-trigger {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #475569;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 800;
+  height: 24px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0 7px 3px;
+  width: 30px;
+}
+
+.theme-notes-action-trigger:hover {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+  color: #3730a3;
+}
+
+.theme-notes-action-panel {
+  background: #fff;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: 5px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+}
+
+.theme-notes-action-panel button {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #334155;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 7px 9px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.theme-notes-action-panel button:hover {
+  background: #f1f5f9;
+}
+
+.theme-notes-action-panel button.danger {
+  color: #b91c1c;
+}
+
+.theme-notes-action-panel button.danger:hover {
+  background: #fef2f2;
+}
+
 @media (max-width: 760px) {
   .theme-notes-controls {
     grid-template-columns: 1fr;
@@ -2100,7 +2167,7 @@ table.planner th.col-normal {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
-  overflow: hidden;
+  overflow: visible;
   transition: box-shadow 0.15s ease;
 }
 .theme-notes-habit-card:hover {
