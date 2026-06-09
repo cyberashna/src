@@ -376,6 +376,7 @@ const App: React.FC = () => {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showTemplateNote, setShowTemplateNote] = useState(true);
   const [showRoutineNotes, setShowRoutineNotes] = useState(false);
+  const [showPlanningMenu, setShowPlanningMenu] = useState(false);
   const [showQuickHabit, setShowQuickHabit] = useState(false);
   const [showSmartWeeklySetup, setShowSmartWeeklySetup] = useState(false);
   const [smartWeeklyLoading, setSmartWeeklyLoading] = useState(false);
@@ -497,12 +498,7 @@ const App: React.FC = () => {
       });
 
       setThemes(themesWithHabits);
-
-      setExpandedThemes((prev) => {
-        const next = new Set(prev);
-        themesWithHabits.forEach((t) => { if (!next.has(t.id)) next.add(t.id); });
-        return next;
-      });
+      setExpandedThemes((prev) => new Set([...prev].filter((id) => themesWithHabits.some((t) => t.id === id))));
 
       const blockIds = blocksData.map((b) => b.id);
       const [workoutDataArray, blockCreditsArray, mealBlockLinksArray, blockNotesArray, blockTasksArray] = await Promise.all([
@@ -2404,10 +2400,8 @@ const App: React.FC = () => {
 
   const toggleThemeExpanded = (themeId: string) => {
     setExpandedThemes((prev) => {
-      const next = new Set(prev);
-      if (next.has(themeId)) next.delete(themeId);
-      else next.add(themeId);
-      return next;
+      if (prev.has(themeId)) return new Set();
+      return new Set([themeId]);
     });
   };
 
@@ -2810,14 +2804,30 @@ const App: React.FC = () => {
           <div className="card">
             <div className="top-row">
               <h2>Habit themes</h2>
-              <button
-                type="button"
-                className="secondary small-btn"
-                onClick={handleSignOut}
-                aria-label="Sign out"
-              >
-                Sign out
-              </button>
+              <div className="theme-top-actions">
+                <button
+                  type="button"
+                  className="secondary small-btn"
+                  onClick={() => setExpandedThemes(new Set(themes.map((theme) => theme.id)))}
+                >
+                  Open all
+                </button>
+                <button
+                  type="button"
+                  className="secondary small-btn"
+                  onClick={() => setExpandedThemes(new Set())}
+                >
+                  Close all
+                </button>
+                <button
+                  type="button"
+                  className="secondary small-btn"
+                  onClick={handleSignOut}
+                  aria-label="Sign out"
+                >
+                  Sign out
+                </button>
+              </div>
             </div>
 
             {dataLoading ? (
@@ -3931,24 +3941,70 @@ const App: React.FC = () => {
                 >
                   Copy last week
                 </button>
-                <button
-                  type="button"
-                  className="copy-week-btn"
-                  onClick={openSmartWeeklySetup}
-                  title="Build this week from smart suggestions"
-                  style={{ background: '#16a34a', color: 'white', border: 'none' }}
-                >
-                  Smart Setup
-                </button>
-                <button
-                  type="button"
-                  className="copy-week-btn"
-                  onClick={() => setShowQuickStartModal(true)}
-                  title="Create a routine from templates"
-                  style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none' }}
-                >
-                  Quick Start
-                </button>
+                <div className="planning-menu-wrap">
+                  <button
+                    type="button"
+                    className="copy-week-btn planning-menu-trigger"
+                    onClick={() => setShowPlanningMenu((value) => !value)}
+                    title="Open planning tools"
+                  >
+                    Planning
+                  </button>
+                  {showPlanningMenu && (
+                    <div className="planning-menu">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          openSmartWeeklySetup();
+                          setShowPlanningMenu(false);
+                        }}
+                      >
+                        <strong>Smart Setup</strong>
+                        <span>Build this week from suggestions</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowQuickStartModal(true);
+                          setShowPlanningMenu(false);
+                        }}
+                      >
+                        <strong>Quick Start</strong>
+                        <span>Create from reusable templates</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowTemplateNote((value) => !value);
+                          setShowPlanningMenu(false);
+                        }}
+                      >
+                        <strong>{showTemplateNote ? "Hide Checklist" : "Show Checklist"}</strong>
+                        <span>Open planning checklist tabs</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowRoutineNotes((value) => !value);
+                          setShowPlanningMenu(false);
+                        }}
+                      >
+                        <strong>{showRoutineNotes ? "Hide Routines" : "Show Routines"}</strong>
+                        <span>Open routine notes and checklists</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowGhostBlocks((value) => !value);
+                          setShowPlanningMenu(false);
+                        }}
+                      >
+                        <strong>{showGhostBlocks ? "Hide Suggestions" : "Show Suggestions"}</strong>
+                        <span>Toggle ghost blocks on the calendar</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   type="button"
                   className="copy-week-btn"
@@ -3957,33 +4013,6 @@ const App: React.FC = () => {
                   style={{ background: '#0f172a', color: 'white', border: 'none' }}
                 >
                   Analytics
-                </button>
-                <button
-                  type="button"
-                  className="copy-week-btn"
-                  onClick={() => setShowGhostBlocks((v) => !v)}
-                  title={showGhostBlocks ? "Hide suggestions" : "Show suggestions"}
-                  style={{ background: showGhostBlocks ? '#64748b' : undefined, color: showGhostBlocks ? 'white' : undefined, border: showGhostBlocks ? 'none' : undefined }}
-                >
-                  {showGhostBlocks ? "Hide Suggestions" : "Show Suggestions"}
-                </button>
-                <button
-                  type="button"
-                  className="copy-week-btn"
-                  onClick={() => setShowTemplateNote((v) => !v)}
-                  title="Toggle planning templates"
-                  style={{ background: showTemplateNote ? '#0ea5e9' : undefined, color: showTemplateNote ? 'white' : undefined, border: showTemplateNote ? 'none' : undefined }}
-                >
-                  Checklist
-                </button>
-                <button
-                  type="button"
-                  className="copy-week-btn"
-                  onClick={() => setShowRoutineNotes((v) => !v)}
-                  title="Toggle routine notes"
-                  style={{ background: showRoutineNotes ? '#0f766e' : undefined, color: showRoutineNotes ? 'white' : undefined, border: showRoutineNotes ? 'none' : undefined }}
-                >
-                  Routines
                 </button>
                 <button
                   type="button"
