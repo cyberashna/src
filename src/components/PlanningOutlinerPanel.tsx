@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type OutlineNode = {
-  id: string;
-  text: string;
-  collapsed: boolean;
-  tag: "note" | "task" | "habit";
-  frequency: "daily" | "weekly" | "monthly" | "none";
-  target: number;
-  children: OutlineNode[];
-};
+import {
+  cloneOutlineNodes,
+  createOutlineNode,
+  loadPlanningOutliner,
+  savePlanningOutliner,
+  updateOutlineNode,
+  type OutlineFrequency,
+  type OutlineNode,
+} from "../services/planningOutliner";
 
 type ThemeOption = {
   id: string;
@@ -24,61 +23,8 @@ type Props = {
     themeId: string,
     name: string,
     targetPerWeek: number,
-    frequency: OutlineNode["frequency"]
+    frequency: OutlineFrequency
   ) => Promise<void>;
-};
-
-const storageKey = (userId: string) => `planning-outliner:${userId}`;
-
-const createId = (prefix: string) =>
-  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-const createNode = (text = "New note"): OutlineNode => ({
-  id: createId("outline"),
-  text,
-  collapsed: false,
-  tag: "note",
-  frequency: "weekly",
-  target: 1,
-  children: [],
-});
-
-const defaultNodes = (): OutlineNode[] => {
-  const weeklyRdl = createNode("Weekly RDL");
-  const rdl = { ...createNode("RDL"), children: [weeklyRdl] };
-  const gluteusMaximus = { ...createNode("Gluteus Maximus"), children: [rdl] };
-  const glute = { ...createNode("Glute"), children: [gluteusMaximus] };
-  const exerciseRoutine = createNode("Exercise routine");
-  const exercise = { ...createNode("Exercise"), children: [glute, exerciseRoutine] };
-  return [{ ...createNode("Look good"), children: [exercise] }];
-};
-
-const cloneNodes = (nodes: OutlineNode[]): OutlineNode[] =>
-  nodes.map((node) => ({ ...node, children: cloneNodes(node.children) }));
-
-const normalizeNode = (node: Partial<OutlineNode>): OutlineNode => ({
-  id: node.id ?? createId("outline"),
-  text: node.text ?? "New note",
-  collapsed: node.collapsed ?? false,
-  tag: node.tag ?? "note",
-  frequency: node.frequency ?? "weekly",
-  target: node.target ?? 1,
-  children: Array.isArray(node.children) ? node.children.map(normalizeNode) : [],
-});
-
-const loadNodes = (userId: string): OutlineNode[] => {
-  try {
-    const saved = localStorage.getItem(storageKey(userId));
-    if (!saved) return defaultNodes();
-    const parsed = JSON.parse(saved) as Partial<OutlineNode>[];
-    return Array.isArray(parsed) ? parsed.map(normalizeNode) : defaultNodes();
-  } catch {
-    return defaultNodes();
-  }
-};
-
-const saveNodes = (userId: string, nodes: OutlineNode[]) => {
-  localStorage.setItem(storageKey(userId), JSON.stringify(nodes));
 };
 
 function findNode(
@@ -95,19 +41,8 @@ function findNode(
   return null;
 }
 
-function updateNode(
-  nodes: OutlineNode[],
-  id: string,
-  updater: (node: OutlineNode) => OutlineNode
-): OutlineNode[] {
-  return nodes.map((node) => {
-    if (node.id === id) return updater(node);
-    return { ...node, children: updateNode(node.children, id, updater) };
-  });
-}
-
 function addChild(nodes: OutlineNode[], parentId: string, child: OutlineNode): OutlineNode[] {
-  return updateNode(nodes, parentId, (node) => ({
+  return updateOutlineNode(nodes, parentId, (node) => ({
     ...node,
     collapsed: false,
     children: [...node.children, child],
@@ -157,6 +92,24 @@ function nestPreviousSiblingUnder(nodes: OutlineNode[], targetId: string): Outli
   }));
 }
 
+function toLocalDatetimeValue(iso?: string | null) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function formatReminder(iso: string | null) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export default function PlanningOutlinerPanel({
   userId,
   onClose,
@@ -164,21 +117,23 @@ export default function PlanningOutlinerPanel({
   onCreateBlock,
   onCreateHabit,
 }: Props) {
-  const [nodes, setNodes] = useState<OutlineNode[]>(() => loadNodes(userId));
+  const [nodes, setNodes] = useState<OutlineNode[]>(() => loadPlanningOutliner(userId));
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [pendingFocusNodeId, setPendingFocusNodeId] = useState<string | null>(null);
   const [habitConvertNodeId, setHabitConvertNodeId] = useState<string | null>(null);
+  const [reminderNodeId, setReminderNodeId] = useState<string | null>(null);
+  const [reminderValue, setReminderValue] = useState("");
   const [selectedThemeId, setSelectedThemeId] = useState("");
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => {
-    setNodes(loadNodes(userId));
+    setNodes(loadPlanningOutliner(userId));
     setFocusNodeId(null);
   }, [userId]);
 
   useEffect(() => {
-    saveNodes(userId, nodes);
+    savePlanningOutliner(userId, nodes);
   }, [nodes, userId]);
 
   useEffect(() => {
@@ -214,11 +169,21 @@ export default function PlanningOutlinerPanel({
   }, [visibleNodes]);
 
   const updateAndSave = (updater: (current: OutlineNode[]) => OutlineNode[]) => {
-    setNodes((current) => updater(cloneNodes(current)));
+    setNodes((current) => updater(cloneOutlineNodes(current)));
+  };
+
+  const updateRow = (id: string, updates: Partial<OutlineNode>) => {
+    updateAndSave((current) =>
+      updateOutlineNode(current, id, (item) => ({
+        ...item,
+        ...updates,
+        target: Math.max(1, updates.target ?? item.target),
+      }))
+    );
   };
 
   const addRootOrFocusedChild = () => {
-    const node = createNode();
+    const node = createOutlineNode();
     updateAndSave((current) =>
       focusNode ? addChild(current, focusNode.id, node) : [...current, node]
     );
@@ -226,13 +191,13 @@ export default function PlanningOutlinerPanel({
   };
 
   const addChildWithFocus = (parentId: string) => {
-    const node = createNode("New detail");
+    const node = createOutlineNode("New detail");
     updateAndSave((current) => addChild(current, parentId, node));
     setPendingFocusNodeId(node.id);
   };
 
   const addSiblingWithFocus = (siblingId: string) => {
-    const node = createNode("New next");
+    const node = createOutlineNode("New next");
     updateAndSave((current) => addSibling(current, siblingId, node));
     setPendingFocusNodeId(node.id);
   };
@@ -248,16 +213,6 @@ export default function PlanningOutlinerPanel({
     updateAndSave((current) => nestPreviousSiblingUnder(current, id));
   };
 
-  const updateRow = (id: string, updates: Partial<OutlineNode>) => {
-    updateAndSave((current) =>
-      updateNode(current, id, (item) => ({
-        ...item,
-        ...updates,
-        target: Math.max(1, updates.target ?? item.target),
-      }))
-    );
-  };
-
   const convertToBlock = async (node: OutlineNode) => {
     const label = node.text.trim();
     if (!label) return;
@@ -269,6 +224,28 @@ export default function PlanningOutlinerPanel({
     if (!label || !selectedTheme) return;
     await onCreateHabit(selectedTheme.id, label, node.target, node.frequency);
     setHabitConvertNodeId(null);
+  };
+
+  const openReminderPanel = (node: OutlineNode) => {
+    setReminderNodeId((current) => current === node.id ? null : node.id);
+    setReminderValue(toLocalDatetimeValue(node.reminderAt));
+  };
+
+  const saveReminder = (nodeId: string) => {
+    if (!reminderValue) return;
+    updateRow(nodeId, {
+      reminderAt: new Date(reminderValue).toISOString(),
+      reminderDismissedAt: null,
+    });
+    setReminderNodeId(null);
+  };
+
+  const clearReminder = (nodeId: string) => {
+    updateRow(nodeId, {
+      reminderAt: null,
+      reminderDismissedAt: null,
+    });
+    setReminderNodeId(null);
   };
 
   const renderRows = (items: OutlineNode[], depth = 0): JSX.Element[] =>
@@ -283,9 +260,7 @@ export default function PlanningOutlinerPanel({
               className={`outliner-collapse ${hasChildren ? "" : "outliner-collapse--empty"}`}
               onClick={() => {
                 if (!hasChildren) return;
-                updateAndSave((current) =>
-                  updateNode(current, node.id, (item) => ({ ...item, collapsed: !item.collapsed }))
-                );
+                updateRow(node.id, { collapsed: !node.collapsed });
               }}
               aria-label={node.collapsed ? "Expand row" : "Collapse row"}
             >
@@ -304,11 +279,7 @@ export default function PlanningOutlinerPanel({
               }}
               className="outliner-input"
               value={node.text}
-              onChange={(event) =>
-                updateAndSave((current) =>
-                  updateNode(current, node.id, (item) => ({ ...item, text: event.target.value }))
-                )
-              }
+              onChange={(event) => updateRow(node.id, { text: event.target.value })}
               onKeyDown={(event) => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();
@@ -351,6 +322,9 @@ export default function PlanningOutlinerPanel({
                   </button>
                 </>
               )}
+              <button type="button" onClick={() => openReminderPanel(node)}>
+                Remind
+              </button>
               <button
                 type="button"
                 onClick={() => addChildWithFocus(node.id)}
@@ -384,13 +358,36 @@ export default function PlanningOutlinerPanel({
               </button>
             </div>
           </div>
+          {node.reminderAt && (
+            <div className="outliner-reminder-pill" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              Reminds {formatReminder(node.reminderAt)}
+            </div>
+          )}
+          {reminderNodeId === node.id && (
+            <div className="outliner-reminder-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <span>Remind me</span>
+              <input
+                type="datetime-local"
+                value={reminderValue}
+                onChange={(event) => setReminderValue(event.target.value)}
+              />
+              <button type="button" onClick={() => saveReminder(node.id)}>
+                Save
+              </button>
+              {node.reminderAt && (
+                <button type="button" className="outliner-reminder-clear" onClick={() => clearReminder(node.id)}>
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
           {node.tag === "habit" && (
             <div className="outliner-habit-settings" style={{ marginLeft: `${depth * 18 + 44}px` }}>
               <span>Frequency</span>
               <select
                 value={node.frequency}
                 onChange={(event) =>
-                  updateRow(node.id, { frequency: event.target.value as OutlineNode["frequency"] })
+                  updateRow(node.id, { frequency: event.target.value as OutlineFrequency })
                 }
               >
                 <option value="daily">Daily</option>
