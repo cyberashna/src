@@ -3993,6 +3993,84 @@ table.planner th.col-normal {
   outline: none;
 }
 
+.outliner-tag-select {
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  color: #64748b;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 7px;
+}
+
+.outliner-tag-select--task {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.outliner-tag-select--habit {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+.outliner-habit-settings,
+.outliner-convert-panel {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+  margin-right: 8px;
+  max-width: calc(100% - 52px);
+  padding: 5px 7px;
+}
+
+.outliner-habit-settings span,
+.outliner-convert-panel span {
+  color: #64748b;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.outliner-habit-settings select,
+.outliner-convert-panel select,
+.outliner-habit-settings input {
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  color: #334155;
+  font-size: 11px;
+  min-width: 0;
+  padding: 3px 6px;
+}
+
+.outliner-habit-settings input {
+  width: 54px;
+}
+
+.outliner-convert-panel {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.outliner-convert-panel button {
+  background: #334155;
+  border: none;
+  border-radius: 5px;
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
 .outliner-row-actions {
   display: flex;
   flex-shrink: 0;
