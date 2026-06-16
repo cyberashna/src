@@ -4509,7 +4509,17 @@ const App: React.FC = () => {
       {showPlanningOutliner && user && (
         <PlanningOutlinerPanel
           userId={user.id}
+          themes={themes
+            .filter((theme) => theme.themeType === "habit")
+            .map((theme) => ({ id: theme.id, name: theme.name }))}
           onClose={() => setShowPlanningOutliner(false)}
+          onCreateBlock={async (label) => {
+            const id = await createBlock(label);
+            if (id) showToast("Outliner row added to unscheduled", "success");
+          }}
+          onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
+            await addHabitToTheme(themeId, name, targetPerWeek, frequency);
+          }}
         />
       )}
     </>

@@ -4,12 +4,28 @@ type OutlineNode = {
   id: string;
   text: string;
   collapsed: boolean;
+  tag: "note" | "task" | "habit";
+  frequency: "daily" | "weekly" | "monthly" | "none";
+  target: number;
   children: OutlineNode[];
+};
+
+type ThemeOption = {
+  id: string;
+  name: string;
 };
 
 type Props = {
   userId: string;
   onClose: () => void;
+  themes: ThemeOption[];
+  onCreateBlock: (label: string) => Promise<void>;
+  onCreateHabit: (
+    themeId: string,
+    name: string,
+    targetPerWeek: number,
+    frequency: OutlineNode["frequency"]
+  ) => Promise<void>;
 };
 
 const storageKey = (userId: string) => `planning-outliner:${userId}`;
@@ -21,6 +37,9 @@ const createNode = (text = "New note"): OutlineNode => ({
   id: createId("outline"),
   text,
   collapsed: false,
+  tag: "note",
+  frequency: "weekly",
+  target: 1,
   children: [],
 });
 
@@ -37,12 +56,22 @@ const defaultNodes = (): OutlineNode[] => {
 const cloneNodes = (nodes: OutlineNode[]): OutlineNode[] =>
   nodes.map((node) => ({ ...node, children: cloneNodes(node.children) }));
 
+const normalizeNode = (node: Partial<OutlineNode>): OutlineNode => ({
+  id: node.id ?? createId("outline"),
+  text: node.text ?? "New note",
+  collapsed: node.collapsed ?? false,
+  tag: node.tag ?? "note",
+  frequency: node.frequency ?? "weekly",
+  target: node.target ?? 1,
+  children: Array.isArray(node.children) ? node.children.map(normalizeNode) : [],
+});
+
 const loadNodes = (userId: string): OutlineNode[] => {
   try {
     const saved = localStorage.getItem(storageKey(userId));
     if (!saved) return defaultNodes();
-    const parsed = JSON.parse(saved) as OutlineNode[];
-    return Array.isArray(parsed) ? parsed : defaultNodes();
+    const parsed = JSON.parse(saved) as Partial<OutlineNode>[];
+    return Array.isArray(parsed) ? parsed.map(normalizeNode) : defaultNodes();
   } catch {
     return defaultNodes();
   }
@@ -128,10 +157,18 @@ function nestPreviousSiblingUnder(nodes: OutlineNode[], targetId: string): Outli
   }));
 }
 
-export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
+export default function PlanningOutlinerPanel({
+  userId,
+  onClose,
+  themes,
+  onCreateBlock,
+  onCreateHabit,
+}: Props) {
   const [nodes, setNodes] = useState<OutlineNode[]>(() => loadNodes(userId));
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [pendingFocusNodeId, setPendingFocusNodeId] = useState<string | null>(null);
+  const [habitConvertNodeId, setHabitConvertNodeId] = useState<string | null>(null);
+  const [selectedThemeId, setSelectedThemeId] = useState("");
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -168,6 +205,7 @@ export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
   const focusNode = focusResult?.node ?? null;
   const focusPath = focusResult?.path ?? [];
   const visibleNodes = focusNode ? focusNode.children : nodes;
+  const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? themes[0];
 
   const visibleCount = useMemo(() => {
     const count = (items: OutlineNode[]): number =>
@@ -210,9 +248,33 @@ export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
     updateAndSave((current) => nestPreviousSiblingUnder(current, id));
   };
 
+  const updateRow = (id: string, updates: Partial<OutlineNode>) => {
+    updateAndSave((current) =>
+      updateNode(current, id, (item) => ({
+        ...item,
+        ...updates,
+        target: Math.max(1, updates.target ?? item.target),
+      }))
+    );
+  };
+
+  const convertToBlock = async (node: OutlineNode) => {
+    const label = node.text.trim();
+    if (!label) return;
+    await onCreateBlock(label);
+  };
+
+  const convertToHabit = async (node: OutlineNode) => {
+    const label = node.text.trim();
+    if (!label || !selectedTheme) return;
+    await onCreateHabit(selectedTheme.id, label, node.target, node.frequency);
+    setHabitConvertNodeId(null);
+  };
+
   const renderRows = (items: OutlineNode[], depth = 0): JSX.Element[] =>
     items.map((node, index) => {
       const hasChildren = node.children.length > 0;
+      const isTagged = node.tag === "task" || node.tag === "habit";
       return (
         <div key={node.id} className="outliner-row-wrap">
           <div className="outliner-row" style={{ paddingLeft: `${depth * 18 + 8}px` }}>
@@ -255,7 +317,40 @@ export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
               }}
               placeholder="Planning note..."
             />
+            <select
+              className={`outliner-tag-select outliner-tag-select--${node.tag}`}
+              value={node.tag}
+              onChange={(event) =>
+                updateRow(node.id, { tag: event.target.value as OutlineNode["tag"] })
+              }
+              title="Tag this row"
+            >
+              <option value="note">Note</option>
+              <option value="task">Task</option>
+              <option value="habit">Habit</option>
+            </select>
             <div className="outliner-row-actions">
+              {isTagged && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => convertToBlock(node)}
+                    title="Turn this tagged row into an unscheduled block"
+                  >
+                    To block
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHabitConvertNodeId((current) => current === node.id ? null : node.id);
+                      setSelectedThemeId((current) => current || themes[0]?.id || "");
+                    }}
+                    title="Turn this tagged row into a habit"
+                  >
+                    To habit
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => addChildWithFocus(node.id)}
@@ -289,6 +384,57 @@ export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
               </button>
             </div>
           </div>
+          {node.tag === "habit" && (
+            <div className="outliner-habit-settings" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <span>Frequency</span>
+              <select
+                value={node.frequency}
+                onChange={(event) =>
+                  updateRow(node.id, { frequency: event.target.value as OutlineNode["frequency"] })
+                }
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="none">No schedule</option>
+              </select>
+              {node.frequency !== "none" && (
+                <input
+                  type="number"
+                  min={1}
+                  value={node.target}
+                  onChange={(event) =>
+                    updateRow(node.id, { target: Number(event.target.value) || 1 })
+                  }
+                  aria-label="Target count"
+                />
+              )}
+            </div>
+          )}
+          {habitConvertNodeId === node.id && (
+            <div className="outliner-convert-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              {themes.length === 0 ? (
+                <span>Create a theme first, then this can become a habit.</span>
+              ) : (
+                <>
+                  <span>Theme</span>
+                  <select
+                    value={selectedTheme?.id ?? ""}
+                    onChange={(event) => setSelectedThemeId(event.target.value)}
+                  >
+                    {themes.map((theme) => (
+                      <option key={theme.id} value={theme.id}>
+                        {theme.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => convertToHabit(node)}>
+                    Create habit
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           {hasChildren && !node.collapsed && renderRows(node.children, depth + 1)}
         </div>
       );
