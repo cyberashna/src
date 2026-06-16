@@ -29,6 +29,7 @@ import type { Suggestion } from "./components/EventSuggestions";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import TemplateStickyNote from "./components/TemplateStickyNote";
 import RoutineNotesPopup from "./components/RoutineNotesPopup";
+import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
 import BlockCard from "./components/BlockCard";
 import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
@@ -377,6 +378,7 @@ const App: React.FC = () => {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showTemplateNote, setShowTemplateNote] = useState(true);
   const [showRoutineNotes, setShowRoutineNotes] = useState(false);
+  const [showPlanningOutliner, setShowPlanningOutliner] = useState(false);
   const [showPlanningMenu, setShowPlanningMenu] = useState(false);
   const [showQuickHabit, setShowQuickHabit] = useState(false);
   const [showSmartWeeklySetup, setShowSmartWeeklySetup] = useState(false);
@@ -4045,6 +4047,16 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
+                          setShowPlanningOutliner((value) => !value);
+                          setShowPlanningMenu(false);
+                        }}
+                      >
+                        <strong>{showPlanningOutliner ? "Hide Outliner" : "Show Outliner"}</strong>
+                        <span>Plan with nested collapsible rows</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
                           setShowGhostBlocks((value) => !value);
                           setShowPlanningMenu(false);
                         }}
@@ -4491,6 +4503,13 @@ const App: React.FC = () => {
             const id = await createBlock(label);
             if (id) showToast("Routine item added to unscheduled", "success");
           }}
+        />
+      )}
+
+      {showPlanningOutliner && user && (
+        <PlanningOutlinerPanel
+          userId={user.id}
+          onClose={() => setShowPlanningOutliner(false)}
         />
       )}
     </>
