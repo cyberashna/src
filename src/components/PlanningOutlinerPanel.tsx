@@ -105,6 +105,29 @@ function deleteNode(nodes: OutlineNode[], id: string): OutlineNode[] {
     .map((node) => ({ ...node, children: deleteNode(node.children, id) }));
 }
 
+function nestPreviousSiblingUnder(nodes: OutlineNode[], targetId: string): OutlineNode[] {
+  const targetIndex = nodes.findIndex((node) => node.id === targetId);
+
+  if (targetIndex > 0) {
+    const previousSibling = nodes[targetIndex - 1];
+    const targetNode = nodes[targetIndex];
+    return [
+      ...nodes.slice(0, targetIndex - 1),
+      {
+        ...targetNode,
+        collapsed: false,
+        children: [previousSibling, ...targetNode.children],
+      },
+      ...nodes.slice(targetIndex + 1),
+    ];
+  }
+
+  return nodes.map((node) => ({
+    ...node,
+    children: nestPreviousSiblingUnder(node.children, targetId),
+  }));
+}
+
 export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
   const [nodes, setNodes] = useState<OutlineNode[]>(() => loadNodes(userId));
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
@@ -183,8 +206,12 @@ export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
     }
   };
 
+  const nestPreviousUnder = (id: string) => {
+    updateAndSave((current) => nestPreviousSiblingUnder(current, id));
+  };
+
   const renderRows = (items: OutlineNode[], depth = 0): JSX.Element[] =>
-    items.map((node) => {
+    items.map((node, index) => {
       const hasChildren = node.children.length > 0;
       return (
         <div key={node.id} className="outliner-row-wrap">
@@ -243,6 +270,15 @@ export default function PlanningOutlinerPanel({ userId, onClose }: Props) {
               >
                 + Next
               </button>
+              {index > 0 && (
+                <button
+                  type="button"
+                  onClick={() => nestPreviousUnder(node.id)}
+                  title="Pull the previous row underneath this row"
+                >
+                  Nest prev
+                </button>
+              )}
               <button
                 type="button"
                 className="outliner-delete"
