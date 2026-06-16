@@ -33,6 +33,12 @@ import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
 import BlockCard from "./components/BlockCard";
 import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
+import {
+  dismissOutlinerReminder,
+  getDueOutlinerReminder,
+  snoozeOutlinerReminder,
+  type OutlinerReminder,
+} from "./services/planningOutliner";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
 
 type HabitGroup = {
@@ -381,6 +387,7 @@ const App: React.FC = () => {
   const [showPlanningOutliner, setShowPlanningOutliner] = useState(false);
   const [showPlanningMenu, setShowPlanningMenu] = useState(false);
   const [showQuickHabit, setShowQuickHabit] = useState(false);
+  const [outlinerReminder, setOutlinerReminder] = useState<OutlinerReminder | null>(null);
   const [showSmartWeeklySetup, setShowSmartWeeklySetup] = useState(false);
   const [smartWeeklyLoading, setSmartWeeklyLoading] = useState(false);
   const [smartWeeklyApplying, setSmartWeeklyApplying] = useState(false);
@@ -410,6 +417,11 @@ const App: React.FC = () => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const checkOutlinerReminders = useCallback(() => {
+    if (!user) return;
+    setOutlinerReminder((current) => current ?? getDueOutlinerReminder(user.id));
+  }, [user]);
+
   const showConfirm = useCallback((message: string, onConfirm: () => void, options?: { confirmLabel?: string; destructive?: boolean }) => {
     setConfirmDialog({ message, onConfirm, confirmLabel: options?.confirmLabel, destructive: options?.destructive });
   }, []);
@@ -419,6 +431,17 @@ const App: React.FC = () => {
       loadUserData();
     }
   }, [user, weekOffset]);
+
+  useEffect(() => {
+    if (!user) {
+      setOutlinerReminder(null);
+      return;
+    }
+
+    checkOutlinerReminders();
+    const timer = window.setInterval(checkOutlinerReminders, 30000);
+    return () => window.clearInterval(timer);
+  }, [user, checkOutlinerReminders]);
 
   useEffect(() => {
     if (!user) {
@@ -4521,6 +4544,47 @@ const App: React.FC = () => {
             await addHabitToTheme(themeId, name, targetPerWeek, frequency);
           }}
         />
+      )}
+
+      {outlinerReminder && user && (
+        <div className="outliner-reminder-notification" role="alert">
+          <div className="outliner-reminder-notification-eyebrow">Outliner reminder</div>
+          <strong>{outlinerReminder.text}</strong>
+          {outlinerReminder.path.length > 1 && (
+            <span>{outlinerReminder.path.slice(0, -1).join(" / ")}</span>
+          )}
+          <div className="outliner-reminder-notification-actions">
+            <button
+              type="button"
+              onClick={() => {
+                setShowPlanningOutliner(true);
+                setOutlinerReminder(null);
+              }}
+            >
+              Open outliner
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                snoozeOutlinerReminder(user.id, outlinerReminder.id, 60);
+                setOutlinerReminder(null);
+              }}
+            >
+              Later
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                dismissOutlinerReminder(user.id, outlinerReminder.id);
+                setOutlinerReminder(null);
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
       )}
     </>
   );
