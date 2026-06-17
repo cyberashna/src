@@ -37,6 +37,7 @@ import {
   dismissOutlinerReminder,
   getDueOutlinerReminder,
   snoozeOutlinerReminder,
+  type OutlineFrequency,
   type OutlinerReminder,
 } from "./services/planningOutliner";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
@@ -789,18 +790,18 @@ const App: React.FC = () => {
     targetPerWeek: number,
     frequency: "daily" | "weekly" | "monthly" | "none",
     habitGroupId?: string
-  ) => {
+  ): Promise<string | null> => {
     const trimmed = name.trim();
     if (!trimmed) {
       showToast("Enter a habit name.", "error");
-      return;
+      return null;
     }
     if (frequency !== "none" && (!targetPerWeek || targetPerWeek <= 0)) {
       showToast("Enter a valid target.", "error");
-      return;
+      return null;
     }
 
-    if (!user) return;
+    if (!user) return null;
 
     try {
       const habitData = await database.habits.create(
@@ -830,9 +831,11 @@ const App: React.FC = () => {
         )
       );
       showToast("Habit added", "success");
+      return habitData.id;
     } catch (error) {
       console.error("Error creating habit:", error);
       showToast("Failed to create habit", "error");
+      return null;
     }
   };
 
@@ -1220,6 +1223,62 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error creating theme:", error);
       showToast("Failed to create theme", "error");
+    }
+  };
+
+  const createThemeFromOutliner = async (
+    name: string,
+    outlinerHabits: Array<{ name: string; target: number; frequency: OutlineFrequency }>
+  ) => {
+    const trimmed = name.trim();
+    if (!trimmed || !user) return;
+
+    try {
+      const themeData = await database.themes.create(user.id, trimmed, "habit");
+      const createdHabits: Habit[] = [];
+
+      for (const habit of outlinerHabits) {
+        const habitName = habit.name.trim();
+        if (!habitName) continue;
+        const habitData = await database.habits.create(
+          user.id,
+          themeData.id,
+          habitName,
+          Math.max(1, habit.target || 1),
+          habit.frequency
+        );
+        createdHabits.push({
+          id: habitData.id,
+          name: habitData.name,
+          targetPerWeek: habitData.target_per_week,
+          doneCount: habitData.done_count,
+          frequency: habitData.frequency,
+          habitGroupId: habitData.habit_group_id ?? undefined,
+          parentHabitId: habitData.parent_habit_id ?? undefined,
+          subtasks: [],
+        });
+      }
+
+      const newTheme: Theme = {
+        id: themeData.id,
+        name: themeData.name,
+        themeType: "habit",
+        habits: createdHabits,
+        groups: [],
+        meals: [],
+      };
+
+      setThemes((prev) => [...prev, newTheme]);
+      setExpandedThemes((prev) => new Set([...prev, themeData.id]));
+      showToast(
+        createdHabits.length > 0
+          ? `Theme created with ${createdHabits.length} habit(s)`
+          : "Theme created",
+        "success"
+      );
+    } catch (error) {
+      console.error("Error creating theme from outliner:", error);
+      showToast("Failed to create theme from outliner", "error");
     }
   };
 
@@ -4541,7 +4600,18 @@ const App: React.FC = () => {
             if (id) showToast("Outliner row added to unscheduled", "success");
           }}
           onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
-            await addHabitToTheme(themeId, name, targetPerWeek, frequency);
+            return addHabitToTheme(themeId, name, targetPerWeek, frequency);
+          }}
+          onCreateHabitBlock={async (themeId, name, targetPerWeek, frequency) => {
+            const habitId = await addHabitToTheme(themeId, name, targetPerWeek, frequency);
+            const themeName = themes.find((theme) => theme.id === themeId)?.name;
+            if (habitId) {
+              const id = await createBlock(`Habit: ${name}`, true, habitId, themeName);
+              if (id) showToast("Habit added to unscheduled", "success");
+            }
+          }}
+          onCreateThemeFromRow={async (name, habits) => {
+            await createThemeFromOutliner(name, habits);
           }}
         />
       )}
