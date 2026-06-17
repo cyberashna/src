@@ -41,6 +41,7 @@ import {
   type OutlineLink,
   type OutlinerReminder,
 } from "./services/planningOutliner";
+import { loadThemeNotesPrefs, saveThemeGeneralNote } from "./services/themeNotes";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
 
 type HabitGroup = {
@@ -1358,7 +1359,7 @@ const App: React.FC = () => {
         existingTheme
           ? createdHabits.length > 0
             ? `Linked theme and added ${createdHabits.length} habit(s)`
-            : "Linked existing theme"
+            : "Linked existing theme instead of creating a duplicate"
           : createdHabits.length > 0
           ? `Theme created with ${createdHabits.length} habit(s)`
           : "Theme created",
@@ -1617,6 +1618,44 @@ const App: React.FC = () => {
     }
 
     return false;
+  };
+
+  const loadLinkedOutlinerNote = async (link: OutlineLink): Promise<{ content: string; updatedAt?: string }> => {
+    if (link.habitId) {
+      const note = await database.habitNotes.getByHabit(link.habitId);
+      return { content: note?.content ?? "", updatedAt: note?.updated_at };
+    }
+
+    if (link.themeId && user) {
+      const prefs = loadThemeNotesPrefs(user.id, link.themeId);
+      return { content: prefs.generalNote, updatedAt: prefs.generalUpdatedAt };
+    }
+
+    return { content: "" };
+  };
+
+  const saveLinkedOutlinerNote = async (
+    link: OutlineLink,
+    content: string
+  ): Promise<{ content: string; updatedAt?: string } | null> => {
+    if (!user) return null;
+
+    try {
+      if (link.habitId) {
+        const note = await database.habitNotes.upsert(user.id, link.habitId, content);
+        return { content: note.content, updatedAt: note.updated_at };
+      }
+
+      if (link.themeId) {
+        const prefs = saveThemeGeneralNote(user.id, link.themeId, content);
+        return { content: prefs.generalNote, updatedAt: prefs.generalUpdatedAt };
+      }
+    } catch (error) {
+      console.error("Error saving linked outliner note:", error);
+      showToast("Failed to save note", "error");
+    }
+
+    return null;
   };
 
   const createHabitBlockAtSlot = async (
@@ -4837,6 +4876,8 @@ const App: React.FC = () => {
           onAddBoardForLinkedHabit={addLinkedHabitToBoard}
           onOpenLinked={openLinkedOutlinerItem}
           onRenameLinked={renameLinkedOutlinerItem}
+          onLoadLinkedNote={loadLinkedOutlinerNote}
+          onSaveLinkedNote={saveLinkedOutlinerNote}
         />
       )}
 
