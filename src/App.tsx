@@ -38,6 +38,7 @@ import {
   getDueOutlinerReminder,
   snoozeOutlinerReminder,
   type OutlineFrequency,
+  type OutlineLink,
   type OutlinerReminder,
 } from "./services/planningOutliner";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
@@ -131,6 +132,7 @@ export type Block = {
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const normalizePlanningName = (s: string) => s.trim().toLowerCase();
 
 const createClientId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -361,8 +363,10 @@ const App: React.FC = () => {
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
     confirmLabel?: string;
+    cancelLabel?: string;
     destructive?: boolean;
     onConfirm: () => void;
+    onCancel?: () => void;
   } | null>(null);
 
   const [expandedThemes, setExpandedThemes] = useState<Set<string>>(new Set());
@@ -423,9 +427,30 @@ const App: React.FC = () => {
     setOutlinerReminder((current) => current ?? getDueOutlinerReminder(user.id));
   }, [user]);
 
-  const showConfirm = useCallback((message: string, onConfirm: () => void, options?: { confirmLabel?: string; destructive?: boolean }) => {
-    setConfirmDialog({ message, onConfirm, confirmLabel: options?.confirmLabel, destructive: options?.destructive });
+  const showConfirm = useCallback((message: string, onConfirm: () => void, options?: { confirmLabel?: string; cancelLabel?: string; destructive?: boolean }) => {
+    setConfirmDialog({ message, onConfirm, confirmLabel: options?.confirmLabel, cancelLabel: options?.cancelLabel, destructive: options?.destructive });
   }, []);
+
+  const askConfirm = useCallback(
+    (message: string, options?: { confirmLabel?: string; cancelLabel?: string; destructive?: boolean }) =>
+      new Promise<boolean>((resolve) => {
+        setConfirmDialog({
+          message,
+          confirmLabel: options?.confirmLabel,
+          cancelLabel: options?.cancelLabel,
+          destructive: options?.destructive,
+          onConfirm: () => {
+            setConfirmDialog(null);
+            resolve(true);
+          },
+          onCancel: () => {
+            setConfirmDialog(null);
+            resolve(false);
+          },
+        });
+      }),
+    []
+  );
 
   useEffect(() => {
     if (user) {
@@ -839,6 +864,31 @@ const App: React.FC = () => {
     }
   };
 
+  const findHabitInThemeByName = (themeId: string, name: string): Habit | null => {
+    const theme = themes.find((t) => t.id === themeId);
+    if (!theme) return null;
+    const normalized = normalizePlanningName(name);
+    return flattenHabits(theme.habits, theme.name, theme.id).find(
+      (habit) => normalizePlanningName(habit.name) === normalized
+    ) ?? null;
+  };
+
+  const createOrLinkOutlinerHabit = async (
+    themeId: string,
+    name: string,
+    targetPerWeek: number,
+    frequency: OutlineFrequency
+  ): Promise<{ habitId: string; themeId: string; linkedExisting?: boolean } | null> => {
+    const existing = findHabitInThemeByName(themeId, name);
+    if (existing) {
+      showToast("Linked existing habit", "info");
+      return { habitId: existing.id, themeId, linkedExisting: true };
+    }
+
+    const habitId = await addHabitToTheme(themeId, name, targetPerWeek, frequency);
+    return habitId ? { habitId, themeId } : null;
+  };
+
   const updateHabit = async (
     habitId: string,
     name: string,
@@ -1228,18 +1278,40 @@ const App: React.FC = () => {
 
   const createThemeFromOutliner = async (
     name: string,
-    outlinerHabits: Array<{ name: string; target: number; frequency: OutlineFrequency }>
-  ) => {
+    outlinerHabits: Array<{ nodeId: string; name: string; target: number; frequency: OutlineFrequency }>
+  ): Promise<{ themeId: string; linkedExisting?: boolean; habitLinks: Array<{ nodeId: string; habitId: string }> } | null> => {
     const trimmed = name.trim();
-    if (!trimmed || !user) return;
+    if (!trimmed || !user) return null;
 
     try {
-      const themeData = await database.themes.create(user.id, trimmed, "habit");
+      const existingTheme = themes.find(
+        (theme) => theme.themeType === "habit" && normalizePlanningName(theme.name) === normalizePlanningName(trimmed)
+      );
+      const themeData = existingTheme
+        ? {
+            id: existingTheme.id,
+            name: existingTheme.name,
+          }
+        : await database.themes.create(user.id, trimmed, "habit");
       const createdHabits: Habit[] = [];
+      const habitLinks: Array<{ nodeId: string; habitId: string }> = [];
+      const currentThemeHabits = existingTheme
+        ? flattenHabits(existingTheme.habits, existingTheme.name, existingTheme.id)
+        : [];
+      const knownHabitIdsByName = new Map(
+        currentThemeHabits.map((habit) => [normalizePlanningName(habit.name), habit.id])
+      );
 
       for (const habit of outlinerHabits) {
         const habitName = habit.name.trim();
         if (!habitName) continue;
+        const normalizedHabitName = normalizePlanningName(habitName);
+        const existingHabitId = knownHabitIdsByName.get(normalizedHabitName);
+        if (existingHabitId) {
+          habitLinks.push({ nodeId: habit.nodeId, habitId: existingHabitId });
+          continue;
+        }
+
         const habitData = await database.habits.create(
           user.id,
           themeData.id,
@@ -1257,28 +1329,46 @@ const App: React.FC = () => {
           parentHabitId: habitData.parent_habit_id ?? undefined,
           subtasks: [],
         });
+        habitLinks.push({ nodeId: habit.nodeId, habitId: habitData.id });
+        knownHabitIdsByName.set(normalizedHabitName, habitData.id);
       }
 
-      const newTheme: Theme = {
-        id: themeData.id,
-        name: themeData.name,
-        themeType: "habit",
-        habits: createdHabits,
-        groups: [],
-        meals: [],
-      };
+      if (existingTheme) {
+        setThemes((prev) =>
+          prev.map((theme) =>
+            theme.id === existingTheme.id
+              ? { ...theme, habits: [...theme.habits, ...createdHabits] }
+              : theme
+          )
+        );
+      } else {
+        const newTheme: Theme = {
+          id: themeData.id,
+          name: themeData.name,
+          themeType: "habit",
+          habits: createdHabits,
+          groups: [],
+          meals: [],
+        };
 
-      setThemes((prev) => [...prev, newTheme]);
+        setThemes((prev) => [...prev, newTheme]);
+      }
       setExpandedThemes((prev) => new Set([...prev, themeData.id]));
       showToast(
-        createdHabits.length > 0
+        existingTheme
+          ? createdHabits.length > 0
+            ? `Linked theme and added ${createdHabits.length} habit(s)`
+            : "Linked existing theme"
+          : createdHabits.length > 0
           ? `Theme created with ${createdHabits.length} habit(s)`
           : "Theme created",
         "success"
       );
+      return { themeId: themeData.id, linkedExisting: !!existingTheme, habitLinks };
     } catch (error) {
       console.error("Error creating theme from outliner:", error);
       showToast("Failed to create theme from outliner", "error");
+      return null;
     }
   };
 
@@ -1410,6 +1500,123 @@ const App: React.FC = () => {
       showToast("Failed to create block", "error");
       return null;
     }
+  };
+
+  const addLinkedHabitToBoard = async (
+    link: OutlineLink
+  ): Promise<{ habitId: string; themeId: string; blockId?: string; linkedExisting?: boolean } | null> => {
+    if (!link.habitId) return null;
+    const habit = allHabits.find((item) => item.id === link.habitId);
+    if (!habit) {
+      showToast("Linked habit was not found", "error");
+      return null;
+    }
+
+    const existingBlock = blocks.find((block) => block.habitId === habit.id);
+    if (existingBlock) {
+      showToast("That habit is already on the board", "info");
+      return {
+        habitId: habit.id,
+        themeId: link.themeId ?? habit.themeId,
+        blockId: existingBlock.id,
+        linkedExisting: true,
+      };
+    }
+
+    const blockId = await createBlock(`Habit: ${habit.name}`, true, habit.id, habit.themeName);
+    if (blockId) showToast("Habit added to unscheduled", "success");
+    return blockId
+      ? { habitId: habit.id, themeId: link.themeId ?? habit.themeId, blockId }
+      : null;
+  };
+
+  const scrollLinkedElementIntoView = (id: string) => {
+    window.setTimeout(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+  };
+
+  const openLinkedOutlinerItem = (link: OutlineLink) => {
+    if (link.blockId && blocks.some((block) => block.id === link.blockId)) {
+      setShowPlanningOutliner(false);
+      scrollLinkedElementIntoView(`block-${link.blockId}`);
+      return;
+    }
+
+    if (link.habitId) {
+      const habit = allHabits.find((item) => item.id === link.habitId);
+      if (!habit) {
+        showToast("Linked habit was not found", "error");
+        return;
+      }
+      setExpandedThemes((prev) => new Set([...prev, habit.themeId]));
+      setExpandedHabits((prev) => new Set([...prev, habit.id]));
+      setShowPlanningOutliner(false);
+      scrollLinkedElementIntoView(`habit-${habit.id}`);
+      return;
+    }
+
+    if (link.themeId) {
+      const theme = themes.find((item) => item.id === link.themeId);
+      if (!theme) {
+        showToast("Linked theme was not found", "error");
+        return;
+      }
+      setExpandedThemes((prev) => new Set([...prev, theme.id]));
+      setShowPlanningOutliner(false);
+      scrollLinkedElementIntoView(`theme-${theme.id}`);
+    }
+  };
+
+  const renameLinkedOutlinerItem = async (link: OutlineLink, nextName: string): Promise<boolean> => {
+    const trimmed = nextName.trim();
+    if (!trimmed) return false;
+    const label = link.habitId ? "habit" : "theme";
+    const shouldRename = await askConfirm(
+      `Rename the linked ${label} to "${trimmed}" too?`,
+      { confirmLabel: "Rename", cancelLabel: "Only row" }
+    );
+    if (!shouldRename) return false;
+
+    try {
+      if (link.habitId) {
+        await database.habits.update(link.habitId, { name: trimmed });
+        const affectedBlocks = blocks.filter((block) => block.habitId === link.habitId);
+        for (const block of affectedBlocks) {
+          await database.blocks.update(block.id, { label: `Habit: ${trimmed}` });
+        }
+        setThemes((prevThemes) =>
+          prevThemes.map((theme) => ({
+            ...theme,
+            habits: updateHabitInTree(theme.habits, link.habitId!, (habit) => ({
+              ...habit,
+              name: trimmed,
+            })),
+          }))
+        );
+        setBlocks((prevBlocks) =>
+          prevBlocks.map((block) =>
+            block.habitId === link.habitId ? { ...block, label: `Habit: ${trimmed}` } : block
+          )
+        );
+        showToast("Linked habit renamed", "success");
+        return true;
+      }
+
+      if (link.themeId) {
+        await database.themes.update(link.themeId, trimmed);
+        setThemes((prevThemes) =>
+          prevThemes.map((theme) => (theme.id === link.themeId ? { ...theme, name: trimmed } : theme))
+        );
+        showToast("Linked theme renamed", "success");
+        return true;
+      }
+    } catch (error) {
+      console.error("Error renaming linked outliner item:", error);
+      showToast(`Failed to rename linked ${label}`, "error");
+    }
+
+    return false;
   };
 
   const createHabitBlockAtSlot = async (
@@ -2980,6 +3187,7 @@ const App: React.FC = () => {
                     const isDraggingBlock = !!(dragBlockId || currentDragBlockId);
                     return (
                     <div
+                      id={`theme-${theme.id}`}
                       key={theme.id}
                       className={`theme-card${isDropTarget ? " theme-card-drop-target" : ""}`}
                     >
@@ -3150,7 +3358,7 @@ const App: React.FC = () => {
                           const renderHabitItem = (habit: Habit, showGroupBadge: boolean) => {
                             const isExpanded = expandedHabits.has(habit.id);
                             return (
-                              <div key={habit.id} className="habit-item">
+                              <div id={`habit-${habit.id}`} key={habit.id} className="habit-item">
                                 <button
                                   onClick={() => toggleHabitExpanded(habit.id)}
                                   style={{
@@ -4488,9 +4696,10 @@ const App: React.FC = () => {
         <ConfirmDialog
           message={confirmDialog.message}
           confirmLabel={confirmDialog.confirmLabel}
+          cancelLabel={confirmDialog.cancelLabel}
           destructive={confirmDialog.destructive}
           onConfirm={confirmDialog.onConfirm}
-          onCancel={() => setConfirmDialog(null)}
+          onCancel={confirmDialog.onCancel ?? (() => setConfirmDialog(null))}
         />
       )}
 
@@ -4593,26 +4802,41 @@ const App: React.FC = () => {
           userId={user.id}
           themes={themes
             .filter((theme) => theme.themeType === "habit")
-            .map((theme) => ({ id: theme.id, name: theme.name }))}
+            .map((theme) => ({
+              id: theme.id,
+              name: theme.name,
+              habits: flattenHabits(theme.habits, theme.name, theme.id).map((habit) => ({
+                id: habit.id,
+                name: habit.name,
+              })),
+            }))}
+          boardHabitIds={blocks
+            .map((block) => block.habitId)
+            .filter((habitId): habitId is string => !!habitId)}
           onClose={() => setShowPlanningOutliner(false)}
           onCreateBlock={async (label) => {
             const id = await createBlock(label);
             if (id) showToast("Outliner row added to unscheduled", "success");
           }}
           onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
-            return addHabitToTheme(themeId, name, targetPerWeek, frequency);
+            return createOrLinkOutlinerHabit(themeId, name, targetPerWeek, frequency);
           }}
           onCreateHabitBlock={async (themeId, name, targetPerWeek, frequency) => {
-            const habitId = await addHabitToTheme(themeId, name, targetPerWeek, frequency);
-            const themeName = themes.find((theme) => theme.id === themeId)?.name;
-            if (habitId) {
-              const id = await createBlock(`Habit: ${name}`, true, habitId, themeName);
-              if (id) showToast("Habit added to unscheduled", "success");
-            }
+            const result = await createOrLinkOutlinerHabit(themeId, name, targetPerWeek, frequency);
+            if (!result) return null;
+            const boardResult = await addLinkedHabitToBoard({
+              habitId: result.habitId,
+              themeId: result.themeId,
+              label: name,
+            });
+            return boardResult ? { ...result, blockId: boardResult.blockId } : result;
           }}
           onCreateThemeFromRow={async (name, habits) => {
-            await createThemeFromOutliner(name, habits);
+            return createThemeFromOutliner(name, habits);
           }}
+          onAddBoardForLinkedHabit={addLinkedHabitToBoard}
+          onOpenLinked={openLinkedOutlinerItem}
+          onRenameLinked={renameLinkedOutlinerItem}
         />
       )}
 

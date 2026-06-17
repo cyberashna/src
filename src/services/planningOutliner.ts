@@ -1,6 +1,14 @@
 export type OutlineTag = "note" | "task" | "habit";
 export type OutlineFrequency = "daily" | "weekly" | "monthly" | "none";
 
+export type OutlineLink = {
+  habitId?: string;
+  themeId?: string;
+  blockId?: string;
+  label: string;
+  renameDeclinedFor?: string | null;
+};
+
 export type OutlineNode = {
   id: string;
   text: string;
@@ -10,6 +18,7 @@ export type OutlineNode = {
   target: number;
   reminderAt: string | null;
   reminderDismissedAt: string | null;
+  linked: OutlineLink | null;
   children: OutlineNode[];
 };
 
@@ -34,6 +43,7 @@ export const createOutlineNode = (text = "New note"): OutlineNode => ({
   target: 1,
   reminderAt: null,
   reminderDismissedAt: null,
+  linked: null,
   children: [],
 });
 
@@ -56,6 +66,15 @@ export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode =>
   target: node.target ?? 1,
   reminderAt: node.reminderAt ?? null,
   reminderDismissedAt: node.reminderDismissedAt ?? null,
+  linked: node.linked
+    ? {
+        habitId: node.linked.habitId,
+        themeId: node.linked.themeId,
+        blockId: node.linked.blockId,
+        label: node.linked.label ?? node.text ?? "Untitled",
+        renameDeclinedFor: node.linked.renameDeclinedFor ?? null,
+      }
+    : null,
   children: Array.isArray(node.children) ? node.children.map(normalizeOutlineNode) : [],
 });
 

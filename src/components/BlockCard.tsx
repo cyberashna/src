@@ -206,6 +206,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   return (
     <div className={variant === "themed" ? "themed-block-wrapper" : undefined}>
       <div
+        id={`block-${block.id}`}
         className={blockClass}
         draggable
         onDragStart={(e) => onDragStart(block.id, e)}

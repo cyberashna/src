@@ -3933,6 +3933,7 @@ table.planner th.col-normal {
   gap: 5px;
   grid-template-areas:
     "collapse bullet input tag"
+    ". . links links"
     ". . actions actions";
   grid-template-columns: 16px 10px minmax(0, 1fr) auto;
   min-height: 30px;
@@ -4022,6 +4023,24 @@ table.planner th.col-normal {
   background: #ecfdf5;
   border-color: #bbf7d0;
   color: #15803d;
+}
+
+.outliner-link-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  grid-area: links;
+}
+
+.outliner-link-pills span {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  color: #166534;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 6px;
+  white-space: nowrap;
 }
 
 .outliner-habit-settings,
