@@ -4136,6 +4136,58 @@ table.planner th.col-normal {
   padding: 3px 8px;
 }
 
+.outliner-linked-note {
+  background: #fff;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 5px;
+  margin-right: 8px;
+  max-width: calc(100% - 52px);
+  padding: 7px;
+}
+
+.outliner-linked-note-header {
+  align-items: center;
+  color: #1d4ed8;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.outliner-linked-note-header span {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.outliner-linked-note-header em {
+  color: #64748b;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.outliner-linked-note textarea {
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  color: #1e293b;
+  font-size: 12px;
+  line-height: 1.4;
+  min-height: 88px;
+  padding: 7px;
+  resize: vertical;
+  width: 100%;
+}
+
+.outliner-linked-note textarea:focus {
+  border-color: #60a5fa;
+  outline: none;
+}
+
 .outliner-row-actions {
   display: flex;
   flex-shrink: 0;

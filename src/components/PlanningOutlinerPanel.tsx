@@ -29,6 +29,19 @@ type ThemeLinkResult = {
   habitLinks: Array<{ nodeId: string; habitId: string }>;
 };
 
+type LinkedNoteResult = {
+  content: string;
+  updatedAt?: string;
+};
+
+type LinkedNoteState = {
+  content: string;
+  loading: boolean;
+  saving: boolean;
+  saved: boolean;
+  updatedAt?: string;
+};
+
 type Props = {
   userId: string;
   onClose: () => void;
@@ -53,6 +66,8 @@ type Props = {
   onAddBoardForLinkedHabit: (link: OutlineLink) => Promise<HabitLinkResult | null>;
   onOpenLinked: (link: OutlineLink) => void;
   onRenameLinked: (link: OutlineLink, nextName: string) => Promise<boolean>;
+  onLoadLinkedNote: (link: OutlineLink) => Promise<LinkedNoteResult>;
+  onSaveLinkedNote: (link: OutlineLink, content: string) => Promise<LinkedNoteResult | null>;
   boardHabitIds: string[];
 };
 
@@ -139,6 +154,16 @@ function formatReminder(iso: string | null) {
   });
 }
 
+function formatNoteTimestamp(iso?: string) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export default function PlanningOutlinerPanel({
   userId,
   onClose,
@@ -150,6 +175,8 @@ export default function PlanningOutlinerPanel({
   onAddBoardForLinkedHabit,
   onOpenLinked,
   onRenameLinked,
+  onLoadLinkedNote,
+  onSaveLinkedNote,
   boardHabitIds,
 }: Props) {
   const [nodes, setNodes] = useState<OutlineNode[]>(() => loadPlanningOutliner(userId));
@@ -158,7 +185,10 @@ export default function PlanningOutlinerPanel({
   const [habitConvertNodeId, setHabitConvertNodeId] = useState<string | null>(null);
   const [reminderNodeId, setReminderNodeId] = useState<string | null>(null);
   const [reminderValue, setReminderValue] = useState("");
+  const [noteNodeId, setNoteNodeId] = useState<string | null>(null);
+  const [linkedNotes, setLinkedNotes] = useState<Record<string, LinkedNoteState>>({});
   const [selectedThemeId, setSelectedThemeId] = useState("");
+  const noteSaveTimers = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -170,6 +200,12 @@ export default function PlanningOutlinerPanel({
   useEffect(() => {
     savePlanningOutliner(userId, nodes);
   }, [nodes, userId]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(noteSaveTimers.current).forEach(clearTimeout);
+    };
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -377,6 +413,79 @@ export default function PlanningOutlinerPanel({
     setReminderNodeId(null);
   };
 
+  const openLinkedNote = async (node: OutlineNode) => {
+    if (!node.linked) return;
+    const willOpen = noteNodeId !== node.id;
+    setNoteNodeId(willOpen ? node.id : null);
+    if (!willOpen || linkedNotes[node.id]) return;
+
+    setLinkedNotes((prev) => ({
+      ...prev,
+      [node.id]: { content: "", loading: true, saving: false, saved: false },
+    }));
+
+    try {
+      const result = await onLoadLinkedNote(node.linked);
+      setLinkedNotes((prev) => ({
+        ...prev,
+        [node.id]: {
+          content: result.content,
+          loading: false,
+          saving: false,
+          saved: false,
+          updatedAt: result.updatedAt,
+        },
+      }));
+    } catch {
+      setLinkedNotes((prev) => ({
+        ...prev,
+        [node.id]: { content: "", loading: false, saving: false, saved: false },
+      }));
+    }
+  };
+
+  const saveLinkedNote = async (node: OutlineNode, content: string) => {
+    if (!node.linked) return;
+    setLinkedNotes((prev) => ({
+      ...prev,
+      [node.id]: { ...(prev[node.id] ?? { content: "" }), content, loading: false, saving: true, saved: false },
+    }));
+
+    const result = await onSaveLinkedNote(node.linked, content);
+    setLinkedNotes((prev) => ({
+      ...prev,
+      [node.id]: {
+        ...(prev[node.id] ?? { content }),
+        content,
+        loading: false,
+        saving: false,
+        saved: !!result,
+        updatedAt: result?.updatedAt ?? prev[node.id]?.updatedAt,
+      },
+    }));
+    window.setTimeout(() => {
+      setLinkedNotes((prev) => ({
+        ...prev,
+        [node.id]: prev[node.id] ? { ...prev[node.id], saved: false } : prev[node.id],
+      }));
+    }, 1800);
+  };
+
+  const updateLinkedNote = (node: OutlineNode, content: string) => {
+    setLinkedNotes((prev) => ({
+      ...prev,
+      [node.id]: {
+        ...(prev[node.id] ?? { loading: false, saving: false, saved: false }),
+        content,
+      },
+    }));
+
+    if (noteSaveTimers.current[node.id]) clearTimeout(noteSaveTimers.current[node.id]);
+    noteSaveTimers.current[node.id] = window.setTimeout(() => {
+      saveLinkedNote(node, content);
+    }, 800);
+  };
+
   const renderRows = (items: OutlineNode[], depth = 0): JSX.Element[] =>
     items.map((node, index) => {
       const hasChildren = node.children.length > 0;
@@ -442,13 +551,22 @@ export default function PlanningOutlinerPanel({
             )}
             <div className="outliner-row-actions">
               {node.linked && (
-                <button
-                  type="button"
-                  onClick={() => onOpenLinked(node.linked!)}
-                  title="Open the linked habit or theme"
-                >
-                  Open
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onOpenLinked(node.linked!)}
+                    title="Open the linked habit or theme"
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openLinkedNote(node)}
+                    title="Write in the same note shown in Habit Notes"
+                  >
+                    Notes
+                  </button>
+                </>
               )}
               {isHabitLinked && !isOnBoard && (
                 <button
@@ -548,6 +666,29 @@ export default function PlanningOutlinerPanel({
                   Clear
                 </button>
               )}
+            </div>
+          )}
+          {noteNodeId === node.id && node.linked && (
+            <div className="outliner-linked-note" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <div className="outliner-linked-note-header">
+                <span>{node.linked.habitId ? "Habit note" : "Theme note"}</span>
+                {linkedNotes[node.id]?.loading && <em>Loading...</em>}
+                {linkedNotes[node.id]?.saving && <em>Saving...</em>}
+                {linkedNotes[node.id]?.saved && <em>Saved</em>}
+                {linkedNotes[node.id]?.updatedAt && !linkedNotes[node.id]?.saving && (
+                  <em>Edited {formatNoteTimestamp(linkedNotes[node.id]?.updatedAt)}</em>
+                )}
+              </div>
+              <textarea
+                value={linkedNotes[node.id]?.content ?? ""}
+                onChange={(event) => updateLinkedNote(node, event.target.value)}
+                placeholder={
+                  node.linked.habitId
+                    ? "Write notes for this habit..."
+                    : "Write notes for this theme..."
+                }
+                rows={4}
+              />
             </div>
           )}
           {node.tag === "habit" && (

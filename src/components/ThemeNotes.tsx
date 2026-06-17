@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { database } from "../services/database";
 import type { WorkoutHistoryEntry } from "../services/database";
 import { addRoutineItem, loadRoutineNotes, type RoutineTab } from "../services/routineNotes";
+import {
+  createThemeNotesPrefsKey,
+  defaultThemeNotesPrefs,
+  loadThemeNotesPrefs,
+  saveThemeNotesPrefs,
+  type ThemeNotesPrefs,
+} from "../services/themeNotes";
 import type { Block } from "../App";
 
 type HabitGroup = {
@@ -42,20 +49,6 @@ type NoteState = {
   updatedAt?: string;
 };
 
-type PinnedInsight = {
-  id: string;
-  text: string;
-  source: string;
-  createdAt: string;
-};
-
-type ThemeNotesPrefs = {
-  generalNote: string;
-  generalUpdatedAt?: string;
-  pinnedInsights: PinnedInsight[];
-  hiddenBlockNoteIds: string[];
-};
-
 type MarkdownCommand = "heading" | "bold" | "italic" | "bullet" | "check";
 type ThemeNotesTab = "all" | "theme" | "habits" | "blocks" | "pinned";
 type NoteActionItem = {
@@ -63,9 +56,6 @@ type NoteActionItem = {
   onClick: () => void;
   destructive?: boolean;
 };
-
-const createThemeNotesPrefsKey = (userId: string, themeId: string) =>
-  `theme-notes:${userId}:${themeId}`;
 
 const getActionLabel = (text: string) =>
   text
@@ -384,12 +374,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   const [routineTabs, setRoutineTabs] = useState<RoutineTab[]>([]);
   const [selectedRoutineId, setSelectedRoutineId] = useState("");
   const [routineStatus, setRoutineStatus] = useState("");
-  const [themePrefs, setThemePrefs] = useState<ThemeNotesPrefs>({
-    generalNote: "",
-    generalUpdatedAt: undefined,
-    pinnedInsights: [],
-    hiddenBlockNoteIds: [],
-  });
+  const [themePrefs, setThemePrefs] = useState<ThemeNotesPrefs>(() => defaultThemeNotesPrefs());
   const debounceTimers = useRef<Record<string, number>>({});
   const themeNoteTimer = useRef<number | null>(null);
   const themeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -426,10 +411,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   useEffect(() => {
     const load = async () => {
       try {
-        const savedPrefs = window.localStorage.getItem(prefsKey);
-        if (savedPrefs) {
-          setThemePrefs(JSON.parse(savedPrefs) as ThemeNotesPrefs);
-        }
+        setThemePrefs(loadThemeNotesPrefs(userId, themeId));
 
         const habitIds = allHabits.map((h) => h.id);
         const notesData = await database.habitNotes.getByHabitIds(habitIds);
@@ -477,8 +459,8 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
 
   const saveThemePrefs = useCallback((nextPrefs: ThemeNotesPrefs) => {
     setThemePrefs(nextPrefs);
-    window.localStorage.setItem(prefsKey, JSON.stringify(nextPrefs));
-  }, [prefsKey]);
+    saveThemeNotesPrefs(userId, themeId, nextPrefs);
+  }, [themeId, userId]);
 
   const updateGeneralNote = (content: string) => {
     const nextPrefs = { ...themePrefs, generalNote: content, generalUpdatedAt: new Date().toISOString() };
@@ -486,7 +468,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
 
     if (themeNoteTimer.current) clearTimeout(themeNoteTimer.current);
     themeNoteTimer.current = window.setTimeout(() => {
-      window.localStorage.setItem(prefsKey, JSON.stringify(nextPrefs));
+      saveThemeNotesPrefs(userId, themeId, nextPrefs);
     }, 600);
   };
 
