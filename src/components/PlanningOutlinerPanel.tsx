@@ -383,6 +383,7 @@ export default function PlanningOutlinerPanel({
       const isHabitLinked = !!node.linked?.habitId;
       const isThemeLinked = !!node.linked?.themeId && !node.linked?.habitId;
       const isOnBoard = !!node.linked?.habitId && boardHabitIdSet.has(node.linked.habitId);
+      const canMakeTheme = !node.linked && !!node.text.trim();
       return (
         <div key={node.id} className="outliner-row-wrap">
           <div className="outliner-row" style={{ paddingLeft: `${depth * 18 + 8}px` }}>
@@ -481,13 +482,13 @@ export default function PlanningOutlinerPanel({
                   </button>
                 </>
               )}
-              {node.children.some((child) => child.tag === "habit") && (
+              {canMakeTheme && (
                 <button
                   type="button"
                   onClick={() => convertToTheme(node)}
-                  title="Create a theme from this row and add its direct habit children"
+                  title="Create or link a theme from this row. Direct habit children come along."
                 >
-                  To theme
+                  Make theme
                 </button>
               )}
               <button type="button" onClick={() => openReminderPanel(node)}>
