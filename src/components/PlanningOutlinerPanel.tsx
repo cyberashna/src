@@ -24,6 +24,16 @@ type Props = {
     name: string,
     targetPerWeek: number,
     frequency: OutlineFrequency
+  ) => Promise<string | null>;
+  onCreateHabitBlock: (
+    themeId: string,
+    name: string,
+    targetPerWeek: number,
+    frequency: OutlineFrequency
+  ) => Promise<void>;
+  onCreateThemeFromRow: (
+    name: string,
+    habits: Array<{ name: string; target: number; frequency: OutlineFrequency }>
   ) => Promise<void>;
 };
 
@@ -116,6 +126,8 @@ export default function PlanningOutlinerPanel({
   themes,
   onCreateBlock,
   onCreateHabit,
+  onCreateHabitBlock,
+  onCreateThemeFromRow,
 }: Props) {
   const [nodes, setNodes] = useState<OutlineNode[]>(() => loadPlanningOutliner(userId));
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
@@ -226,6 +238,26 @@ export default function PlanningOutlinerPanel({
     setHabitConvertNodeId(null);
   };
 
+  const convertToHabitBlock = async (node: OutlineNode) => {
+    const label = node.text.trim();
+    if (!label || !selectedTheme) return;
+    await onCreateHabitBlock(selectedTheme.id, label, node.target, node.frequency);
+    setHabitConvertNodeId(null);
+  };
+
+  const convertToTheme = async (node: OutlineNode) => {
+    const label = node.text.trim();
+    if (!label) return;
+    const directHabits = node.children
+      .filter((child) => child.tag === "habit" && child.text.trim())
+      .map((child) => ({
+        name: child.text.trim(),
+        target: child.target,
+        frequency: child.frequency,
+      }));
+    await onCreateThemeFromRow(label, directHabits);
+  };
+
   const openReminderPanel = (node: OutlineNode) => {
     setReminderNodeId((current) => current === node.id ? null : node.id);
     setReminderValue(toLocalDatetimeValue(node.reminderAt));
@@ -251,7 +283,6 @@ export default function PlanningOutlinerPanel({
   const renderRows = (items: OutlineNode[], depth = 0): JSX.Element[] =>
     items.map((node, index) => {
       const hasChildren = node.children.length > 0;
-      const isTagged = node.tag === "task" || node.tag === "habit";
       return (
         <div key={node.id} className="outliner-row-wrap">
           <div className="outliner-row" style={{ paddingLeft: `${depth * 18 + 8}px` }}>
@@ -301,26 +332,37 @@ export default function PlanningOutlinerPanel({
               <option value="habit">Habit</option>
             </select>
             <div className="outliner-row-actions">
-              {isTagged && (
+              {node.tag === "task" && (
+                <button
+                  type="button"
+                  onClick={() => convertToBlock(node)}
+                  title="Turn this task row into an unscheduled block"
+                >
+                  To block
+                </button>
+              )}
+              {node.tag === "habit" && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => convertToBlock(node)}
-                    title="Turn this tagged row into an unscheduled block"
-                  >
-                    To block
-                  </button>
                   <button
                     type="button"
                     onClick={() => {
                       setHabitConvertNodeId((current) => current === node.id ? null : node.id);
                       setSelectedThemeId((current) => current || themes[0]?.id || "");
                     }}
-                    title="Turn this tagged row into a habit"
+                    title="Turn this habit row into a real habit or habit block"
                   >
-                    To habit
+                    Make real
                   </button>
                 </>
+              )}
+              {node.children.some((child) => child.tag === "habit") && (
+                <button
+                  type="button"
+                  onClick={() => convertToTheme(node)}
+                  title="Create a theme from this row and add its direct habit children"
+                >
+                  To theme
+                </button>
               )}
               <button type="button" onClick={() => openReminderPanel(node)}>
                 Remind
@@ -427,6 +469,9 @@ export default function PlanningOutlinerPanel({
                   </select>
                   <button type="button" onClick={() => convertToHabit(node)}>
                     Create habit
+                  </button>
+                  <button type="button" onClick={() => convertToHabitBlock(node)}>
+                    Habit + board
                   </button>
                 </>
               )}
