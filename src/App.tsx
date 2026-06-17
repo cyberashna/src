@@ -1358,7 +1358,7 @@ const App: React.FC = () => {
         existingTheme
           ? createdHabits.length > 0
             ? `Linked theme and added ${createdHabits.length} habit(s)`
-            : "Linked existing theme"
+            : "Linked existing theme instead of creating a duplicate"
           : createdHabits.length > 0
           ? `Theme created with ${createdHabits.length} habit(s)`
           : "Theme created",
