@@ -493,6 +493,7 @@ export default function PlanningOutlinerPanel({
       const isThemeLinked = !!node.linked?.themeId && !node.linked?.habitId;
       const isOnBoard = !!node.linked?.habitId && boardHabitIdSet.has(node.linked.habitId);
       const canMakeTheme = !node.linked && !!node.text.trim();
+      const isDoneTask = node.tag === "task" && node.taskDone;
       return (
         <div key={node.id} className="outliner-row-wrap">
           <div className="outliner-row" style={{ paddingLeft: `${depth * 18 + 8}px` }}>
@@ -514,11 +515,24 @@ export default function PlanningOutlinerPanel({
               title="Focus this row"
               aria-label="Focus this row"
             />
+            {node.tag === "task" ? (
+              <button
+                type="button"
+                className={`outliner-task-check ${node.taskDone ? "outliner-task-check--done" : ""}`}
+                onClick={() => updateRow(node.id, { taskDone: !node.taskDone })}
+                title={node.taskDone ? "Mark task not done" : "Mark task done"}
+                aria-label={node.taskDone ? "Mark task not done" : "Mark task done"}
+              >
+                {node.taskDone ? "✓" : ""}
+              </button>
+            ) : (
+              <span className="outliner-task-check-placeholder" />
+            )}
             <input
               ref={(element) => {
                 inputRefs.current[node.id] = element;
               }}
-              className="outliner-input"
+              className={`outliner-input ${isDoneTask ? "outliner-input--done" : ""}`}
               value={node.text}
               onChange={(event) => updateRow(node.id, { text: event.target.value })}
               onBlur={() => maybeSyncLinkedRename(node)}

@@ -14,6 +14,7 @@ export type OutlineNode = {
   text: string;
   collapsed: boolean;
   tag: OutlineTag;
+  taskDone: boolean;
   frequency: OutlineFrequency;
   target: number;
   reminderAt: string | null;
@@ -39,6 +40,7 @@ export const createOutlineNode = (text = "New note"): OutlineNode => ({
   text,
   collapsed: false,
   tag: "note",
+  taskDone: false,
   frequency: "weekly",
   target: 1,
   reminderAt: null,
@@ -62,6 +64,7 @@ export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode =>
   text: node.text ?? "New note",
   collapsed: node.collapsed ?? false,
   tag: node.tag ?? "note",
+  taskDone: node.taskDone ?? false,
   frequency: node.frequency ?? "weekly",
   target: node.target ?? 1,
   reminderAt: node.reminderAt ?? null,
