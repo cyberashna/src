@@ -493,6 +493,7 @@ export default function PlanningOutlinerPanel({
       const isThemeLinked = !!node.linked?.themeId && !node.linked?.habitId;
       const isOnBoard = !!node.linked?.habitId && boardHabitIdSet.has(node.linked.habitId);
       const canMakeTheme = !node.linked && !!node.text.trim();
+      const isDoneTask = node.tag === "task" && node.taskDone;
       return (
         <div key={node.id} className="outliner-row-wrap">
           <div className="outliner-row" style={{ paddingLeft: `${depth * 18 + 8}px` }}>
@@ -514,11 +515,24 @@ export default function PlanningOutlinerPanel({
               title="Focus this row"
               aria-label="Focus this row"
             />
+            {node.tag === "task" ? (
+              <button
+                type="button"
+                className={`outliner-task-check ${node.taskDone ? "outliner-task-check--done" : ""}`}
+                onClick={() => updateRow(node.id, { taskDone: !node.taskDone })}
+                title={node.taskDone ? "Mark task not done" : "Mark task done"}
+                aria-label={node.taskDone ? "Mark task not done" : "Mark task done"}
+              >
+                {node.taskDone ? "✓" : ""}
+              </button>
+            ) : (
+              <span className="outliner-task-check-placeholder" />
+            )}
             <input
               ref={(element) => {
                 inputRefs.current[node.id] = element;
               }}
-              className="outliner-input"
+              className={`outliner-input ${isDoneTask ? "outliner-input--done" : ""}`}
               value={node.text}
               onChange={(event) => updateRow(node.id, { text: event.target.value })}
               onBlur={() => maybeSyncLinkedRename(node)}
@@ -670,25 +684,28 @@ export default function PlanningOutlinerPanel({
           )}
           {noteNodeId === node.id && node.linked && (
             <div className="outliner-linked-note" style={{ marginLeft: `${depth * 18 + 44}px` }}>
-              <div className="outliner-linked-note-header">
-                <span>{node.linked.habitId ? "Habit note" : "Theme note"}</span>
-                {linkedNotes[node.id]?.loading && <em>Loading...</em>}
-                {linkedNotes[node.id]?.saving && <em>Saving...</em>}
-                {linkedNotes[node.id]?.saved && <em>Saved</em>}
-                {linkedNotes[node.id]?.updatedAt && !linkedNotes[node.id]?.saving && (
-                  <em>Edited {formatNoteTimestamp(linkedNotes[node.id]?.updatedAt)}</em>
-                )}
+              <span className="outliner-linked-note-dot" aria-hidden="true" />
+              <div className="outliner-linked-note-content">
+                <div className="outliner-linked-note-header">
+                  <span>{node.linked.habitId ? "Habit note" : "Theme note"}</span>
+                  {linkedNotes[node.id]?.loading && <em>Loading...</em>}
+                  {linkedNotes[node.id]?.saving && <em>Saving...</em>}
+                  {linkedNotes[node.id]?.saved && <em>Saved</em>}
+                  {linkedNotes[node.id]?.updatedAt && !linkedNotes[node.id]?.saving && (
+                    <em>Edited {formatNoteTimestamp(linkedNotes[node.id]?.updatedAt)}</em>
+                  )}
+                </div>
+                <textarea
+                  value={linkedNotes[node.id]?.content ?? ""}
+                  onChange={(event) => updateLinkedNote(node, event.target.value)}
+                  placeholder={
+                    node.linked.habitId
+                      ? "Write notes for this habit..."
+                      : "Write notes for this theme..."
+                  }
+                  rows={3}
+                />
               </div>
-              <textarea
-                value={linkedNotes[node.id]?.content ?? ""}
-                onChange={(event) => updateLinkedNote(node, event.target.value)}
-                placeholder={
-                  node.linked.habitId
-                    ? "Write notes for this habit..."
-                    : "Write notes for this theme..."
-                }
-                rows={4}
-              />
             </div>
           )}
           {node.tag === "habit" && (
