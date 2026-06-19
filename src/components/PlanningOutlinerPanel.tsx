@@ -670,25 +670,28 @@ export default function PlanningOutlinerPanel({
           )}
           {noteNodeId === node.id && node.linked && (
             <div className="outliner-linked-note" style={{ marginLeft: `${depth * 18 + 44}px` }}>
-              <div className="outliner-linked-note-header">
-                <span>{node.linked.habitId ? "Habit note" : "Theme note"}</span>
-                {linkedNotes[node.id]?.loading && <em>Loading...</em>}
-                {linkedNotes[node.id]?.saving && <em>Saving...</em>}
-                {linkedNotes[node.id]?.saved && <em>Saved</em>}
-                {linkedNotes[node.id]?.updatedAt && !linkedNotes[node.id]?.saving && (
-                  <em>Edited {formatNoteTimestamp(linkedNotes[node.id]?.updatedAt)}</em>
-                )}
+              <span className="outliner-linked-note-dot" aria-hidden="true" />
+              <div className="outliner-linked-note-content">
+                <div className="outliner-linked-note-header">
+                  <span>{node.linked.habitId ? "Habit note" : "Theme note"}</span>
+                  {linkedNotes[node.id]?.loading && <em>Loading...</em>}
+                  {linkedNotes[node.id]?.saving && <em>Saving...</em>}
+                  {linkedNotes[node.id]?.saved && <em>Saved</em>}
+                  {linkedNotes[node.id]?.updatedAt && !linkedNotes[node.id]?.saving && (
+                    <em>Edited {formatNoteTimestamp(linkedNotes[node.id]?.updatedAt)}</em>
+                  )}
+                </div>
+                <textarea
+                  value={linkedNotes[node.id]?.content ?? ""}
+                  onChange={(event) => updateLinkedNote(node, event.target.value)}
+                  placeholder={
+                    node.linked.habitId
+                      ? "Write notes for this habit..."
+                      : "Write notes for this theme..."
+                  }
+                  rows={3}
+                />
               </div>
-              <textarea
-                value={linkedNotes[node.id]?.content ?? ""}
-                onChange={(event) => updateLinkedNote(node, event.target.value)}
-                placeholder={
-                  node.linked.habitId
-                    ? "Write notes for this habit..."
-                    : "Write notes for this theme..."
-                }
-                rows={4}
-              />
             </div>
           )}
           {node.tag === "habit" && (
