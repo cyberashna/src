@@ -34,6 +34,7 @@ import BlockCard from "./components/BlockCard";
 import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
 import {
+  addHabitToPlanningOutliner,
   dismissOutlinerReminder,
   getDueOutlinerReminder,
   snoozeOutlinerReminder,
@@ -1656,6 +1657,25 @@ const App: React.FC = () => {
     }
 
     return null;
+  };
+
+  const addHabitViewToOutliner = (habit: Habit, theme: Theme) => {
+    if (!user) return;
+
+    const result = addHabitToPlanningOutliner(user.id, {
+      habitId: habit.id,
+      habitName: habit.name,
+      themeId: theme.id,
+      themeName: theme.name,
+      frequency: habit.frequency,
+      target: habit.targetPerWeek,
+    });
+
+    setShowPlanningOutliner(true);
+    showToast(
+      result.existing ? "That habit is already in Planning Outliner" : "Habit added to Planning Outliner",
+      result.existing ? "info" : "success"
+    );
   };
 
   const createHabitBlockAtSlot = async (
@@ -3656,6 +3676,14 @@ const App: React.FC = () => {
                                       <button
                                         style={{ fontSize: 12 }}
                                         className="secondary"
+                                        onClick={() => addHabitViewToOutliner(habit, theme)}
+                                        title="Add this habit to Planning Outliner"
+                                      >
+                                        Plan
+                                      </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
                                         onClick={() => startEditingHabit(habit)}
                                       >
                                         Edit
@@ -3721,6 +3749,13 @@ const App: React.FC = () => {
                                                     title="Mark done"
                                                   >
                                                     Done
+                                                  </button>
+                                                  <button
+                                                    className="subtask-add-btn"
+                                                    onClick={() => addHabitViewToOutliner(subtask, theme)}
+                                                    title="Add this subtask to Planning Outliner"
+                                                  >
+                                                    Plan
                                                   </button>
                                                   {depth < 1 && (
                                                   <button
