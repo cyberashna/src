@@ -20,6 +20,8 @@ export type OutlineNode = {
   reminderAt: string | null;
   reminderDismissedAt: string | null;
   linked: OutlineLink | null;
+  draftNote: string;
+  draftNoteUpdatedAt: string | null;
   children: OutlineNode[];
 };
 
@@ -46,6 +48,8 @@ export const createOutlineNode = (text = "New note"): OutlineNode => ({
   reminderAt: null,
   reminderDismissedAt: null,
   linked: null,
+  draftNote: "",
+  draftNoteUpdatedAt: null,
   children: [],
 });
 
@@ -78,6 +82,8 @@ export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode =>
         renameDeclinedFor: node.linked.renameDeclinedFor ?? null,
       }
     : null,
+  draftNote: node.draftNote ?? "",
+  draftNoteUpdatedAt: node.draftNoteUpdatedAt ?? null,
   children: Array.isArray(node.children) ? node.children.map(normalizeOutlineNode) : [],
 });
 

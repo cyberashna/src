@@ -3932,10 +3932,10 @@ table.planner th.col-normal {
   display: grid;
   gap: 5px;
   grid-template-areas:
-    "collapse check input tag"
-    ". . links links"
-    ". . actions actions";
-  grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+    "drag collapse check input tag"
+    ". . . links links"
+    ". . . actions actions";
+  grid-template-columns: 14px 16px 16px minmax(0, 1fr) auto;
   min-height: 30px;
   padding-bottom: 3px;
   padding-right: 5px;
@@ -3944,6 +3944,35 @@ table.planner th.col-normal {
 
 .outliner-row:hover {
   background: #f8fafc;
+}
+
+.outliner-row--drag-over {
+  background: #eff6ff;
+  box-shadow: inset 3px 0 0 #60a5fa;
+}
+
+.outliner-drag-handle {
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: grab;
+  display: flex;
+  font-size: 11px;
+  font-weight: 900;
+  grid-area: drag;
+  height: 18px;
+  justify-content: center;
+  padding: 0;
+  width: 14px;
+}
+
+.outliner-drag-handle:active {
+  cursor: grabbing;
+}
+
+.outliner-drag-handle:hover {
+  color: #334155;
 }
 
 .outliner-collapse {
@@ -4236,6 +4265,48 @@ table.planner th.col-normal {
 .outliner-linked-note textarea:focus {
   border-left-color: #60a5fa;
   outline: none;
+}
+
+.outliner-note-attach {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.outliner-note-attach span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.outliner-note-attach select {
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  color: #334155;
+  flex: 1;
+  font-size: 11px;
+  min-width: 150px;
+  padding: 3px 6px;
+}
+
+.outliner-note-attach button {
+  background: #334155;
+  border: none;
+  border-radius: 5px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.outliner-note-attach button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .outliner-row-actions {
