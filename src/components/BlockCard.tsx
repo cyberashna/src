@@ -1,5 +1,12 @@
 import React, { useState, useRef, useEffect } from "react";
-import type { Block, ExerciseLibraryItem, WorkoutBlockExercise, WorkoutData } from "../App";
+import type {
+  Block,
+  ExerciseLibraryItem,
+  WorkoutBlockExercise,
+  WorkoutData,
+  WorkoutExerciseHistoryEntry,
+  WorkoutRoutine,
+} from "../App";
 import type { BlockTask } from "../services/database";
 import PriorityBadge from "./PriorityBadge";
 import BlockCreditPopover from "./BlockCreditPopover";
@@ -52,6 +59,8 @@ type BlockCardProps = {
   onSubmitWorkout?: (blockId: string) => void;
   exerciseLibrary?: ExerciseLibraryItem[];
   blockExercises?: WorkoutBlockExercise[];
+  exerciseHistory?: Record<string, WorkoutExerciseHistoryEntry[]>;
+  workoutRoutines?: WorkoutRoutine[];
   onAddExerciseToBlock?: (blockId: string, exerciseName: string) => void;
   onUpdateBlockExercise?: (
     blockId: string,
@@ -59,6 +68,8 @@ type BlockCardProps = {
     updates: Partial<WorkoutBlockExercise>
   ) => void;
   onDeleteBlockExercise?: (blockId: string, rowId: string) => void;
+  onLoadWorkoutRoutine?: (blockId: string, routineId: string) => void;
+  onSaveWorkoutRoutine?: (blockId: string, name: string) => void;
 
   // notes + tasks
   onSaveBlockNote?: (blockId: string, content: string) => void;
@@ -110,9 +121,13 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onSubmitWorkout,
   exerciseLibrary = [],
   blockExercises = [],
+  exerciseHistory = {},
+  workoutRoutines = [],
   onAddExerciseToBlock,
   onUpdateBlockExercise,
   onDeleteBlockExercise,
+  onLoadWorkoutRoutine,
+  onSaveWorkoutRoutine,
   onSaveBlockNote,
   onAddBlockTask,
   onToggleBlockTask,
@@ -561,9 +576,15 @@ export const BlockCard: React.FC<BlockCardProps> = ({
                     blockLabel={block.label}
                     exerciseLibrary={exerciseLibrary}
                     blockExercises={blockExercises}
+                    exerciseHistory={exerciseHistory}
+                    workoutRoutines={workoutRoutines}
+                    workoutSubmitted={block.workoutSubmitted}
                     onAddExercise={onAddExerciseToBlock}
                     onUpdateExercise={onUpdateBlockExercise}
                     onDeleteExercise={onDeleteBlockExercise}
+                    onLoadRoutine={onLoadWorkoutRoutine}
+                    onSaveRoutine={onSaveWorkoutRoutine}
+                    onSubmitWorkout={onSubmitWorkout}
                   />
                 </div>
               )}
