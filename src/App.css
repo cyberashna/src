@@ -3932,10 +3932,10 @@ table.planner th.col-normal {
   display: grid;
   gap: 5px;
   grid-template-areas:
-    "collapse bullet check input tag"
-    ". . . links links"
-    ". . . actions actions";
-  grid-template-columns: 16px 10px 16px minmax(0, 1fr) auto;
+    "collapse check input tag"
+    ". . links links"
+    ". . actions actions";
+  grid-template-columns: 16px 16px minmax(0, 1fr) auto;
   min-height: 30px;
   padding-bottom: 3px;
   padding-right: 5px;
@@ -3972,8 +3972,9 @@ table.planner th.col-normal {
   border-radius: 999px;
   cursor: pointer;
   flex-shrink: 0;
-  grid-area: bullet;
+  grid-area: check;
   height: 10px;
+  justify-self: center;
   padding: 0;
   width: 10px;
 }

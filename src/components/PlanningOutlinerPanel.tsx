@@ -508,13 +508,6 @@ export default function PlanningOutlinerPanel({
             >
               {hasChildren ? (node.collapsed ? ">" : "v") : ""}
             </button>
-            <button
-              type="button"
-              className="outliner-bullet"
-              onClick={() => setFocusNodeId(node.id)}
-              title="Focus this row"
-              aria-label="Focus this row"
-            />
             {node.tag === "task" ? (
               <button
                 type="button"
@@ -525,6 +518,14 @@ export default function PlanningOutlinerPanel({
               >
                 {node.taskDone ? "✓" : ""}
               </button>
+            ) : node.tag === "habit" ? (
+              <button
+                type="button"
+                className="outliner-bullet"
+                onClick={() => setFocusNodeId(node.id)}
+                title="Focus this row"
+                aria-label="Focus this row"
+              />
             ) : (
               <span className="outliner-task-check-placeholder" />
             )}
