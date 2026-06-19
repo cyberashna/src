@@ -32,6 +32,22 @@ export type OutlinerReminder = {
   path: string[];
 };
 
+export type AddHabitToOutlinerInput = {
+  habitId: string;
+  habitName: string;
+  themeId: string;
+  themeName: string;
+  frequency: OutlineFrequency;
+  target: number;
+};
+
+export type AddHabitToOutlinerResult = {
+  added: boolean;
+  existing: boolean;
+  nodeId: string;
+  nodes: OutlineNode[];
+};
+
 const storageKey = (userId: string) => `planning-outliner:${userId}`;
 
 export const createOutlineId = (prefix: string) =>
@@ -103,6 +119,86 @@ export const loadPlanningOutliner = (userId: string, seedDefault = true): Outlin
 
 export const savePlanningOutliner = (userId: string, nodes: OutlineNode[]) => {
   localStorage.setItem(storageKey(userId), JSON.stringify(nodes));
+};
+
+const findNodeByLinkedHabit = (nodes: OutlineNode[], habitId: string): OutlineNode | null => {
+  for (const node of nodes) {
+    if (node.linked?.habitId === habitId) return node;
+    const child = findNodeByLinkedHabit(node.children, habitId);
+    if (child) return child;
+  }
+
+  return null;
+};
+
+const findNodeByLinkedTheme = (nodes: OutlineNode[], themeId: string): OutlineNode | null => {
+  for (const node of nodes) {
+    if (node.linked?.themeId === themeId && !node.linked.habitId) return node;
+    const child = findNodeByLinkedTheme(node.children, themeId);
+    if (child) return child;
+  }
+
+  return null;
+};
+
+const appendChildToNode = (nodes: OutlineNode[], parentId: string, child: OutlineNode): OutlineNode[] =>
+  nodes.map((node) => {
+    if (node.id === parentId) return { ...node, collapsed: false, children: [...node.children, child] };
+    return { ...node, children: appendChildToNode(node.children, parentId, child) };
+  });
+
+export const addHabitToPlanningOutliner = (
+  userId: string,
+  habit: AddHabitToOutlinerInput
+): AddHabitToOutlinerResult => {
+  const nodes = loadPlanningOutliner(userId, false);
+  const existingHabitNode = findNodeByLinkedHabit(nodes, habit.habitId);
+
+  if (existingHabitNode) {
+    return {
+      added: false,
+      existing: true,
+      nodeId: existingHabitNode.id,
+      nodes,
+    };
+  }
+
+  const habitNode: OutlineNode = {
+    ...createOutlineNode(habit.habitName),
+    tag: "habit",
+    frequency: habit.frequency,
+    target: Math.max(1, habit.target || 1),
+    linked: {
+      habitId: habit.habitId,
+      themeId: habit.themeId,
+      label: habit.habitName,
+      renameDeclinedFor: null,
+    },
+  };
+
+  const existingThemeNode = findNodeByLinkedTheme(nodes, habit.themeId);
+  const nextNodes = existingThemeNode
+    ? appendChildToNode(nodes, existingThemeNode.id, habitNode)
+    : [
+        ...nodes,
+        {
+          ...createOutlineNode(habit.themeName),
+          linked: {
+            themeId: habit.themeId,
+            label: habit.themeName,
+            renameDeclinedFor: null,
+          },
+          children: [habitNode],
+        },
+      ];
+
+  savePlanningOutliner(userId, nextNodes);
+  return {
+    added: true,
+    existing: false,
+    nodeId: habitNode.id,
+    nodes: nextNodes,
+  };
 };
 
 export function updateOutlineNode(

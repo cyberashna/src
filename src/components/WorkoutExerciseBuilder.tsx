@@ -1,11 +1,29 @@
 import React, { useMemo, useState } from "react";
-import type { ExerciseLibraryItem, WorkoutBlockExercise } from "../App";
+import type {
+  ExerciseLibraryItem,
+  WorkoutBlockExercise,
+  WorkoutExerciseHistoryEntry,
+  WorkoutRoutine,
+} from "../App";
+import {
+  bodyAreaLabels,
+  categoryLabels,
+  formatExerciseResult,
+  formatLastExerciseDone,
+  getExerciseTags,
+  getLatestExerciseHistory,
+  getProgressiveOverloadNudge,
+  patternLabels,
+} from "../services/workoutLibrary";
 
 type WorkoutExerciseBuilderProps = {
   blockId: string;
   blockLabel: string;
   exerciseLibrary: ExerciseLibraryItem[];
   blockExercises: WorkoutBlockExercise[];
+  exerciseHistory?: Record<string, WorkoutExerciseHistoryEntry[]>;
+  workoutRoutines?: WorkoutRoutine[];
+  workoutSubmitted?: boolean;
   onAddExercise: (blockId: string, exerciseName: string) => void;
   onUpdateExercise: (
     blockId: string,
@@ -13,6 +31,9 @@ type WorkoutExerciseBuilderProps = {
     updates: Partial<WorkoutBlockExercise>
   ) => void;
   onDeleteExercise: (blockId: string, rowId: string) => void;
+  onLoadRoutine?: (blockId: string, routineId: string) => void;
+  onSaveRoutine?: (blockId: string, name: string) => void;
+  onSubmitWorkout?: (blockId: string) => void;
 };
 
 type WorkoutFocus = "full" | "upper" | "lower" | "core" | "mobility" | "cardio";
@@ -21,14 +42,6 @@ type CoverageItem = {
   id: string;
   label: string;
   met: boolean;
-};
-
-const categoryLabels: Record<ExerciseLibraryItem["category"], string> = {
-  strength: "Strength",
-  mobility: "Mobility",
-  core: "Core",
-  cardio: "Cardio",
-  recovery: "Recovery",
 };
 
 const focusLabels: Record<WorkoutFocus, string> = {
@@ -135,14 +148,23 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
   blockLabel,
   exerciseLibrary,
   blockExercises,
+  exerciseHistory = {},
+  workoutRoutines = [],
+  workoutSubmitted = false,
   onAddExercise,
   onUpdateExercise,
   onDeleteExercise,
+  onLoadRoutine,
+  onSaveRoutine,
+  onSubmitWorkout,
 }) => {
   const [exerciseName, setExerciseName] = useState("");
+  const [routineName, setRoutineName] = useState("");
+  const [selectedRoutineId, setSelectedRoutineId] = useState("");
   const workoutFocus = getWorkoutFocus(blockLabel);
   const datalistId = `exercise-library-${blockId}`;
   const exerciseById = new Map(exerciseLibrary.map((exercise) => [exercise.id, exercise]));
+  const selectedExerciseIds = new Set(blockExercises.map((row) => row.exerciseId));
   const selectedExercises = blockExercises
     .map((row) => exerciseById.get(row.exerciseId))
     .filter((exercise): exercise is ExerciseLibraryItem => !!exercise);
@@ -155,6 +177,7 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
       }),
     [exerciseLibrary, workoutFocus]
   );
+  const visibleExerciseOptions = sortedLibrary.slice(0, 10);
 
   const coverageItems = useMemo(
     () => buildCoverageItems(workoutFocus, selectedExercises, blockExercises),
@@ -168,6 +191,18 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
     if (!trimmed) return;
     onAddExercise(blockId, trimmed);
     setExerciseName("");
+  };
+
+  const loadRoutine = () => {
+    const routineId = selectedRoutineId || workoutRoutines[0]?.id;
+    if (!routineId) return;
+    onLoadRoutine?.(blockId, routineId);
+  };
+
+  const saveRoutine = () => {
+    const trimmed = routineName.trim() || blockLabel.replace(/^Habit:\s*/i, "");
+    onSaveRoutine?.(blockId, trimmed);
+    setRoutineName("");
   };
 
   return (
@@ -189,10 +224,76 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
         </div>
       </div>
 
+      {(workoutRoutines.length > 0 || blockExercises.length > 0) && (
+        <div className="workout-routine-tools">
+          {workoutRoutines.length > 0 && (
+            <div className="workout-routine-load">
+              <select
+                value={selectedRoutineId || workoutRoutines[0]?.id || ""}
+                onChange={(event) => setSelectedRoutineId(event.target.value)}
+              >
+                {workoutRoutines.map((routine) => (
+                  <option key={routine.id} value={routine.id}>
+                    {routine.name}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={loadRoutine}>
+                Load
+              </button>
+            </div>
+          )}
+          {blockExercises.length > 0 && (
+            <div className="workout-routine-save">
+              <input
+                type="text"
+                value={routineName}
+                onChange={(event) => setRoutineName(event.target.value)}
+                placeholder="Routine name..."
+              />
+              <button type="button" onClick={saveRoutine}>
+                Save routine
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="workout-library-shelf">
+        <div className="workout-library-shelf-header">
+          <span>Exercise options</span>
+          <em>{focusLabels[workoutFocus]}</em>
+        </div>
+        <div className="workout-library-option-grid">
+          {visibleExerciseOptions.map((exercise) => {
+            const latest = getLatestExerciseHistory(exerciseHistory[exercise.id]);
+            const result = formatExerciseResult(latest);
+            const alreadyAdded = selectedExerciseIds.has(exercise.id);
+            return (
+              <button
+                key={exercise.id}
+                type="button"
+                className={`workout-library-option ${alreadyAdded ? "selected" : ""}`}
+                onClick={() => onAddExercise(blockId, exercise.name)}
+                title={getProgressiveOverloadNudge(exercise, exerciseHistory[exercise.id])}
+              >
+                <strong>{exercise.name}</strong>
+                <span>{getExerciseTags(exercise).join(" / ")}</span>
+                <em>
+                  {formatLastExerciseDone(latest)}
+                  {result ? `, ${result}` : ""}
+                </em>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {blockExercises.length > 0 && (
         <div className="workout-exercise-list">
           {blockExercises.map((row) => {
             const exercise = exerciseById.get(row.exerciseId);
+            const latest = exercise ? getLatestExerciseHistory(exerciseHistory[exercise.id]) : null;
             return (
               <div key={row.id} className="workout-exercise-row">
                 <div className="workout-exercise-main">
@@ -223,6 +324,20 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
                     x
                   </button>
                 </div>
+                {exercise && (
+                  <div className="workout-exercise-context">
+                    <span>
+                      {[
+                        exercise.bodyArea ? bodyAreaLabels[exercise.bodyArea] : null,
+                        exercise.pattern ? patternLabels[exercise.pattern] : null,
+                        formatLastExerciseDone(latest),
+                      ]
+                        .filter(Boolean)
+                        .join(" / ")}
+                    </span>
+                    <em>{getProgressiveOverloadNudge(exercise, exerciseHistory[exercise.id])}</em>
+                  </div>
+                )}
                 <div className="workout-exercise-fields">
                   <input
                     type="number"
@@ -315,6 +430,15 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
           Add
         </button>
       </div>
+
+      {blockExercises.length > 0 && onSubmitWorkout && (
+        <div className="workout-submit-row">
+          <button type="button" onClick={() => onSubmitWorkout(blockId)} disabled={workoutSubmitted}>
+            {workoutSubmitted ? "Workout logged" : "Log workout"}
+          </button>
+          <span>Logging updates last-done dates and future nudges.</span>
+        </div>
+      )}
     </div>
   );
 };

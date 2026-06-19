@@ -30,10 +30,12 @@ import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import TemplateStickyNote from "./components/TemplateStickyNote";
 import RoutineNotesPopup from "./components/RoutineNotesPopup";
 import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
+import WorkoutLibraryPanel from "./components/WorkoutLibraryPanel";
 import BlockCard from "./components/BlockCard";
 import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
 import {
+  addHabitToPlanningOutliner,
   dismissOutlinerReminder,
   getDueOutlinerReminder,
   snoozeOutlinerReminder,
@@ -42,6 +44,7 @@ import {
   type OutlinerReminder,
 } from "./services/planningOutliner";
 import { loadThemeNotesPrefs, saveThemeGeneralNote } from "./services/themeNotes";
+import { createWorkoutExerciseRow } from "./services/workoutLibrary";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
 
 type HabitGroup = {
@@ -99,6 +102,30 @@ export type ExerciseLibraryItem = {
 export type WorkoutBlockExercise = {
   id: string;
   exerciseId: string;
+  sets: number | null;
+  reps: number | null;
+  weight: number | null;
+  unit: "lbs" | "kg" | null;
+  duration: number | null;
+  notes: string;
+};
+
+export type WorkoutRoutineExercise = Omit<WorkoutBlockExercise, "id">;
+
+export type WorkoutRoutine = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  exercises: WorkoutRoutineExercise[];
+};
+
+export type WorkoutExerciseHistoryEntry = {
+  id: string;
+  exerciseId: string;
+  blockId: string;
+  blockLabel: string;
+  completedAt: string;
   sets: number | null;
   reps: number | null;
   weight: number | null;
@@ -302,6 +329,8 @@ const App: React.FC = () => {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [exerciseLibrary, setExerciseLibrary] = useState<ExerciseLibraryItem[]>(defaultExerciseLibrary);
   const [blockExercises, setBlockExercises] = useState<Record<string, WorkoutBlockExercise[]>>({});
+  const [exerciseHistory, setExerciseHistory] = useState<Record<string, WorkoutExerciseHistoryEntry[]>>({});
+  const [workoutRoutines, setWorkoutRoutines] = useState<WorkoutRoutine[]>([]);
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dragHabitId, setDragHabitId] = useState<string | null>(null);
   const [dragOverThemeId, setDragOverThemeId] = useState<string | null>(null);
@@ -390,6 +419,7 @@ const App: React.FC = () => {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showTemplateNote, setShowTemplateNote] = useState(true);
   const [showRoutineNotes, setShowRoutineNotes] = useState(false);
+  const [showWorkoutLibrary, setShowWorkoutLibrary] = useState(false);
   const [showPlanningOutliner, setShowPlanningOutliner] = useState(false);
   const [showPlanningMenu, setShowPlanningMenu] = useState(false);
   const [showQuickHabit, setShowQuickHabit] = useState(false);
@@ -474,12 +504,16 @@ const App: React.FC = () => {
     if (!user) {
       setExerciseLibrary(defaultExerciseLibrary);
       setBlockExercises({});
+      setExerciseHistory({});
+      setWorkoutRoutines([]);
       return;
     }
 
     try {
       const savedLibrary = window.localStorage.getItem(`exercise-library:${user.id}`);
       const savedBlockExercises = window.localStorage.getItem(`workout-block-exercises:${user.id}`);
+      const savedExerciseHistory = window.localStorage.getItem(`workout-exercise-history:${user.id}`);
+      const savedWorkoutRoutines = window.localStorage.getItem(`workout-routines:${user.id}`);
       const parsedLibrary = savedLibrary
         ? (JSON.parse(savedLibrary) as ExerciseLibraryItem[])
         : defaultExerciseLibrary;
@@ -494,10 +528,18 @@ const App: React.FC = () => {
           ? (JSON.parse(savedBlockExercises) as Record<string, WorkoutBlockExercise[]>)
           : {}
       );
+      setExerciseHistory(
+        savedExerciseHistory
+          ? (JSON.parse(savedExerciseHistory) as Record<string, WorkoutExerciseHistoryEntry[]>)
+          : {}
+      );
+      setWorkoutRoutines(savedWorkoutRoutines ? (JSON.parse(savedWorkoutRoutines) as WorkoutRoutine[]) : []);
     } catch (error) {
       console.error("Error loading exercise library:", error);
       setExerciseLibrary(defaultExerciseLibrary);
       setBlockExercises({});
+      setExerciseHistory({});
+      setWorkoutRoutines([]);
     }
   }, [user]);
 
@@ -1658,6 +1700,25 @@ const App: React.FC = () => {
     return null;
   };
 
+  const addHabitViewToOutliner = (habit: Habit, theme: Theme) => {
+    if (!user) return;
+
+    const result = addHabitToPlanningOutliner(user.id, {
+      habitId: habit.id,
+      habitName: habit.name,
+      themeId: theme.id,
+      themeName: theme.name,
+      frequency: habit.frequency,
+      target: habit.targetPerWeek,
+    });
+
+    setShowPlanningOutliner(true);
+    showToast(
+      result.existing ? "That habit is already in Planning Outliner" : "Habit added to Planning Outliner",
+      result.existing ? "info" : "success"
+    );
+  };
+
   const createHabitBlockAtSlot = async (
     habitId: string,
     dayIndex: number,
@@ -2397,11 +2458,11 @@ const App: React.FC = () => {
     if (!user) return;
 
     try {
+      const block = blocks.find((b) => b.id === blockId);
       await database.blocks.update(blockId, {
         workout_submitted: true,
       });
 
-      const block = blocks.find((b) => b.id === blockId);
       if (block?.habitId && block.workoutData) {
         const today = new Date().toISOString().split("T")[0];
         await database.workoutHistory.create(
@@ -2416,11 +2477,37 @@ const App: React.FC = () => {
         );
       }
 
+      const rows = blockExercises[blockId] ?? [];
+      if (block && rows.length > 0) {
+        const completedAt = new Date().toISOString();
+        const nextHistory = { ...exerciseHistory };
+
+        rows.forEach((row) => {
+          const entry: WorkoutExerciseHistoryEntry = {
+            id: createClientId("exercise-history"),
+            exerciseId: row.exerciseId,
+            blockId,
+            blockLabel: block.label,
+            completedAt,
+            sets: row.sets,
+            reps: row.reps,
+            weight: row.weight,
+            unit: row.unit,
+            duration: row.duration,
+            notes: row.notes,
+          };
+          nextHistory[row.exerciseId] = [entry, ...(nextHistory[row.exerciseId] ?? [])].slice(0, 30);
+        });
+
+        saveExerciseHistory(nextHistory);
+      }
+
       setBlocks((prev) =>
         prev.map((b) =>
           b.id === blockId ? { ...b, workoutSubmitted: true } : b
         )
       );
+      showToast("Workout logged", "success");
     } catch (error) {
       console.error("Error submitting workout:", error);
     }
@@ -2438,6 +2525,157 @@ const App: React.FC = () => {
     if (user) {
       window.localStorage.setItem(`workout-block-exercises:${user.id}`, JSON.stringify(nextExercises));
     }
+  };
+
+  const saveExerciseHistory = (nextHistory: Record<string, WorkoutExerciseHistoryEntry[]>) => {
+    setExerciseHistory(nextHistory);
+    if (user) {
+      window.localStorage.setItem(`workout-exercise-history:${user.id}`, JSON.stringify(nextHistory));
+    }
+  };
+
+  const saveWorkoutRoutines = (nextRoutines: WorkoutRoutine[]) => {
+    setWorkoutRoutines(nextRoutines);
+    if (user) {
+      window.localStorage.setItem(`workout-routines:${user.id}`, JSON.stringify(nextRoutines));
+    }
+  };
+
+  const saveWorkoutRoutineFromRows = (name: string, rows: WorkoutBlockExercise[]) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      showToast("Name the routine first", "error");
+      return;
+    }
+
+    if (rows.length === 0) {
+      showToast("Add exercises before saving a routine", "info");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const routineExercises: WorkoutRoutineExercise[] = rows.map(({ id: _id, ...row }) => row);
+    const existing = workoutRoutines.find(
+      (routine) => routine.name.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    const nextRoutine: WorkoutRoutine = {
+      id: existing?.id ?? createClientId("workout-routine"),
+      name: trimmed,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      exercises: routineExercises,
+    };
+    const nextRoutines = existing
+      ? workoutRoutines.map((routine) => (routine.id === existing.id ? nextRoutine : routine))
+      : [...workoutRoutines, nextRoutine];
+
+    saveWorkoutRoutines(nextRoutines);
+    showToast(existing ? "Routine updated" : "Routine saved", "success");
+  };
+
+  const saveWorkoutRoutineFromBlock = (blockId: string, name: string) => {
+    saveWorkoutRoutineFromRows(name, blockExercises[blockId] ?? []);
+  };
+
+  const saveWorkoutRoutineFromExerciseIds = (name: string, exerciseIds: string[]) => {
+    const rows = exerciseIds
+      .map((exerciseId) => exerciseLibrary.find((exercise) => exercise.id === exerciseId))
+      .filter((exercise): exercise is ExerciseLibraryItem => !!exercise)
+      .map((exercise) => createWorkoutExerciseRow(exercise));
+
+    saveWorkoutRoutineFromRows(name, rows);
+  };
+
+  const deleteWorkoutRoutine = (routineId: string) => {
+    saveWorkoutRoutines(workoutRoutines.filter((routine) => routine.id !== routineId));
+    showToast("Routine deleted", "info");
+  };
+
+  const addExerciseIdsToBlock = (
+    blockId: string,
+    exerciseIds: string[],
+    replace = false
+  ) => {
+    const rows = exerciseIds
+      .map((exerciseId) => exerciseLibrary.find((exercise) => exercise.id === exerciseId))
+      .filter((exercise): exercise is ExerciseLibraryItem => !!exercise)
+      .map((exercise) => createWorkoutExerciseRow(exercise));
+
+    if (rows.length === 0) return;
+
+    saveBlockExercises({
+      ...blockExercises,
+      [blockId]: replace ? rows : [...(blockExercises[blockId] ?? []), ...rows],
+    });
+  };
+
+  const loadWorkoutRoutineToBlock = (blockId: string, routineId: string) => {
+    const routine = workoutRoutines.find((item) => item.id === routineId);
+    if (!routine) return;
+
+    const rows = routine.exercises
+      .map((row) => {
+        const exercise = exerciseLibrary.find((item) => item.id === row.exerciseId);
+        return exercise ? createWorkoutExerciseRow(exercise, row) : null;
+      })
+      .filter((row): row is WorkoutBlockExercise => !!row);
+
+    if (rows.length === 0) {
+      showToast("That routine has no available exercises", "info");
+      return;
+    }
+
+    saveBlockExercises({
+      ...blockExercises,
+      [blockId]: rows,
+    });
+    showToast(`Loaded ${routine.name}`, "success");
+  };
+
+  const createWorkoutBlockFromExercises = async (label: string, exerciseIds: string[]) => {
+    const blockId = await createBlock(label || "Strength training", false, undefined, "fitness");
+    if (!blockId) return;
+
+    addExerciseIdsToBlock(blockId, exerciseIds, true);
+    showToast("Workout added to unscheduled", "success");
+  };
+
+  const createWorkoutBlockFromRoutine = async (routineId: string) => {
+    const routine = workoutRoutines.find((item) => item.id === routineId);
+    if (!routine) return;
+
+    const blockId = await createBlock(routine.name, false, undefined, "fitness");
+    if (!blockId) return;
+
+    loadWorkoutRoutineToBlock(blockId, routineId);
+  };
+
+  const addCustomExercise = (
+    exercise: Pick<ExerciseLibraryItem, "name" | "category" | "bodyArea" | "pattern">
+  ) => {
+    const trimmed = exercise.name.trim();
+    if (!trimmed) return;
+
+    const existing = exerciseLibrary.find((item) => item.name.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      showToast("Exercise is already in your library", "info");
+      return;
+    }
+
+    saveExerciseLibrary([
+      ...exerciseLibrary,
+      {
+        id: createClientId("exercise"),
+        name: trimmed,
+        category: exercise.category,
+        bodyArea: exercise.bodyArea,
+        pattern: exercise.pattern,
+        defaultSets: exercise.category === "cardio" || exercise.category === "mobility" ? null : 3,
+        defaultReps: exercise.category === "cardio" ? null : 10,
+        defaultDuration: exercise.category === "cardio" || exercise.category === "mobility" ? 10 : null,
+      },
+    ]);
+    showToast("Exercise added", "success");
   };
 
   const addExerciseToBlock = (blockId: string, exerciseName: string) => {
@@ -2462,16 +2700,7 @@ const App: React.FC = () => {
       showToast(`Added ${trimmed} to your exercise library`, "success");
     }
 
-    const nextRow: WorkoutBlockExercise = {
-      id: createClientId("block-exercise"),
-      exerciseId: libraryItem.id,
-      sets: libraryItem.defaultSets ?? null,
-      reps: libraryItem.defaultReps ?? null,
-      weight: null,
-      unit: "lbs",
-      duration: libraryItem.defaultDuration ?? null,
-      notes: "",
-    };
+    const nextRow = createWorkoutExerciseRow(libraryItem);
 
     saveBlockExercises({
       ...blockExercises,
@@ -3656,6 +3885,14 @@ const App: React.FC = () => {
                                       <button
                                         style={{ fontSize: 12 }}
                                         className="secondary"
+                                        onClick={() => addHabitViewToOutliner(habit, theme)}
+                                        title="Add this habit to Planning Outliner"
+                                      >
+                                        Plan
+                                      </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
                                         onClick={() => startEditingHabit(habit)}
                                       >
                                         Edit
@@ -3721,6 +3958,13 @@ const App: React.FC = () => {
                                                     title="Mark done"
                                                   >
                                                     Done
+                                                  </button>
+                                                  <button
+                                                    className="subtask-add-btn"
+                                                    onClick={() => addHabitViewToOutliner(subtask, theme)}
+                                                    title="Add this subtask to Planning Outliner"
+                                                  >
+                                                    Plan
                                                   </button>
                                                   {depth < 1 && (
                                                   <button
@@ -4117,9 +4361,13 @@ const App: React.FC = () => {
                                   onSubmitWorkout={submitWorkout}
                                   exerciseLibrary={exerciseLibrary}
                                   blockExercises={blockExercises[block.id] ?? []}
+                                  exerciseHistory={exerciseHistory}
+                                  workoutRoutines={workoutRoutines}
                                   onAddExerciseToBlock={addExerciseToBlock}
                                   onUpdateBlockExercise={updateBlockExercise}
                                   onDeleteBlockExercise={deleteBlockExercise}
+                                  onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                                  onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
                                   convertingBlockId={convertingBlockId}
                                   convertFrequency={convertFrequency}
                                   convertTarget={convertTarget}
@@ -4256,9 +4504,13 @@ const App: React.FC = () => {
                     onSubmitWorkout={submitWorkout}
                     exerciseLibrary={exerciseLibrary}
                     blockExercises={blockExercises[block.id] ?? []}
+                    exerciseHistory={exerciseHistory}
+                    workoutRoutines={workoutRoutines}
                     onAddExerciseToBlock={addExerciseToBlock}
                     onUpdateBlockExercise={updateBlockExercise}
                     onDeleteBlockExercise={deleteBlockExercise}
+                    onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                    onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
                     themes={themes}
                     mealPopoverBlockId={mealPopoverBlockId}
                     onSetMealPopover={setMealPopoverBlockId}
@@ -4352,6 +4604,16 @@ const App: React.FC = () => {
                       >
                         <strong>Quick Start</strong>
                         <span>Create from reusable templates</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowWorkoutLibrary((value) => !value);
+                          setShowPlanningMenu(false);
+                        }}
+                      >
+                        <strong>{showWorkoutLibrary ? "Hide Workout Library" : "Show Workout Library"}</strong>
+                        <span>Pick exercises, start workouts, and save routines</span>
                       </button>
                       <button
                         type="button"
@@ -4589,9 +4851,13 @@ const App: React.FC = () => {
                                   onSubmitWorkout={submitWorkout}
                                   exerciseLibrary={exerciseLibrary}
                                   blockExercises={blockExercises[block.id] ?? []}
+                                  exerciseHistory={exerciseHistory}
+                                  workoutRoutines={workoutRoutines}
                                   onAddExerciseToBlock={addExerciseToBlock}
                                   onUpdateBlockExercise={updateBlockExercise}
                                   onDeleteBlockExercise={deleteBlockExercise}
+                                  onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                                  onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
                                   onSaveBlockNote={saveBlockNote}
                                   onAddBlockTask={addBlockTask}
                                   onToggleBlockTask={toggleBlockTask}
@@ -4833,6 +5099,20 @@ const App: React.FC = () => {
             const id = await createBlock(label);
             if (id) showToast("Routine item added to unscheduled", "success");
           }}
+        />
+      )}
+
+      {showWorkoutLibrary && user && (
+        <WorkoutLibraryPanel
+          exerciseLibrary={exerciseLibrary}
+          exerciseHistory={exerciseHistory}
+          workoutRoutines={workoutRoutines}
+          onClose={() => setShowWorkoutLibrary(false)}
+          onCreateWorkout={createWorkoutBlockFromExercises}
+          onCreateWorkoutFromRoutine={createWorkoutBlockFromRoutine}
+          onSaveRoutine={saveWorkoutRoutineFromExerciseIds}
+          onDeleteRoutine={deleteWorkoutRoutine}
+          onAddExercise={addCustomExercise}
         />
       )}
 
