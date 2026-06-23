@@ -7,6 +7,7 @@ import {
   updateOutlineNode,
   type OutlineLink,
   type OutlineFrequency,
+  type OutlineReminderKind,
   type OutlineNode,
 } from "../services/planningOutliner";
 
@@ -286,6 +287,7 @@ export default function PlanningOutlinerPanel({
   const [habitConvertNodeId, setHabitConvertNodeId] = useState<string | null>(null);
   const [reminderNodeId, setReminderNodeId] = useState<string | null>(null);
   const [reminderValue, setReminderValue] = useState("");
+  const [reminderKind, setReminderKind] = useState<OutlineReminderKind>("regular");
   const [noteNodeId, setNoteNodeId] = useState<string | null>(null);
   const [linkedNotes, setLinkedNotes] = useState<Record<string, LinkedNoteState>>({});
   const [noteAttachTargets, setNoteAttachTargets] = useState<Record<string, string>>({});
@@ -519,6 +521,7 @@ export default function PlanningOutlinerPanel({
   const openReminderPanel = (node: OutlineNode) => {
     setReminderNodeId((current) => current === node.id ? null : node.id);
     setReminderValue(toLocalDatetimeValue(node.reminderAt));
+    setReminderKind(node.reminderKind);
   };
 
   const saveReminder = (nodeId: string) => {
@@ -526,6 +529,7 @@ export default function PlanningOutlinerPanel({
     updateRow(nodeId, {
       reminderAt: new Date(reminderValue).toISOString(),
       reminderDismissedAt: null,
+      reminderKind,
     });
     setReminderNodeId(null);
   };
@@ -534,6 +538,7 @@ export default function PlanningOutlinerPanel({
     updateRow(nodeId, {
       reminderAt: null,
       reminderDismissedAt: null,
+      reminderKind: "regular",
     });
     setReminderNodeId(null);
   };
@@ -913,8 +918,11 @@ export default function PlanningOutlinerPanel({
             </div>
           </div>
           {node.reminderAt && (
-            <div className="outliner-reminder-pill" style={{ marginLeft: `${depth * 18 + 44}px` }}>
-              Reminds {formatReminder(node.reminderAt)}
+            <div
+              className={`outliner-reminder-pill ${node.reminderKind === "pesky" ? "outliner-reminder-pill--pesky" : ""}`}
+              style={{ marginLeft: `${depth * 18 + 44}px` }}
+            >
+              {node.reminderKind === "pesky" ? "Pesky" : "Reminds"} {formatReminder(node.reminderAt)}
             </div>
           )}
           {reminderNodeId === node.id && (
@@ -925,6 +933,14 @@ export default function PlanningOutlinerPanel({
                 value={reminderValue}
                 onChange={(event) => setReminderValue(event.target.value)}
               />
+              <select
+                value={reminderKind}
+                onChange={(event) => setReminderKind(event.target.value as OutlineReminderKind)}
+                title="Reminder type"
+              >
+                <option value="regular">Regular</option>
+                <option value="pesky">Pesky</option>
+              </select>
               <button type="button" onClick={() => saveReminder(node.id)}>
                 Save
               </button>

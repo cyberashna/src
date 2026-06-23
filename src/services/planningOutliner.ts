@@ -1,5 +1,6 @@
 export type OutlineTag = "note" | "task" | "habit";
 export type OutlineFrequency = "daily" | "weekly" | "monthly" | "none";
+export type OutlineReminderKind = "regular" | "pesky";
 
 export type OutlineLink = {
   habitId?: string;
@@ -19,6 +20,7 @@ export type OutlineNode = {
   target: number;
   reminderAt: string | null;
   reminderDismissedAt: string | null;
+  reminderKind: OutlineReminderKind;
   linked: OutlineLink | null;
   draftNote: string;
   draftNoteUpdatedAt: string | null;
@@ -29,6 +31,7 @@ export type OutlinerReminder = {
   id: string;
   text: string;
   reminderAt: string;
+  reminderKind: OutlineReminderKind;
   path: string[];
 };
 
@@ -63,6 +66,7 @@ export const createOutlineNode = (text = "New note"): OutlineNode => ({
   target: 1,
   reminderAt: null,
   reminderDismissedAt: null,
+  reminderKind: "regular",
   linked: null,
   draftNote: "",
   draftNoteUpdatedAt: null,
@@ -89,6 +93,7 @@ export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode =>
   target: node.target ?? 1,
   reminderAt: node.reminderAt ?? null,
   reminderDismissedAt: node.reminderDismissedAt ?? null,
+  reminderKind: node.reminderKind ?? "regular",
   linked: node.linked
     ? {
         habitId: node.linked.habitId,
@@ -229,6 +234,7 @@ const findDueReminder = (
         id: node.id,
         text: nodeText,
         reminderAt: node.reminderAt,
+        reminderKind: node.reminderKind,
         path: nextPath,
       };
     }
@@ -256,6 +262,15 @@ export const snoozeOutlinerReminder = (userId: string, nodeId: string, minutes: 
   const next = updateOutlineNode(loadPlanningOutliner(userId, false), nodeId, (node) => ({
     ...node,
     reminderAt,
+    reminderDismissedAt: null,
+  }));
+  savePlanningOutliner(userId, next);
+};
+
+export const clearOutlinerReminder = (userId: string, nodeId: string) => {
+  const next = updateOutlineNode(loadPlanningOutliner(userId, false), nodeId, (node) => ({
+    ...node,
+    reminderAt: null,
     reminderDismissedAt: null,
   }));
   savePlanningOutliner(userId, next);

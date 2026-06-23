@@ -3795,6 +3795,7 @@ table.planner th.col-normal {
 
 .outliner-habit-settings select,
 .outliner-convert-panel select,
+.outliner-reminder-panel select,
 .outliner-habit-settings input,
 .outliner-reminder-panel input {
   border: 1px solid #cbd5e1;
@@ -3858,6 +3859,12 @@ table.planner th.col-normal {
   font-weight: 800;
   margin-bottom: 4px;
   padding: 3px 8px;
+}
+
+.outliner-reminder-pill--pesky {
+  background: #fef3c7;
+  border-color: #fbbf24;
+  color: #92400e;
 }
 
 .outliner-linked-note {
@@ -4049,12 +4056,21 @@ table.planner th.col-normal {
   z-index: 900;
 }
 
+.outliner-reminder-notification--pesky {
+  border-color: #fbbf24;
+  box-shadow: 0 18px 44px rgba(146, 64, 14, 0.22);
+}
+
 .outliner-reminder-notification-eyebrow {
   color: #1d4ed8;
   font-size: 10px;
   font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.outliner-reminder-notification--pesky .outliner-reminder-notification-eyebrow {
+  color: #b45309;
 }
 
 .outliner-reminder-notification strong {

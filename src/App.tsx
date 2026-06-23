@@ -35,6 +35,7 @@ import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
 import {
   addHabitToPlanningOutliner,
+  clearOutlinerReminder,
   dismissOutlinerReminder,
   getDueOutlinerReminder,
   snoozeOutlinerReminder,
@@ -5137,11 +5138,21 @@ const App: React.FC = () => {
       )}
 
       {outlinerReminder && user && (
-        <div className="outliner-reminder-notification" role="alert">
-          <div className="outliner-reminder-notification-eyebrow">Outliner reminder</div>
+        <div
+          className={`outliner-reminder-notification ${
+            outlinerReminder.reminderKind === "pesky" ? "outliner-reminder-notification--pesky" : ""
+          }`}
+          role="alert"
+        >
+          <div className="outliner-reminder-notification-eyebrow">
+            {outlinerReminder.reminderKind === "pesky" ? "Pesky reminder" : "Outliner reminder"}
+          </div>
           <strong>{outlinerReminder.text}</strong>
           {outlinerReminder.path.length > 1 && (
             <span>{outlinerReminder.path.slice(0, -1).join(" / ")}</span>
+          )}
+          {outlinerReminder.reminderKind === "pesky" && (
+            <span>This will keep nudging until you snooze it or mark it done.</span>
           )}
           <div className="outliner-reminder-notification-actions">
             <button
@@ -5157,21 +5168,25 @@ const App: React.FC = () => {
               type="button"
               className="secondary"
               onClick={() => {
-                snoozeOutlinerReminder(user.id, outlinerReminder.id, 60);
+                snoozeOutlinerReminder(user.id, outlinerReminder.id, outlinerReminder.reminderKind === "pesky" ? 15 : 60);
                 setOutlinerReminder(null);
               }}
             >
-              Later
+              {outlinerReminder.reminderKind === "pesky" ? "15 min" : "Later"}
             </button>
             <button
               type="button"
               className="secondary"
               onClick={() => {
-                dismissOutlinerReminder(user.id, outlinerReminder.id);
+                if (outlinerReminder.reminderKind === "pesky") {
+                  clearOutlinerReminder(user.id, outlinerReminder.id);
+                } else {
+                  dismissOutlinerReminder(user.id, outlinerReminder.id);
+                }
                 setOutlinerReminder(null);
               }}
             >
-              Dismiss
+              {outlinerReminder.reminderKind === "pesky" ? "Done" : "Dismiss"}
             </button>
           </div>
         </div>
