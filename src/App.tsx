@@ -27,7 +27,6 @@ import MoodTracker from "./components/MoodTracker";
 import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
-import TemplateStickyNote from "./components/TemplateStickyNote";
 import RoutineNotesPopup from "./components/RoutineNotesPopup";
 import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
 import WorkoutLibraryPanel from "./components/WorkoutLibraryPanel";
@@ -417,7 +416,6 @@ const App: React.FC = () => {
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
-  const [showTemplateNote, setShowTemplateNote] = useState(true);
   const [showRoutineNotes, setShowRoutineNotes] = useState(false);
   const [showWorkoutLibrary, setShowWorkoutLibrary] = useState(false);
   const [showPlanningOutliner, setShowPlanningOutliner] = useState(false);
@@ -4618,16 +4616,6 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          setShowTemplateNote((value) => !value);
-                          setShowPlanningMenu(false);
-                        }}
-                      >
-                        <strong>{showTemplateNote ? "Hide Checklist" : "Show Checklist"}</strong>
-                        <span>Open planning checklist tabs</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
                           setShowRoutineNotes((value) => !value);
                           setShowPlanningMenu(false);
                         }}
@@ -5073,19 +5061,6 @@ const App: React.FC = () => {
           onClose={() => setShowQuickHabit(false)}
           onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
             await addHabitToTheme(themeId, name, targetPerWeek, frequency);
-          }}
-        />
-      )}
-
-      {showTemplateNote && user && (
-        <TemplateStickyNote
-          userId={user.id}
-          weekStartDate={getWeekStartDateString(weekOffset)}
-          todayDate={new Date().toISOString().split('T')[0]}
-          onClose={() => setShowTemplateNote(false)}
-          onCreateBlock={async (label) => {
-            const id = await createBlock(label);
-            if (id) showToast("Block added to unscheduled", "success");
           }}
         />
       )}
