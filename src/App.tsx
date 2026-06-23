@@ -416,7 +416,7 @@ const App: React.FC = () => {
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
-  const [showRoutineNotes, setShowRoutineNotes] = useState(false);
+  const [showRoutineNotes, setShowRoutineNotes] = useState(true);
   const [showWorkoutLibrary, setShowWorkoutLibrary] = useState(false);
   const [showPlanningOutliner, setShowPlanningOutliner] = useState(false);
   const [showPlanningMenu, setShowPlanningMenu] = useState(false);
