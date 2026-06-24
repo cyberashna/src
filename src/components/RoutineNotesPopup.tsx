@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createRoutineId,
+  inferRoutineCategory,
+  inferRoutineCategoryFromRoutine,
   loadRoutineNotes,
-  routineCategoryOptions,
   saveRoutineNotes,
   type RoutineTab,
 } from "../services/routineNotes";
@@ -74,9 +75,15 @@ export default function RoutineNotesPopup({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [onClose]);
 
+  const withHiddenCategory = (routine: RoutineTab): RoutineTab => ({
+    ...routine,
+    category: inferRoutineCategoryFromRoutine(routine),
+  });
+
   const saveRoutines = (next: RoutineTab[]) => {
-    setRoutines(next);
-    saveRoutineNotes(userId, next);
+    const tagged = next.map(withHiddenCategory);
+    setRoutines(tagged);
+    saveRoutineNotes(userId, tagged);
   };
 
   const updateRoutine = (routineId: string, updates: Partial<RoutineTab>) => {
@@ -93,7 +100,7 @@ export default function RoutineNotesPopup({
     const routine: RoutineTab = {
       id: createRoutineId("routine"),
       name,
-      category: "custom",
+      category: inferRoutineCategory(name),
       notes: "",
       items: [],
       completedByDate: {},
@@ -182,7 +189,6 @@ export default function RoutineNotesPopup({
     if (!activeRoutine) return;
     updateRoutine(activeRoutine.id, {
       linkedWorkoutRoutineId: workoutRoutineId || null,
-      category: workoutRoutineId ? "workout" : activeRoutine.category,
     });
   };
 
@@ -278,28 +284,6 @@ export default function RoutineNotesPopup({
       {activeRoutine ? (
         <>
           <div className="routine-notes-body">
-            <div className="routine-meta-row">
-              <span className={`routine-category-badge routine-category-badge--${activeRoutine.category}`}>
-                {routineCategoryOptions.find((option) => option.value === activeRoutine.category)?.label ?? "Custom"}
-              </span>
-              <select
-                className="routine-category-select"
-                value={activeRoutine.category}
-                onChange={(event) =>
-                  updateRoutine(activeRoutine.id, {
-                    category: event.target.value as RoutineTab["category"],
-                  })
-                }
-                title="Routine type"
-              >
-                {routineCategoryOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
             <label className="routine-section-label">Notes</label>
             <textarea
               className="routine-note-box"
