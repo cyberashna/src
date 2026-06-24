@@ -27,8 +27,8 @@ import MoodTracker from "./components/MoodTracker";
 import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
-import TemplateStickyNote from "./components/TemplateStickyNote";
 import RoutineNotesPopup from "./components/RoutineNotesPopup";
+import type { RoutineTab } from "./services/routineNotes";
 import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
 import WorkoutLibraryPanel from "./components/WorkoutLibraryPanel";
 import BlockCard from "./components/BlockCard";
@@ -36,6 +36,7 @@ import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
 import {
   addHabitToPlanningOutliner,
+  clearOutlinerReminder,
   dismissOutlinerReminder,
   getDueOutlinerReminder,
   snoozeOutlinerReminder,
@@ -205,6 +206,20 @@ const formatTimeSince = (timestamp: string): string => {
   if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
 
   return then.toLocaleDateString();
+};
+
+const formatReminderInterval = (minutes: number): string => {
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 1440) {
+    const hours = Math.round(minutes / 60);
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  if (minutes < 10080) {
+    const days = Math.round(minutes / 1440);
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  const weeks = Math.round(minutes / 10080);
+  return `${weeks} week${weeks === 1 ? "" : "s"}`;
 };
 
 
@@ -417,8 +432,7 @@ const App: React.FC = () => {
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
-  const [showTemplateNote, setShowTemplateNote] = useState(true);
-  const [showRoutineNotes, setShowRoutineNotes] = useState(false);
+  const [showRoutineNotes, setShowRoutineNotes] = useState(true);
   const [showWorkoutLibrary, setShowWorkoutLibrary] = useState(false);
   const [showPlanningOutliner, setShowPlanningOutliner] = useState(false);
   const [showPlanningMenu, setShowPlanningMenu] = useState(false);
@@ -2395,6 +2409,45 @@ const App: React.FC = () => {
       );
     } catch (error) {
       console.error("Error adding block task:", error);
+    }
+  };
+
+  const createRoutineBlockFromRoutine = async (routine: RoutineTab) => {
+    if (!user) return;
+
+    const blockId = await createBlock(
+      routine.name.trim() || "Routine",
+      false,
+      undefined,
+      routine.category === "custom" ? "routine" : routine.category
+    );
+    if (!blockId) return;
+
+    try {
+      const note = routine.notes.trim();
+      if (note) {
+        await saveBlockNote(blockId, note);
+      }
+
+      const taskLabels = routine.items
+        .map((item) => item.label.trim())
+        .filter((label) => label.length > 0);
+      const createdTasks = await Promise.all(
+        taskLabels.map((label, index) => database.blockTasks.create(user.id, blockId, label, index))
+      );
+
+      if (createdTasks.length > 0) {
+        setBlocks((prev) =>
+          prev.map((b) =>
+            b.id === blockId ? { ...b, blockTasks: [...(b.blockTasks ?? []), ...createdTasks] } : b
+          )
+        );
+      }
+
+      showToast("Routine added to unscheduled", "success");
+    } catch (error) {
+      console.error("Error creating routine block:", error);
+      showToast("Routine block added, but the checklist did not finish", "error");
     }
   };
 
@@ -4618,16 +4671,6 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          setShowTemplateNote((value) => !value);
-                          setShowPlanningMenu(false);
-                        }}
-                      >
-                        <strong>{showTemplateNote ? "Hide Checklist" : "Show Checklist"}</strong>
-                        <span>Open planning checklist tabs</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
                           setShowRoutineNotes((value) => !value);
                           setShowPlanningMenu(false);
                         }}
@@ -5077,19 +5120,6 @@ const App: React.FC = () => {
         />
       )}
 
-      {showTemplateNote && user && (
-        <TemplateStickyNote
-          userId={user.id}
-          weekStartDate={getWeekStartDateString(weekOffset)}
-          todayDate={new Date().toISOString().split('T')[0]}
-          onClose={() => setShowTemplateNote(false)}
-          onCreateBlock={async (label) => {
-            const id = await createBlock(label);
-            if (id) showToast("Block added to unscheduled", "success");
-          }}
-        />
-      )}
-
       {showRoutineNotes && user && (
         <RoutineNotesPopup
           userId={user.id}
@@ -5099,6 +5129,9 @@ const App: React.FC = () => {
             const id = await createBlock(label);
             if (id) showToast("Routine item added to unscheduled", "success");
           }}
+          onCreateRoutineBlock={createRoutineBlockFromRoutine}
+          workoutRoutines={workoutRoutines}
+          onCreateWorkoutFromRoutine={createWorkoutBlockFromRoutine}
         />
       )}
 
@@ -5162,12 +5195,27 @@ const App: React.FC = () => {
       )}
 
       {outlinerReminder && user && (
-        <div className="outliner-reminder-notification" role="alert">
-          <div className="outliner-reminder-notification-eyebrow">Outliner reminder</div>
+        <div
+          className={`outliner-reminder-notification ${
+            outlinerReminder.reminderKind === "pesky" ? "outliner-reminder-notification--pesky" : ""
+          }`}
+          role="alert"
+        >
+          <div className="outliner-reminder-notification-eyebrow">
+            {outlinerReminder.reminderKind === "pesky" ? "Pesky reminder" : "Outliner reminder"}
+          </div>
           <strong>{outlinerReminder.text}</strong>
           {outlinerReminder.path.length > 1 && (
             <span>{outlinerReminder.path.slice(0, -1).join(" / ")}</span>
           )}
+          {outlinerReminder.reminderKind === "pesky" && (() => {
+            const repeatMinutes = outlinerReminder.reminderIntervalMinutes ?? 1440;
+            return (
+              <span>
+                This will come back every {formatReminderInterval(repeatMinutes)} until you mark it done.
+              </span>
+            );
+          })()}
           <div className="outliner-reminder-notification-actions">
             <button
               type="button"
@@ -5182,21 +5230,33 @@ const App: React.FC = () => {
               type="button"
               className="secondary"
               onClick={() => {
-                snoozeOutlinerReminder(user.id, outlinerReminder.id, 60);
+                snoozeOutlinerReminder(
+                  user.id,
+                  outlinerReminder.id,
+                  outlinerReminder.reminderKind === "pesky"
+                    ? outlinerReminder.reminderIntervalMinutes ?? 1440
+                    : 60
+                );
                 setOutlinerReminder(null);
               }}
             >
-              Later
+              {outlinerReminder.reminderKind === "pesky"
+                ? `Again in ${formatReminderInterval(outlinerReminder.reminderIntervalMinutes ?? 1440)}`
+                : "Later"}
             </button>
             <button
               type="button"
               className="secondary"
               onClick={() => {
-                dismissOutlinerReminder(user.id, outlinerReminder.id);
+                if (outlinerReminder.reminderKind === "pesky") {
+                  clearOutlinerReminder(user.id, outlinerReminder.id);
+                } else {
+                  dismissOutlinerReminder(user.id, outlinerReminder.id);
+                }
                 setOutlinerReminder(null);
               }}
             >
-              Dismiss
+              {outlinerReminder.reminderKind === "pesky" ? "Done" : "Dismiss"}
             </button>
           </div>
         </div>
