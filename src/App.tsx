@@ -207,6 +207,20 @@ const formatTimeSince = (timestamp: string): string => {
   return then.toLocaleDateString();
 };
 
+const formatReminderInterval = (minutes: number): string => {
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 1440) {
+    const hours = Math.round(minutes / 60);
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  if (minutes < 10080) {
+    const days = Math.round(minutes / 1440);
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  const weeks = Math.round(minutes / 10080);
+  return `${weeks} week${weeks === 1 ? "" : "s"}`;
+};
+
 
 const hourlySlots = [
   "6:00 AM",
@@ -5151,9 +5165,14 @@ const App: React.FC = () => {
           {outlinerReminder.path.length > 1 && (
             <span>{outlinerReminder.path.slice(0, -1).join(" / ")}</span>
           )}
-          {outlinerReminder.reminderKind === "pesky" && (
-            <span>This will keep nudging until you snooze it or mark it done.</span>
-          )}
+          {outlinerReminder.reminderKind === "pesky" && (() => {
+            const repeatMinutes = outlinerReminder.reminderIntervalMinutes ?? 1440;
+            return (
+              <span>
+                This will come back every {formatReminderInterval(repeatMinutes)} until you mark it done.
+              </span>
+            );
+          })()}
           <div className="outliner-reminder-notification-actions">
             <button
               type="button"
@@ -5168,11 +5187,19 @@ const App: React.FC = () => {
               type="button"
               className="secondary"
               onClick={() => {
-                snoozeOutlinerReminder(user.id, outlinerReminder.id, outlinerReminder.reminderKind === "pesky" ? 15 : 60);
+                snoozeOutlinerReminder(
+                  user.id,
+                  outlinerReminder.id,
+                  outlinerReminder.reminderKind === "pesky"
+                    ? outlinerReminder.reminderIntervalMinutes ?? 1440
+                    : 60
+                );
                 setOutlinerReminder(null);
               }}
             >
-              {outlinerReminder.reminderKind === "pesky" ? "15 min" : "Later"}
+              {outlinerReminder.reminderKind === "pesky"
+                ? `Again in ${formatReminderInterval(outlinerReminder.reminderIntervalMinutes ?? 1440)}`
+                : "Later"}
             </button>
             <button
               type="button"

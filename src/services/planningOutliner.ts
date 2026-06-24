@@ -21,6 +21,7 @@ export type OutlineNode = {
   reminderAt: string | null;
   reminderDismissedAt: string | null;
   reminderKind: OutlineReminderKind;
+  reminderIntervalMinutes: number | null;
   linked: OutlineLink | null;
   draftNote: string;
   draftNoteUpdatedAt: string | null;
@@ -32,6 +33,7 @@ export type OutlinerReminder = {
   text: string;
   reminderAt: string;
   reminderKind: OutlineReminderKind;
+  reminderIntervalMinutes: number | null;
   path: string[];
 };
 
@@ -67,6 +69,7 @@ export const createOutlineNode = (text = "New note"): OutlineNode => ({
   reminderAt: null,
   reminderDismissedAt: null,
   reminderKind: "regular",
+  reminderIntervalMinutes: null,
   linked: null,
   draftNote: "",
   draftNoteUpdatedAt: null,
@@ -94,6 +97,7 @@ export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode =>
   reminderAt: node.reminderAt ?? null,
   reminderDismissedAt: node.reminderDismissedAt ?? null,
   reminderKind: node.reminderKind ?? "regular",
+  reminderIntervalMinutes: node.reminderIntervalMinutes ?? null,
   linked: node.linked
     ? {
         habitId: node.linked.habitId,
@@ -235,6 +239,7 @@ const findDueReminder = (
         text: nodeText,
         reminderAt: node.reminderAt,
         reminderKind: node.reminderKind,
+        reminderIntervalMinutes: node.reminderIntervalMinutes,
         path: nextPath,
       };
     }

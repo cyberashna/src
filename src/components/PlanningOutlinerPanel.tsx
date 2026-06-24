@@ -266,6 +266,13 @@ function formatNoteTimestamp(iso?: string) {
   });
 }
 
+const peskyIntervalOptions = [
+  { value: 15, label: "Every 15 min" },
+  { value: 60, label: "Hourly" },
+  { value: 1440, label: "Daily" },
+  { value: 10080, label: "Weekly" },
+];
+
 export default function PlanningOutlinerPanel({
   userId,
   onClose,
@@ -288,6 +295,7 @@ export default function PlanningOutlinerPanel({
   const [reminderNodeId, setReminderNodeId] = useState<string | null>(null);
   const [reminderValue, setReminderValue] = useState("");
   const [reminderKind, setReminderKind] = useState<OutlineReminderKind>("regular");
+  const [reminderIntervalMinutes, setReminderIntervalMinutes] = useState(1440);
   const [noteNodeId, setNoteNodeId] = useState<string | null>(null);
   const [linkedNotes, setLinkedNotes] = useState<Record<string, LinkedNoteState>>({});
   const [noteAttachTargets, setNoteAttachTargets] = useState<Record<string, string>>({});
@@ -522,6 +530,7 @@ export default function PlanningOutlinerPanel({
     setReminderNodeId((current) => current === node.id ? null : node.id);
     setReminderValue(toLocalDatetimeValue(node.reminderAt));
     setReminderKind(node.reminderKind);
+    setReminderIntervalMinutes(node.reminderIntervalMinutes ?? 1440);
   };
 
   const saveReminder = (nodeId: string) => {
@@ -530,6 +539,7 @@ export default function PlanningOutlinerPanel({
       reminderAt: new Date(reminderValue).toISOString(),
       reminderDismissedAt: null,
       reminderKind,
+      reminderIntervalMinutes: reminderKind === "pesky" ? reminderIntervalMinutes : null,
     });
     setReminderNodeId(null);
   };
@@ -539,6 +549,7 @@ export default function PlanningOutlinerPanel({
       reminderAt: null,
       reminderDismissedAt: null,
       reminderKind: "regular",
+      reminderIntervalMinutes: null,
     });
     setReminderNodeId(null);
   };
@@ -935,12 +946,29 @@ export default function PlanningOutlinerPanel({
               />
               <select
                 value={reminderKind}
-                onChange={(event) => setReminderKind(event.target.value as OutlineReminderKind)}
+                onChange={(event) => {
+                  const nextKind = event.target.value as OutlineReminderKind;
+                  setReminderKind(nextKind);
+                  if (nextKind === "pesky") setReminderIntervalMinutes((value) => value || 1440);
+                }}
                 title="Reminder type"
               >
                 <option value="regular">Regular</option>
                 <option value="pesky">Pesky</option>
               </select>
+              {reminderKind === "pesky" && (
+                <select
+                  value={reminderIntervalMinutes}
+                  onChange={(event) => setReminderIntervalMinutes(parseInt(event.target.value, 10))}
+                  title="How often pesky reminders come back"
+                >
+                  {peskyIntervalOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              )}
               <button type="button" onClick={() => saveReminder(node.id)}>
                 Save
               </button>

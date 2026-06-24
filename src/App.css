@@ -3830,6 +3830,7 @@ table.planner th.col-normal {
 .outliner-reminder-panel {
   background: #eff6ff;
   border-color: #bfdbfe;
+  flex-wrap: wrap;
 }
 
 .outliner-reminder-panel button {
