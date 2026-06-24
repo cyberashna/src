@@ -442,6 +442,7 @@ const App: React.FC = () => {
   const [smartWeeklyLoading, setSmartWeeklyLoading] = useState(false);
   const [smartWeeklyApplying, setSmartWeeklyApplying] = useState(false);
   const [smartWeeklySuggestions, setSmartWeeklySuggestions] = useState<SmartWeekSuggestion[]>([]);
+  const [mobileDayIndex, setMobileDayIndex] = useState(0);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -2915,7 +2916,7 @@ const App: React.FC = () => {
   };
 
   const handleSlotDrop = (
-    e: React.DragEvent<HTMLTableCellElement>,
+    e: React.DragEvent<HTMLElement>,
     dayIndex: number,
     timeIndex: number
   ) => {
@@ -3415,6 +3416,27 @@ const App: React.FC = () => {
     if (dayIndex < todayDayIndex) return expandedCols.has(dayIndex) ? "normal" : "past";
     return "future";
   }, [todayDayIndex, expandedCols, dayColWidths]);
+
+  useEffect(() => {
+    setMobileDayIndex(todayDayIndex >= 0 ? todayDayIndex : 0);
+  }, [todayDayIndex, weekOffset]);
+
+  const mobileSelectedDayIndex = Math.min(Math.max(mobileDayIndex, 0), days.length - 1);
+  const todayScheduledBlocks =
+    todayDayIndex >= 0
+      ? blocks
+          .filter(
+            (b) =>
+              b.location.type === "slot" &&
+              b.location.dayIndex === todayDayIndex &&
+              !(b.linkedBlockId && !b.isLinkedGroup)
+          )
+          .sort((a, b) => {
+            const aTime = a.location.type === "slot" ? a.location.timeIndex : 0;
+            const bTime = b.location.type === "slot" ? b.location.timeIndex : 0;
+            return aTime - bTime;
+          })
+      : [];
 
   if (loading) {
     return (
@@ -4581,7 +4603,290 @@ const App: React.FC = () => {
         <div className="col-resize-handle" onMouseDown={handleResizeMouseDown} />
 
         <div className="right-column">
-          <div className="card">
+          <div className="mobile-use-view">
+            <section className="mobile-today-card">
+              <div className="mobile-today-heading">
+                <span>Today</span>
+                <strong>
+                  {todayDayIndex >= 0 ? days[todayDayIndex] : "This week"}
+                  <small>{getCurrentWeekRange(weekOffset)}</small>
+                </strong>
+              </div>
+              <div className="mobile-quick-actions">
+                <button type="button" onClick={() => setShowRoutineNotes(true)}>
+                  Routines
+                </button>
+                <button type="button" onClick={() => setShowWorkoutLibrary(true)}>
+                  Workout
+                </button>
+                <button type="button" onClick={() => setShowPlanningOutliner(true)}>
+                  Outliner
+                </button>
+              </div>
+              <form
+                className="mobile-quick-add"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  createBlock(blockLabel, false, undefined, blockHashtag);
+                }}
+              >
+                <input
+                  type="text"
+                  placeholder="Quick block or note..."
+                  value={blockLabel}
+                  onChange={(event) => setBlockLabel(event.target.value)}
+                />
+                <button type="submit" disabled={dataLoading}>
+                  Add
+                </button>
+              </form>
+            </section>
+
+            <section className="mobile-section-card">
+              <div className="mobile-section-header">
+                <span>Today</span>
+                <strong>{todayScheduledBlocks.length} scheduled</strong>
+              </div>
+              {todayScheduledBlocks.length === 0 ? (
+                <div className="mobile-empty-state">No blocks scheduled today.</div>
+              ) : (
+                <div className="mobile-block-stack">
+                  {todayScheduledBlocks.map((block) => {
+                    const priority = dailyPriorities.find((p) => p.block_id === block.id);
+                    const timeLabel =
+                      block.location.type === "slot"
+                        ? viewMode === "buckets"
+                          ? bucketSlots[getBucketForHourlyIndex(block.location.timeIndex)] ?? ""
+                          : hourlySlots[block.location.timeIndex] ?? ""
+                        : "";
+                    return (
+                      <div key={`mobile-today-${block.id}`} className="mobile-block-row">
+                        <span className="mobile-time-chip">{timeLabel}</span>
+                        <BlockCard
+                          block={block}
+                          variant="slot"
+                          priorityRank={priority ? (priority.priority_rank as 1 | 2 | 3) : undefined}
+                          hasAdjacentBelow={hasAdjacentBlockBelow(block)}
+                          mealPopoverBlockId={mealPopoverBlockId}
+                          editingBlockId={editingBlockId}
+                          editBlockLabel={editBlockLabel}
+                          creditPopoverBlockId={creditPopoverBlockId}
+                          themes={themes}
+                          onSetMealPopover={setMealPopoverBlockId}
+                          onSetRenamingSession={(session) => setRenamingSession(session as SessionGroup)}
+                          onSetSessionRenameValue={setSessionRenameValue}
+                          onToggleCompletion={toggleBlockCompletion}
+                          onSetCreditPopover={setCreditPopoverBlockId}
+                          onSaveBlockCredits={saveBlockCredits}
+                          onSetEditingBlock={setEditingBlockId}
+                          onSetEditBlockLabel={setEditBlockLabel}
+                          onSaveBlockEdit={saveBlockEdit}
+                          onDoubleClick={handleBlockDoubleClickWithUndo}
+                          onDragStart={handleDragStart}
+                          onDragEnd={handleDragEnd}
+                          onDelete={deleteBlockWithUndo}
+                          isStrengthTraining={isStrengthTrainingBlock}
+                          isWorkoutBlock={isWorkoutBlock}
+                          onUpdateWorkout={updateWorkoutData}
+                          onSubmitWorkout={submitWorkout}
+                          exerciseLibrary={exerciseLibrary}
+                          blockExercises={blockExercises[block.id] ?? []}
+                          exerciseHistory={exerciseHistory}
+                          workoutRoutines={workoutRoutines}
+                          onAddExerciseToBlock={addExerciseToBlock}
+                          onUpdateBlockExercise={updateBlockExercise}
+                          onDeleteBlockExercise={deleteBlockExercise}
+                          onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                          onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                          onSaveBlockNote={saveBlockNote}
+                          onAddBlockTask={addBlockTask}
+                          onToggleBlockTask={toggleBlockTask}
+                          onDeleteBlockTask={deleteBlockTask}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            <section className="mobile-section-card mobile-day-planner-card">
+              <div className="mobile-section-header">
+                <span>Day planner</span>
+                <strong>{days[mobileSelectedDayIndex]}</strong>
+              </div>
+              <div className="mobile-week-controls">
+                <button type="button" onClick={() => setWeekOffset(weekOffset - 1)}>
+                  Prev week
+                </button>
+                <button type="button" onClick={() => setWeekOffset(0)} disabled={weekOffset === 0}>
+                  This week
+                </button>
+                <button type="button" onClick={() => setWeekOffset(weekOffset + 1)}>
+                  Next week
+                </button>
+              </div>
+              <div className="mobile-view-toggle">
+                <button
+                  type="button"
+                  className={viewMode === "hourly" ? "active" : ""}
+                  onClick={() => handleViewModeChange("hourly")}
+                >
+                  Hourly
+                </button>
+                <button
+                  type="button"
+                  className={viewMode === "buckets" ? "active" : ""}
+                  onClick={() => handleViewModeChange("buckets")}
+                >
+                  Buckets
+                </button>
+              </div>
+              <div className="mobile-day-tabs" role="tablist" aria-label="Choose day">
+                {days.map((day, index) => (
+                  <button
+                    key={day}
+                    type="button"
+                    className={`${index === mobileSelectedDayIndex ? "active" : ""} ${
+                      index === todayDayIndex ? "today" : ""
+                    }`}
+                    onClick={() => setMobileDayIndex(index)}
+                  >
+                    {day}
+                  </button>
+                ))}
+              </div>
+              <div className="mobile-day-slots">
+                {slotLabels.map((slotLabel, slotIndex) => {
+                  const slotBlocks = getBlocksForSlot(mobileSelectedDayIndex, slotIndex);
+                  const slotGhostBlocks = showGhostBlocks
+                    ? ghostBlocks.filter(
+                        (ghost) =>
+                          ghost.day_index === mobileSelectedDayIndex &&
+                          ghost.time_index === slotIndex
+                      )
+                    : [];
+                  return (
+                    <div
+                      key={`mobile-${mobileSelectedDayIndex}-${slotIndex}`}
+                      className="mobile-slot-card"
+                      onDragOver={handleSlotDragOver}
+                      onDragLeave={handleSlotDragLeave}
+                      onDrop={(event) => handleSlotDrop(event, mobileSelectedDayIndex, slotIndex)}
+                    >
+                      <div className="mobile-slot-label">{slotLabel}</div>
+                      <div className="mobile-slot-content">
+                        {slotBlocks.length === 0 && slotGhostBlocks.length === 0 && (
+                          <span className="mobile-slot-empty">Drop or add here</span>
+                        )}
+                        {slotBlocks.map((block) => {
+                          const priority = dailyPriorities.find((p) => p.block_id === block.id);
+                          return (
+                            <BlockCard
+                              key={block.id}
+                              block={block}
+                              variant="slot"
+                              priorityRank={priority ? (priority.priority_rank as 1 | 2 | 3) : undefined}
+                              hasAdjacentBelow={hasAdjacentBlockBelow(block)}
+                              mealPopoverBlockId={mealPopoverBlockId}
+                              editingBlockId={editingBlockId}
+                              editBlockLabel={editBlockLabel}
+                              creditPopoverBlockId={creditPopoverBlockId}
+                              themes={themes}
+                              onSetMealPopover={setMealPopoverBlockId}
+                              onSetRenamingSession={(session) => setRenamingSession(session as SessionGroup)}
+                              onSetSessionRenameValue={setSessionRenameValue}
+                              onToggleCompletion={toggleBlockCompletion}
+                              onSetCreditPopover={setCreditPopoverBlockId}
+                              onSaveBlockCredits={saveBlockCredits}
+                              onSetEditingBlock={setEditingBlockId}
+                              onSetEditBlockLabel={setEditBlockLabel}
+                              onSaveBlockEdit={saveBlockEdit}
+                              onDoubleClick={handleBlockDoubleClickWithUndo}
+                              onDragStart={handleDragStart}
+                              onDragEnd={handleDragEnd}
+                              onDelete={deleteBlockWithUndo}
+                              isStrengthTraining={isStrengthTrainingBlock}
+                              isWorkoutBlock={isWorkoutBlock}
+                              onUpdateWorkout={updateWorkoutData}
+                              onSubmitWorkout={submitWorkout}
+                              exerciseLibrary={exerciseLibrary}
+                              blockExercises={blockExercises[block.id] ?? []}
+                              exerciseHistory={exerciseHistory}
+                              workoutRoutines={workoutRoutines}
+                              onAddExerciseToBlock={addExerciseToBlock}
+                              onUpdateBlockExercise={updateBlockExercise}
+                              onDeleteBlockExercise={deleteBlockExercise}
+                              onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                              onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                              onSaveBlockNote={saveBlockNote}
+                              onAddBlockTask={addBlockTask}
+                              onToggleBlockTask={toggleBlockTask}
+                              onDeleteBlockTask={deleteBlockTask}
+                            />
+                          );
+                        })}
+                        {slotGhostBlocks.map((ghost, index) => (
+                          <GhostBlock
+                            key={`mobile-ghost-${mobileSelectedDayIndex}-${slotIndex}-${index}`}
+                            label={ghost.label}
+                            confidenceScore={ghost.confidence_score}
+                            onAccept={() => handleAcceptGhostBlock(ghost)}
+                            onDismiss={() => handleDismissGhostBlock(ghost)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="mobile-section-card">
+              <div className="mobile-section-header">
+                <span>Waiting</span>
+                <strong>{unscheduledBlocks.length} unscheduled</strong>
+              </div>
+              {unscheduledBlocks.length === 0 ? (
+                <div className="mobile-empty-state">No unscheduled blocks.</div>
+              ) : (
+                <div className="mobile-unscheduled-scroll">
+                  {unscheduledBlocks.map((block) => (
+                    <BlockCard
+                      key={`mobile-unscheduled-${block.id}`}
+                      block={block}
+                      variant="unscheduled"
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      onDelete={deleteBlockWithUndo}
+                      isStrengthTraining={isStrengthTrainingBlock}
+                      isWorkoutBlock={isWorkoutBlock}
+                      onUpdateWorkout={updateWorkoutData}
+                      onSubmitWorkout={submitWorkout}
+                      exerciseLibrary={exerciseLibrary}
+                      blockExercises={blockExercises[block.id] ?? []}
+                      exerciseHistory={exerciseHistory}
+                      workoutRoutines={workoutRoutines}
+                      onAddExerciseToBlock={addExerciseToBlock}
+                      onUpdateBlockExercise={updateBlockExercise}
+                      onDeleteBlockExercise={deleteBlockExercise}
+                      onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                      onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                      themes={themes}
+                      mealPopoverBlockId={mealPopoverBlockId}
+                      onSetMealPopover={setMealPopoverBlockId}
+                      onSaveBlockNote={saveBlockNote}
+                      onAddBlockTask={addBlockTask}
+                      onToggleBlockTask={toggleBlockTask}
+                      onDeleteBlockTask={deleteBlockTask}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+
+          <div className="card planner-controls-card">
             <div className="top-row">
               <h2>Weekly Planner</h2>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -4784,7 +5089,7 @@ const App: React.FC = () => {
             )}
           </div>
 
-          <div className="planner-wrapper">
+          <div className="planner-wrapper desktop-planner-wrapper">
             <table className="planner">
               <colgroup>
                 <col style={{ width: "60px" }} />
