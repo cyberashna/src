@@ -301,6 +301,8 @@ export default function PlanningOutlinerPanel({
   const [noteAttachTargets, setNoteAttachTargets] = useState<Record<string, string>>({});
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null);
+  const [actionMenuNodeId, setActionMenuNodeId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedThemeId, setSelectedThemeId] = useState("");
   const noteSaveTimers = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
@@ -345,6 +347,7 @@ export default function PlanningOutlinerPanel({
   const focusNode = focusResult?.node ?? null;
   const focusPath = focusResult?.path ?? [];
   const visibleNodes = focusNode ? focusNode.children : nodes;
+  const normalizedSearch = searchQuery.trim().toLowerCase();
   const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? themes[0];
   const boardHabitIdSet = useMemo(() => new Set(boardHabitIds), [boardHabitIds]);
   const attachTargets = useMemo<AttachTarget[]>(
@@ -369,11 +372,47 @@ export default function PlanningOutlinerPanel({
     [themes]
   );
 
+  const displayedNodes = useMemo(() => {
+    if (!normalizedSearch) return visibleNodes;
+
+    const nodeMatchesSearch = (node: OutlineNode) => {
+      const linkedNote = linkedNotes[node.id]?.content ?? "";
+      const searchable = [
+        node.text,
+        node.tag,
+        node.frequency,
+        node.linked?.label,
+        node.linked?.habitId ? "linked habit" : "",
+        node.linked?.themeId && !node.linked?.habitId ? "linked theme" : "",
+        node.taskDone ? "done completed" : "",
+        node.reminderAt ? formatReminder(node.reminderAt) : "",
+        node.reminderKind,
+        node.draftNote,
+        linkedNote,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return searchable.includes(normalizedSearch);
+    };
+
+    const filterNodes = (items: OutlineNode[]): OutlineNode[] =>
+      items
+        .map((node) => {
+          const children = filterNodes(node.children);
+          return nodeMatchesSearch(node) || children.length > 0 ? { ...node, children } : null;
+        })
+        .filter((node): node is OutlineNode => !!node);
+
+    return filterNodes(visibleNodes);
+  }, [visibleNodes, normalizedSearch, linkedNotes]);
+
   const visibleCount = useMemo(() => {
     const count = (items: OutlineNode[]): number =>
       items.reduce((total, item) => total + 1 + count(item.children), 0);
-    return count(visibleNodes);
-  }, [visibleNodes]);
+    return count(displayedNodes);
+  }, [displayedNodes]);
 
   const updateAndSave = (updater: (current: OutlineNode[]) => OutlineNode[]) => {
     setNodes((current) => updater(cloneOutlineNodes(current)));
@@ -713,7 +752,7 @@ export default function PlanningOutlinerPanel({
     setDragOverNodeId(null);
   };
 
-  const renderRows = (items: OutlineNode[], depth = 0): JSX.Element[] =>
+  const renderRows = (items: OutlineNode[], depth = 0, forceExpanded = false): JSX.Element[] =>
     items.map((node, index) => {
       const hasChildren = node.children.length > 0;
       const isHabitLinked = !!node.linked?.habitId;
@@ -835,15 +874,6 @@ export default function PlanningOutlinerPanel({
               </div>
             )}
             <div className="outliner-row-actions">
-              {node.linked && (
-                <button
-                  type="button"
-                  onClick={() => onOpenLinked(node.linked!)}
-                  title="Open the linked habit or theme"
-                >
-                  Open
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => openRowNote(node)}
@@ -909,23 +939,107 @@ export default function PlanningOutlinerPanel({
               >
                 + Next
               </button>
-              {index > 0 && (
+              <div className="outliner-more-wrap">
                 <button
                   type="button"
-                  onClick={() => nestPreviousUnder(node.id)}
-                  title="Pull the previous row underneath this row"
+                  className={`outliner-more-btn ${actionMenuNodeId === node.id ? "outliner-more-btn--active" : ""}`}
+                  onClick={() => setActionMenuNodeId((current) => (current === node.id ? null : node.id))}
+                  title="More row actions"
+                  aria-label="More row actions"
                 >
-                  Nest prev
+                  ...
                 </button>
-              )}
-              <button
-                type="button"
-                className="outliner-delete"
-                onClick={() => deleteAndRecoverFocus(node.id)}
-                title="Delete row"
-              >
-                x
-              </button>
+                {actionMenuNodeId === node.id && (
+                  <div className="outliner-action-menu">
+                    {node.linked && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenLinked(node.linked!);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Open linked
+                      </button>
+                    )}
+                    {isHabitLinked && !isOnBoard && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addBoardForLinkedHabit(node);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Add to board
+                      </button>
+                    )}
+                    {node.tag === "task" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          convertToBlock(node);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Turn into block
+                      </button>
+                    )}
+                    {node.tag === "habit" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHabitConvertNodeId((current) => (current === node.id ? null : node.id));
+                          setSelectedThemeId((current) => current || themes[0]?.id || "");
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Make real habit
+                      </button>
+                    )}
+                    {canMakeTheme && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          convertToTheme(node);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Make theme
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openReminderPanel(node);
+                        setActionMenuNodeId(null);
+                      }}
+                    >
+                      Remind me
+                    </button>
+                    {!normalizedSearch && index > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          nestPreviousUnder(node.id);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Nest previous row
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="outliner-delete"
+                      onClick={() => {
+                        deleteAndRecoverFocus(node.id);
+                        setActionMenuNodeId(null);
+                      }}
+                    >
+                      Delete row
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           {node.reminderAt && (
@@ -1087,7 +1201,7 @@ export default function PlanningOutlinerPanel({
               )}
             </div>
           )}
-          {hasChildren && !node.collapsed && renderRows(node.children, depth + 1)}
+          {hasChildren && (forceExpanded || !node.collapsed) && renderRows(node.children, depth + 1, forceExpanded)}
         </div>
       );
     });
@@ -1115,6 +1229,20 @@ export default function PlanningOutlinerPanel({
         ))}
       </div>
 
+      <div className="outliner-search-row">
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="Search rows, notes, tasks, habits, reminders..."
+        />
+        {searchQuery && (
+          <button type="button" onClick={() => setSearchQuery("")}>
+            Clear
+          </button>
+        )}
+      </div>
+
       {focusNode && (
         <div className="outliner-focus-card">
           <span>Focused on</span>
@@ -1123,15 +1251,19 @@ export default function PlanningOutlinerPanel({
       )}
 
       <div className="outliner-body">
-        {visibleNodes.length === 0 ? (
-          <div className="outliner-empty">Add a row to start planning at this level.</div>
+        {displayedNodes.length === 0 ? (
+          <div className="outliner-empty">
+            {normalizedSearch ? "No matching rows." : "Add a row to start planning at this level."}
+          </div>
         ) : (
-          renderRows(visibleNodes)
+          renderRows(displayedNodes, 0, !!normalizedSearch)
         )}
       </div>
 
       <div className="outliner-footer">
-        <span>{visibleCount} row{visibleCount === 1 ? "" : "s"} in view</span>
+        <span>
+          {visibleCount} row{visibleCount === 1 ? "" : "s"} {normalizedSearch ? "matching" : "in view"}
+        </span>
         <button type="button" onClick={addRootOrFocusedChild}>
           + Add row here
         </button>

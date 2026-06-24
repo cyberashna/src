@@ -2,18 +2,36 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createRoutineId,
   loadRoutineNotes,
+  routineCategoryOptions,
   saveRoutineNotes,
   type RoutineTab,
 } from "../services/routineNotes";
+
+type WorkoutRoutineSummary = {
+  id: string;
+  name: string;
+  exercises: unknown[];
+};
 
 type Props = {
   userId: string;
   todayDate: string;
   onClose: () => void;
   onCreateBlock: (label: string) => Promise<void>;
+  onCreateRoutineBlock: (routine: RoutineTab) => Promise<void>;
+  workoutRoutines?: WorkoutRoutineSummary[];
+  onCreateWorkoutFromRoutine?: (routineId: string) => Promise<void>;
 };
 
-export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreateBlock }: Props) {
+export default function RoutineNotesPopup({
+  userId,
+  todayDate,
+  onClose,
+  onCreateBlock,
+  onCreateRoutineBlock,
+  workoutRoutines = [],
+  onCreateWorkoutFromRoutine,
+}: Props) {
   const [routines, setRoutines] = useState<RoutineTab[]>([]);
   const [activeRoutineId, setActiveRoutineId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -28,6 +46,13 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
   const activeRoutine = useMemo(
     () => routines.find((routine) => routine.id === activeRoutineId) ?? null,
     [routines, activeRoutineId]
+  );
+  const linkedWorkoutRoutine = useMemo(
+    () =>
+      activeRoutine?.linkedWorkoutRoutineId
+        ? workoutRoutines.find((routine) => routine.id === activeRoutine.linkedWorkoutRoutineId) ?? null
+        : null,
+    [activeRoutine, workoutRoutines]
   );
   const completedItemIds = new Set(activeRoutine?.completedByDate[todayDate] ?? []);
   const openItems = activeRoutine?.items.filter((item) => !completedItemIds.has(item.id)) ?? [];
@@ -68,9 +93,11 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
     const routine: RoutineTab = {
       id: createRoutineId("routine"),
       name,
+      category: "custom",
       notes: "",
       items: [],
       completedByDate: {},
+      linkedWorkoutRoutineId: null,
     };
     saveRoutines([...routines, routine]);
     setActiveRoutineId(routine.id);
@@ -146,6 +173,19 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
     }
   };
 
+  const createRoutineBlock = async () => {
+    if (!activeRoutine) return;
+    await onCreateRoutineBlock(activeRoutine);
+  };
+
+  const linkWorkoutRoutine = (workoutRoutineId: string) => {
+    if (!activeRoutine) return;
+    updateRoutine(activeRoutine.id, {
+      linkedWorkoutRoutineId: workoutRoutineId || null,
+      category: workoutRoutineId ? "workout" : activeRoutine.category,
+    });
+  };
+
   return (
     <div className="routine-notes-panel" ref={panelRef}>
       <div className="routine-notes-header">
@@ -182,7 +222,7 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
         {routines.map((routine) => (
           <button
             key={routine.id}
-            className={`routine-tab ${routine.id === activeRoutineId ? "routine-tab--active" : ""}`}
+            className={`routine-tab routine-tab--${routine.category} ${routine.id === activeRoutineId ? "routine-tab--active" : ""}`}
             onClick={() => setActiveRoutineId(routine.id)}
           >
             {editMode && editingRoutineId === routine.id ? (
@@ -238,6 +278,28 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
       {activeRoutine ? (
         <>
           <div className="routine-notes-body">
+            <div className="routine-meta-row">
+              <span className={`routine-category-badge routine-category-badge--${activeRoutine.category}`}>
+                {routineCategoryOptions.find((option) => option.value === activeRoutine.category)?.label ?? "Custom"}
+              </span>
+              <select
+                className="routine-category-select"
+                value={activeRoutine.category}
+                onChange={(event) =>
+                  updateRoutine(activeRoutine.id, {
+                    category: event.target.value as RoutineTab["category"],
+                  })
+                }
+                title="Routine type"
+              >
+                {routineCategoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <label className="routine-section-label">Notes</label>
             <textarea
               className="routine-note-box"
@@ -303,6 +365,48 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
               })}
             </div>
 
+            {activeRoutine.category === "workout" && (
+              <div className="routine-workout-link">
+                <div className="routine-checklist-header">
+                  <span className="routine-section-label">Workout routine</span>
+                  {linkedWorkoutRoutine && (
+                    <span>
+                      {linkedWorkoutRoutine.exercises.length} exercise
+                      {linkedWorkoutRoutine.exercises.length === 1 ? "" : "s"}
+                    </span>
+                  )}
+                </div>
+                {workoutRoutines.length === 0 ? (
+                  <div className="routine-empty">Save a workout routine from the library first.</div>
+                ) : (
+                  <div className="routine-workout-controls">
+                    <select
+                      value={activeRoutine.linkedWorkoutRoutineId ?? ""}
+                      onChange={(event) => linkWorkoutRoutine(event.target.value)}
+                    >
+                      <option value="">No workout linked</option>
+                      {workoutRoutines.map((routine) => (
+                        <option key={routine.id} value={routine.id}>
+                          {routine.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (linkedWorkoutRoutine && onCreateWorkoutFromRoutine) {
+                          onCreateWorkoutFromRoutine(linkedWorkoutRoutine.id);
+                        }
+                      }}
+                      disabled={!linkedWorkoutRoutine || !onCreateWorkoutFromRoutine}
+                    >
+                      Add workout block
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {editMode && (
               <div className="routine-add-item-row">
                 {addingItem ? (
@@ -334,13 +438,22 @@ export default function RoutineNotesPopup({ userId, todayDate, onClose, onCreate
 
           <div className="routine-notes-footer">
             <span>Kept off-calendar until you add it.</span>
-            <button
-              type="button"
-              onClick={addOpenItemsToBlocks}
-              disabled={openItems.length === 0}
-            >
-              Add open items
-            </button>
+            <div className="routine-footer-actions">
+              <button
+                type="button"
+                onClick={createRoutineBlock}
+                disabled={activeRoutine.items.length === 0 && !activeRoutine.notes.trim()}
+              >
+                Add routine to planner
+              </button>
+              <button
+                type="button"
+                onClick={addOpenItemsToBlocks}
+                disabled={openItems.length === 0}
+              >
+                Add open items
+              </button>
+            </div>
           </div>
         </>
       ) : (

@@ -28,6 +28,7 @@ import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import RoutineNotesPopup from "./components/RoutineNotesPopup";
+import type { RoutineTab } from "./services/routineNotes";
 import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
 import WorkoutLibraryPanel from "./components/WorkoutLibraryPanel";
 import BlockCard from "./components/BlockCard";
@@ -2408,6 +2409,45 @@ const App: React.FC = () => {
       );
     } catch (error) {
       console.error("Error adding block task:", error);
+    }
+  };
+
+  const createRoutineBlockFromRoutine = async (routine: RoutineTab) => {
+    if (!user) return;
+
+    const blockId = await createBlock(
+      routine.name.trim() || "Routine",
+      false,
+      undefined,
+      routine.category === "custom" ? "routine" : routine.category
+    );
+    if (!blockId) return;
+
+    try {
+      const note = routine.notes.trim();
+      if (note) {
+        await saveBlockNote(blockId, note);
+      }
+
+      const taskLabels = routine.items
+        .map((item) => item.label.trim())
+        .filter((label) => label.length > 0);
+      const createdTasks = await Promise.all(
+        taskLabels.map((label, index) => database.blockTasks.create(user.id, blockId, label, index))
+      );
+
+      if (createdTasks.length > 0) {
+        setBlocks((prev) =>
+          prev.map((b) =>
+            b.id === blockId ? { ...b, blockTasks: [...(b.blockTasks ?? []), ...createdTasks] } : b
+          )
+        );
+      }
+
+      showToast("Routine added to unscheduled", "success");
+    } catch (error) {
+      console.error("Error creating routine block:", error);
+      showToast("Routine block added, but the checklist did not finish", "error");
     }
   };
 
@@ -5089,6 +5129,9 @@ const App: React.FC = () => {
             const id = await createBlock(label);
             if (id) showToast("Routine item added to unscheduled", "success");
           }}
+          onCreateRoutineBlock={createRoutineBlockFromRoutine}
+          workoutRoutines={workoutRoutines}
+          onCreateWorkoutFromRoutine={createWorkoutBlockFromRoutine}
         />
       )}
 
