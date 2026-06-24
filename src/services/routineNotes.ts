@@ -23,46 +23,63 @@ export type RoutineTab = {
   linkedWorkoutRoutineId?: string | null;
 };
 
-export const routineCategoryOptions: Array<{ value: RoutineCategory; label: string }> = [
-  { value: "morning", label: "Morning" },
-  { value: "evening", label: "Evening" },
-  { value: "workout", label: "Workout" },
-  { value: "reset", label: "Reset" },
-  { value: "beauty", label: "Beauty" },
-  { value: "meals", label: "Meals" },
-  { value: "errands", label: "Errands" },
-  { value: "custom", label: "Custom" },
-];
-
 export const createRoutineId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-const inferRoutineCategory = (name = ""): RoutineCategory => {
-  const normalized = name.toLowerCase();
-  if (normalized.includes("morning")) return "morning";
-  if (normalized.includes("evening") || normalized.includes("night")) return "evening";
-  if (normalized.includes("workout") || normalized.includes("exercise") || normalized.includes("training")) return "workout";
-  if (normalized.includes("reset") || normalized.includes("clean")) return "reset";
-  if (normalized.includes("beauty") || normalized.includes("skin")) return "beauty";
-  if (normalized.includes("meal") || normalized.includes("food")) return "meals";
-  if (normalized.includes("errand")) return "errands";
+export const inferRoutineCategory = (text = ""): RoutineCategory => {
+  const normalized = text.toLowerCase();
+  if (/\b(morning|am)\b/.test(normalized)) return "morning";
+  if (/\b(evening|night|pm|shutdown)\b/.test(normalized)) return "evening";
+  if (
+    /\b(workout|exercise|training|strength|lift|lifting|upper|lower|full body|mobility|core|cardio|glute|leg day|push|pull|squat|hinge)\b/.test(
+      normalized
+    )
+  ) {
+    return "workout";
+  }
+  if (/\b(reset|clean|tidy|organize|kitchen)\b/.test(normalized)) return "reset";
+  if (/\b(beauty|skin|skincare|hair|makeup)\b/.test(normalized)) return "beauty";
+  if (/\b(meal|food|breakfast|lunch|dinner|prep|cook|groceries)\b/.test(normalized)) return "meals";
+  if (/\b(errand|appointment|pickup|drop off|return)\b/.test(normalized)) return "errands";
   return "custom";
 };
 
-export const normalizeRoutine = (routine: Partial<RoutineTab>): RoutineTab => ({
-  id: routine.id ?? createRoutineId("routine"),
-  name: routine.name ?? "Routine",
-  category: routine.category ?? inferRoutineCategory(routine.name),
-  notes: routine.notes ?? "",
-  items: Array.isArray(routine.items)
+export const inferRoutineCategoryFromRoutine = (routine: Partial<RoutineTab>): RoutineCategory => {
+  if (routine.linkedWorkoutRoutineId) return "workout";
+
+  const nameCategory = inferRoutineCategory(routine.name);
+  if (nameCategory !== "custom") return nameCategory;
+
+  const contentText = [
+    routine.notes,
+    ...(Array.isArray(routine.items) ? routine.items.map((item) => item.label) : []),
+  ].join(" ");
+  return inferRoutineCategory(contentText);
+};
+
+export const normalizeRoutine = (routine: Partial<RoutineTab>): RoutineTab => {
+  const normalizedItems = Array.isArray(routine.items)
     ? routine.items.map((item) => ({
         id: item.id ?? createRoutineId("routine-item"),
         label: item.label ?? "",
       }))
-    : [],
-  completedByDate: routine.completedByDate ?? {},
-  linkedWorkoutRoutineId: routine.linkedWorkoutRoutineId ?? null,
-});
+    : [];
+
+  const normalizedRoutine: RoutineTab = {
+    id: routine.id ?? createRoutineId("routine"),
+    name: routine.name ?? "Routine",
+    category: "custom",
+    notes: routine.notes ?? "",
+    items: normalizedItems,
+    completedByDate: routine.completedByDate ?? {},
+    linkedWorkoutRoutineId: routine.linkedWorkoutRoutineId ?? null,
+  };
+
+  return {
+    ...normalizedRoutine,
+    category: inferRoutineCategoryFromRoutine(normalizedRoutine),
+  };
+};
 
 export const defaultRoutines = (): RoutineTab[] => [
   {
