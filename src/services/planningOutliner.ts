@@ -1,3 +1,5 @@
+import { supabase } from "../lib/supabase";
+
 export type OutlineTag = "note" | "task" | "habit";
 export type OutlineFrequency = "daily" | "weekly" | "monthly" | "none";
 export type OutlineReminderKind = "regular" | "pesky";
@@ -53,7 +55,7 @@ export type AddHabitToOutlinerResult = {
   nodes: OutlineNode[];
 };
 
-const storageKey = (userId: string) => `planning-outliner:${userId}`;
+const legacyStorageKey = (userId: string) => `planning-outliner:${userId}`;
 
 export const createOutlineId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -115,19 +117,44 @@ export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode =>
 export const cloneOutlineNodes = (nodes: OutlineNode[]): OutlineNode[] =>
   nodes.map((node) => ({ ...node, children: cloneOutlineNodes(node.children) }));
 
-export const loadPlanningOutliner = (userId: string, seedDefault = true): OutlineNode[] => {
+const parseLegacyLocalStorage = (userId: string): OutlineNode[] | null => {
   try {
-    const saved = localStorage.getItem(storageKey(userId));
-    if (!saved) return seedDefault ? defaultNodes() : [];
+    const saved = localStorage.getItem(legacyStorageKey(userId));
+    if (!saved) return null;
     const parsed = JSON.parse(saved) as Partial<OutlineNode>[];
-    return Array.isArray(parsed) ? parsed.map(normalizeOutlineNode) : seedDefault ? defaultNodes() : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeOutlineNode) : null;
   } catch {
-    return seedDefault ? defaultNodes() : [];
+    return null;
   }
 };
 
-export const savePlanningOutliner = (userId: string, nodes: OutlineNode[]) => {
-  localStorage.setItem(storageKey(userId), JSON.stringify(nodes));
+export const loadPlanningOutliner = async (userId: string, seedDefault = true): Promise<OutlineNode[]> => {
+  const { data, error } = await supabase
+    .from("planning_outliner_data")
+    .select("nodes")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!error && data) {
+    const parsed = data.nodes as Partial<OutlineNode>[];
+    return Array.isArray(parsed) ? parsed.map(normalizeOutlineNode) : seedDefault ? defaultNodes() : [];
+  }
+
+  // First load — migrate from localStorage if present
+  const legacy = parseLegacyLocalStorage(userId);
+  if (legacy !== null) {
+    await savePlanningOutliner(userId, legacy);
+    localStorage.removeItem(legacyStorageKey(userId));
+    return legacy;
+  }
+
+  return seedDefault ? defaultNodes() : [];
+};
+
+export const savePlanningOutliner = async (userId: string, nodes: OutlineNode[]): Promise<void> => {
+  await supabase
+    .from("planning_outliner_data")
+    .upsert({ user_id: userId, nodes, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
 };
 
 const findNodeByLinkedHabit = (nodes: OutlineNode[], habitId: string): OutlineNode | null => {
@@ -136,7 +163,6 @@ const findNodeByLinkedHabit = (nodes: OutlineNode[], habitId: string): OutlineNo
     const child = findNodeByLinkedHabit(node.children, habitId);
     if (child) return child;
   }
-
   return null;
 };
 
@@ -146,7 +172,6 @@ const findNodeByLinkedTheme = (nodes: OutlineNode[], themeId: string): OutlineNo
     const child = findNodeByLinkedTheme(node.children, themeId);
     if (child) return child;
   }
-
   return null;
 };
 
@@ -156,20 +181,15 @@ const appendChildToNode = (nodes: OutlineNode[], parentId: string, child: Outlin
     return { ...node, children: appendChildToNode(node.children, parentId, child) };
   });
 
-export const addHabitToPlanningOutliner = (
+export const addHabitToPlanningOutliner = async (
   userId: string,
   habit: AddHabitToOutlinerInput
-): AddHabitToOutlinerResult => {
-  const nodes = loadPlanningOutliner(userId, false);
+): Promise<AddHabitToOutlinerResult> => {
+  const nodes = await loadPlanningOutliner(userId, false);
   const existingHabitNode = findNodeByLinkedHabit(nodes, habit.habitId);
 
   if (existingHabitNode) {
-    return {
-      added: false,
-      existing: true,
-      nodeId: existingHabitNode.id,
-      nodes,
-    };
+    return { added: false, existing: true, nodeId: existingHabitNode.id, nodes };
   }
 
   const habitNode: OutlineNode = {
@@ -192,22 +212,13 @@ export const addHabitToPlanningOutliner = (
         ...nodes,
         {
           ...createOutlineNode(habit.themeName),
-          linked: {
-            themeId: habit.themeId,
-            label: habit.themeName,
-            renameDeclinedFor: null,
-          },
+          linked: { themeId: habit.themeId, label: habit.themeName, renameDeclinedFor: null },
           children: [habitNode],
         },
       ];
 
-  savePlanningOutliner(userId, nextNodes);
-  return {
-    added: true,
-    existing: false,
-    nodeId: habitNode.id,
-    nodes: nextNodes,
-  };
+  await savePlanningOutliner(userId, nextNodes);
+  return { added: true, existing: false, nodeId: habitNode.id, nodes: nextNodes };
 };
 
 export function updateOutlineNode(
@@ -243,40 +254,41 @@ const findDueReminder = (
         path: nextPath,
       };
     }
-
     const childReminder = findDueReminder(node.children, now, nextPath);
     if (childReminder) return childReminder;
   }
-
   return null;
 };
 
-export const getDueOutlinerReminder = (userId: string, now = new Date()) =>
-  findDueReminder(loadPlanningOutliner(userId, false), now);
+export const getDueOutlinerReminder = async (userId: string, now = new Date()): Promise<OutlinerReminder | null> =>
+  findDueReminder(await loadPlanningOutliner(userId, false), now);
 
-export const dismissOutlinerReminder = (userId: string, nodeId: string) => {
-  const next = updateOutlineNode(loadPlanningOutliner(userId, false), nodeId, (node) => ({
+export const dismissOutlinerReminder = async (userId: string, nodeId: string): Promise<void> => {
+  const nodes = await loadPlanningOutliner(userId, false);
+  const next = updateOutlineNode(nodes, nodeId, (node) => ({
     ...node,
     reminderDismissedAt: new Date().toISOString(),
   }));
-  savePlanningOutliner(userId, next);
+  await savePlanningOutliner(userId, next);
 };
 
-export const snoozeOutlinerReminder = (userId: string, nodeId: string, minutes: number) => {
+export const snoozeOutlinerReminder = async (userId: string, nodeId: string, minutes: number): Promise<void> => {
   const reminderAt = new Date(Date.now() + minutes * 60000).toISOString();
-  const next = updateOutlineNode(loadPlanningOutliner(userId, false), nodeId, (node) => ({
+  const nodes = await loadPlanningOutliner(userId, false);
+  const next = updateOutlineNode(nodes, nodeId, (node) => ({
     ...node,
     reminderAt,
     reminderDismissedAt: null,
   }));
-  savePlanningOutliner(userId, next);
+  await savePlanningOutliner(userId, next);
 };
 
-export const clearOutlinerReminder = (userId: string, nodeId: string) => {
-  const next = updateOutlineNode(loadPlanningOutliner(userId, false), nodeId, (node) => ({
+export const clearOutlinerReminder = async (userId: string, nodeId: string): Promise<void> => {
+  const nodes = await loadPlanningOutliner(userId, false);
+  const next = updateOutlineNode(nodes, nodeId, (node) => ({
     ...node,
     reminderAt: null,
     reminderDismissedAt: null,
   }));
-  savePlanningOutliner(userId, next);
+  await savePlanningOutliner(userId, next);
 };

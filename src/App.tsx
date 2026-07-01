@@ -470,7 +470,9 @@ const App: React.FC = () => {
 
   const checkOutlinerReminders = useCallback(() => {
     if (!user) return;
-    setOutlinerReminder((current) => current ?? getDueOutlinerReminder(user.id));
+    getDueOutlinerReminder(user.id).then((reminder) => {
+      setOutlinerReminder((current) => current ?? reminder);
+    });
   }, [user]);
 
   const showConfirm = useCallback((message: string, onConfirm: () => void, options?: { confirmLabel?: string; cancelLabel?: string; destructive?: boolean }) => {
@@ -1715,10 +1717,10 @@ const App: React.FC = () => {
     return null;
   };
 
-  const addHabitViewToOutliner = (habit: Habit, theme: Theme) => {
+  const addHabitViewToOutliner = async (habit: Habit, theme: Theme) => {
     if (!user) return;
 
-    const result = addHabitToPlanningOutliner(user.id, {
+    const result = await addHabitToPlanningOutliner(user.id, {
       habitId: habit.id,
       habitName: habit.name,
       themeId: theme.id,

@@ -288,7 +288,8 @@ export default function PlanningOutlinerPanel({
   onSaveLinkedNote,
   boardHabitIds,
 }: Props) {
-  const [nodes, setNodes] = useState<OutlineNode[]>(() => loadPlanningOutliner(userId));
+  const [nodes, setNodes] = useState<OutlineNode[]>([]);
+  const [nodesLoaded, setNodesLoaded] = useState(false);
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [pendingFocusNodeId, setPendingFocusNodeId] = useState<string | null>(null);
   const [habitConvertNodeId, setHabitConvertNodeId] = useState<string | null>(null);
@@ -309,13 +310,18 @@ export default function PlanningOutlinerPanel({
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => {
-    setNodes(loadPlanningOutliner(userId));
+    setNodesLoaded(false);
     setFocusNodeId(null);
+    loadPlanningOutliner(userId).then((loaded) => {
+      setNodes(loaded);
+      setNodesLoaded(true);
+    });
   }, [userId]);
 
   useEffect(() => {
+    if (!nodesLoaded) return;
     savePlanningOutliner(userId, nodes);
-  }, [nodes, userId]);
+  }, [nodes, userId, nodesLoaded]);
 
   useEffect(() => {
     return () => {
