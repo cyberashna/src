@@ -303,6 +303,7 @@ export default function PlanningOutlinerPanel({
   const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null);
   const [actionMenuNodeId, setActionMenuNodeId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [reviewOnly, setReviewOnly] = useState(false);
   const [selectedThemeId, setSelectedThemeId] = useState("");
   const noteSaveTimers = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
@@ -373,8 +374,6 @@ export default function PlanningOutlinerPanel({
   );
 
   const displayedNodes = useMemo(() => {
-    if (!normalizedSearch) return visibleNodes;
-
     const nodeMatchesSearch = (node: OutlineNode) => {
       const linkedNote = linkedNotes[node.id]?.content ?? "";
       const searchable = [
@@ -397,6 +396,16 @@ export default function PlanningOutlinerPanel({
       return searchable.includes(normalizedSearch);
     };
 
+    const nodeNeedsReview = (node: OutlineNode) =>
+      Boolean(
+        node.reminderAt ||
+          node.tag === "task" ||
+          node.tag === "habit" ||
+          node.linked ||
+          node.draftNote.trim() ||
+          linkedNotes[node.id]?.content.trim()
+      );
+
     const filterNodes = (items: OutlineNode[]): OutlineNode[] =>
       items
         .map((node) => {
@@ -405,14 +414,30 @@ export default function PlanningOutlinerPanel({
         })
         .filter((node): node is OutlineNode => !!node);
 
-    return filterNodes(visibleNodes);
-  }, [visibleNodes, normalizedSearch, linkedNotes]);
+    const filterReviewNodes = (items: OutlineNode[]): OutlineNode[] =>
+      items
+        .map((node) => {
+          const children = filterReviewNodes(node.children);
+          return nodeNeedsReview(node) || children.length > 0 ? { ...node, children } : null;
+        })
+        .filter((node): node is OutlineNode => !!node);
+
+    const baseNodes = reviewOnly ? filterReviewNodes(visibleNodes) : visibleNodes;
+    return normalizedSearch ? filterNodes(baseNodes) : baseNodes;
+  }, [visibleNodes, normalizedSearch, linkedNotes, reviewOnly]);
 
   const visibleCount = useMemo(() => {
     const count = (items: OutlineNode[]): number =>
       items.reduce((total, item) => total + 1 + count(item.children), 0);
     return count(displayedNodes);
   }, [displayedNodes]);
+  const filteredViewActive = !!focusNode || !!normalizedSearch || reviewOnly;
+
+  const showAllRows = () => {
+    setFocusNodeId(null);
+    setSearchQuery("");
+    setReviewOnly(false);
+  };
 
   const updateAndSave = (updater: (current: OutlineNode[]) => OutlineNode[]) => {
     setNodes((current) => updater(cloneOutlineNodes(current)));
@@ -1236,12 +1261,34 @@ export default function PlanningOutlinerPanel({
           onChange={(event) => setSearchQuery(event.target.value)}
           placeholder="Search rows, notes, tasks, habits, reminders..."
         />
+        <button
+          type="button"
+          className={`outliner-review-toggle ${reviewOnly ? "active" : ""}`}
+          onClick={() => setReviewOnly((value) => !value)}
+        >
+          {reviewOnly ? "Review on" : "Review"}
+        </button>
         {searchQuery && (
           <button type="button" onClick={() => setSearchQuery("")}>
             Clear
           </button>
         )}
       </div>
+
+      {filteredViewActive && (
+        <div className="outliner-filter-notice">
+          <span>
+            {reviewOnly
+              ? "Review is showing only rows with reminders, tasks, habits, links, or notes."
+              : normalizedSearch
+                ? "Search is hiding rows that do not match."
+                : "You are focused inside one row."}
+          </span>
+          <button type="button" onClick={showAllRows}>
+            Show all
+          </button>
+        </div>
+      )}
 
       {focusNode && (
         <div className="outliner-focus-card">
@@ -1253,16 +1300,20 @@ export default function PlanningOutlinerPanel({
       <div className="outliner-body">
         {displayedNodes.length === 0 ? (
           <div className="outliner-empty">
-            {normalizedSearch ? "No matching rows." : "Add a row to start planning at this level."}
+            {normalizedSearch
+              ? "No matching rows."
+              : reviewOnly
+                ? "Nothing needs review at this level."
+                : "Add a row to start planning at this level."}
           </div>
         ) : (
-          renderRows(displayedNodes, 0, !!normalizedSearch)
+          renderRows(displayedNodes, 0, !!normalizedSearch || reviewOnly)
         )}
       </div>
 
       <div className="outliner-footer">
         <span>
-          {visibleCount} row{visibleCount === 1 ? "" : "s"} {normalizedSearch ? "matching" : "in view"}
+          {visibleCount} row{visibleCount === 1 ? "" : "s"} {normalizedSearch ? "matching" : reviewOnly ? "to review" : "in view"}
         </span>
         <button type="button" onClick={addRootOrFocusedChild}>
           + Add row here

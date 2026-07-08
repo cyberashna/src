@@ -1,13 +1,23 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables');
-}
+export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
+export const supabaseConfigError = 'Missing Supabase environment variables';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const missingSupabaseClient = new Proxy(
+  {},
+  {
+    get() {
+      throw new Error(supabaseConfigError);
+    },
+  }
+) as SupabaseClient;
+
+export const supabase = hasSupabaseConfig
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : missingSupabaseClient;
 
 export type CalendarConnection = {
   id: string;

@@ -11,6 +11,73 @@ body {
   color: #222;
 }
 
+.setup-screen {
+  align-items: center;
+  background: #eef2f7;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.setup-card {
+  background: #fff;
+  border: 1px solid #dbe3ed;
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
+  color: #1e293b;
+  max-width: 520px;
+  padding: 22px;
+  width: 100%;
+}
+
+.setup-kicker {
+  color: #0f766e;
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.setup-card h1 {
+  font-size: 22px;
+  line-height: 1.2;
+  margin: 0 0 10px;
+}
+
+.setup-card p {
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
+.setup-card code {
+  background: #f1f5f9;
+  border-radius: 5px;
+  color: #0f172a;
+  padding: 1px 5px;
+}
+
+.setup-card pre {
+  background: #0f172a;
+  border-radius: 10px;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.setup-card .setup-note {
+  color: #64748b;
+  font-size: 12px;
+  margin-bottom: 0;
+}
+
 .app {
   display: grid;
   grid-template-columns: 320px 4px 1fr;
@@ -431,6 +498,10 @@ table.planner td.slot.drag-over {
     padding: 12px 12px 88px;
   }
 
+  .mobile-view-hidden {
+    display: none !important;
+  }
+
   .mobile-today-card,
   .mobile-section-card {
     background: #fff;
@@ -522,6 +593,27 @@ table.planner td.slot.drag-over {
     margin-top: 12px;
   }
 
+  .mobile-capture-modes {
+    display: grid;
+    gap: 6px;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .mobile-capture-modes button {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #dbeafe;
+    font-size: 11px;
+    font-weight: 900;
+    padding: 7px 8px;
+  }
+
+  .mobile-capture-modes button.active {
+    background: #fff;
+    color: #0f172a;
+  }
+
   .mobile-quick-add input {
     background: #fff;
     border: 1px solid #cbd5e1;
@@ -536,6 +628,17 @@ table.planner td.slot.drag-over {
     background: #14b8a6;
     color: #fff;
     font-weight: 900;
+  }
+
+  .mobile-quick-add .mobile-capture-modes button {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #dbeafe;
+  }
+
+  .mobile-quick-add .mobile-capture-modes button.active {
+    background: #fff;
+    color: #0f172a;
   }
 
   .mobile-section-header {
@@ -662,8 +765,41 @@ table.planner td.slot.drag-over {
     flex: 0 0 220px;
   }
 
+  .mobile-bottom-nav {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid #dbe3ed;
+    border-radius: 18px;
+    bottom: 10px;
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
+    display: grid;
+    gap: 4px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    left: 10px;
+    padding: 6px;
+    position: fixed;
+    right: 10px;
+    z-index: 700;
+  }
+
+  .mobile-bottom-nav button {
+    background: transparent;
+    border: none;
+    border-radius: 12px;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 900;
+    min-width: 0;
+    padding: 8px 4px;
+  }
+
+  .mobile-bottom-nav button.active {
+    background: #0f172a;
+    color: #fff;
+  }
+
   .settings-btn {
-    bottom: 18px;
+    bottom: 84px;
     right: 14px;
   }
 }
@@ -3627,6 +3763,37 @@ table.planner th.col-normal {
   outline: none;
 }
 
+.routine-runner-card {
+  background: #f8fafc;
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+.routine-runner-card span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.routine-runner-card strong {
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.routine-runner-card em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
 .routine-checklist-header {
   align-items: center;
   color: #94a3b8;
@@ -3945,6 +4112,41 @@ table.planner th.col-normal {
   border-radius: 6px;
   color: #475569;
   cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 8px;
+}
+
+.outliner-search-row .outliner-review-toggle.active {
+  background: #334155;
+  border-color: #334155;
+  color: #fff;
+}
+
+.outliner-filter-notice {
+  align-items: center;
+  background: #fff7ed;
+  border-bottom: 1px solid #fed7aa;
+  color: #9a3412;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 7px 10px;
+}
+
+.outliner-filter-notice span {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.outliner-filter-notice button {
+  background: #9a3412;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
   font-size: 11px;
   font-weight: 800;
   padding: 5px 8px;
@@ -4904,6 +5106,32 @@ table.planner th.col-normal {
   padding: 8px 0;
 }
 
+@media (max-width: 700px) {
+  .block-detail-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .block-detail-modal {
+    border-bottom: none;
+    border-radius: 16px 16px 0 0;
+    max-height: 88vh;
+    width: 100%;
+  }
+
+  .block-detail-modal-header {
+    padding: 14px 16px 12px;
+  }
+
+  .block-detail-modal-title {
+    font-size: 16px;
+  }
+
+  .block-detail-modal-body {
+    padding: 14px 16px 18px;
+  }
+}
+
 .block-task-list {
   list-style: none;
   margin: 0 0 5px 0;
@@ -5553,6 +5781,38 @@ table.planner th.col-normal {
   color: #94a3b8;
   font-size: 12px;
   margin-bottom: 6px;
+}
+
+.workout-session-card {
+  background: #f8fafc;
+  border: 1px solid #dbe3ed;
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 8px;
+}
+
+.workout-session-card span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.workout-session-card strong {
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.workout-session-card em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
 }
 
 .workout-selected-list,
