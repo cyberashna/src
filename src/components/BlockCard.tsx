@@ -76,6 +76,7 @@ type BlockCardProps = {
   onAddBlockTask?: (blockId: string, label: string) => void;
   onToggleBlockTask?: (blockId: string, taskId: string) => void;
   onDeleteBlockTask?: (blockId: string, taskId: string) => void;
+  openDetailsOnClick?: boolean;
 
   // themed-specific
   convertingBlockId?: string | null;
@@ -132,6 +133,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onAddBlockTask,
   onToggleBlockTask,
   onDeleteBlockTask,
+  openDetailsOnClick,
   convertingBlockId,
   convertFrequency,
   convertTarget,
@@ -252,6 +254,13 @@ export const BlockCard: React.FC<BlockCardProps> = ({
       ? themes.flatMap((t) => t.meals).find((m) => m.id === block.mealId)
       : null;
 
+  const handleBlockClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!openDetailsOnClick || detailTabs.length === 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button,input,select,textarea,label,a")) return;
+    openBlockDetails();
+  };
+
   return (
     <div className={variant === "themed" ? "themed-block-wrapper" : undefined}>
       <div
@@ -260,6 +269,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         draggable
         onDragStart={(e) => onDragStart(block.id, e)}
         onDragEnd={onDragEnd}
+        onClick={handleBlockClick}
         onDoubleClick={onDoubleClick ? () => onDoubleClick(block.id) : undefined}
         title={hoverInfo}
         data-tooltip={hoverInfo}

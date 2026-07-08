@@ -57,6 +57,8 @@ export default function RoutineNotesPopup({
   );
   const completedItemIds = new Set(activeRoutine?.completedByDate[todayDate] ?? []);
   const openItems = activeRoutine?.items.filter((item) => !completedItemIds.has(item.id)) ?? [];
+  const completedItemCount = activeRoutine?.items.filter((item) => completedItemIds.has(item.id)).length ?? 0;
+  const totalItemCount = activeRoutine?.items.length ?? 0;
 
   useEffect(() => {
     const loaded = loadRoutineNotes(userId);
@@ -293,9 +295,25 @@ export default function RoutineNotesPopup({
               rows={4}
             />
 
+            <div className="routine-runner-card">
+              <span>Today run</span>
+              <strong>
+                {totalItemCount === 0
+                  ? "No checklist yet"
+                  : `${completedItemCount}/${totalItemCount} done`}
+              </strong>
+              <em>
+                {openItems.length === 0 && totalItemCount > 0
+                  ? "Everything is checked off."
+                  : openItems.length > 0
+                    ? `${openItems.length} item${openItems.length === 1 ? "" : "s"} still open.`
+                    : "Add items in Edit mode."}
+              </em>
+            </div>
+
             <div className="routine-checklist-header">
               <span className="routine-section-label">Checklist</span>
-              <span>{activeRoutine.items.length - openItems.length}/{activeRoutine.items.length} done today</span>
+              <span>{completedItemCount}/{activeRoutine.items.length} done today</span>
             </div>
 
             <div className="routine-checklist">

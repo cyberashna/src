@@ -195,6 +195,19 @@ export default function WorkoutLibraryPanel({
         <div className="workout-library-side">
           <section>
             <div className="workout-library-section-title">Today</div>
+            <div className="workout-session-card">
+              <span>Session</span>
+              <strong>
+                {selectedExercises.length === 0
+                  ? "Build from options"
+                  : `${selectedExercises.length} exercise${selectedExercises.length === 1 ? "" : "s"} selected`}
+              </strong>
+              <em>
+                {selectedExercises.length === 0
+                  ? "Choose exercises below, start blank, or load a saved routine."
+                  : "Add to planner when this set feels right."}
+              </em>
+            </div>
             {selectedExercises.length === 0 ? (
               <div className="workout-library-empty">Pick exercises or start blank.</div>
             ) : (

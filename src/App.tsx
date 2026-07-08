@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 
 export let currentDragBlockId: string | null = null;
 import "./App.css";
-import { supabase } from "./lib/supabase";
+import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
 import { ThemeGoals } from "./components/ThemeGoals";
@@ -259,6 +259,26 @@ const getBucketForHourlyIndex = (hourlyIndex: number): number => {
 };
 
 type ViewMode = "hourly" | "buckets";
+type MobileHomeView = "today" | "planner";
+type MobileCaptureMode = "block" | "note" | "task";
+
+const MissingSupabaseConfigScreen = () => (
+  <div className="setup-screen">
+    <div className="setup-card">
+      <span className="setup-kicker">Setup needed</span>
+      <h1>The app needs your Supabase keys before it can load.</h1>
+      <p>
+        Add a file named <code>.env</code> in the app folder with your project URL and anon key,
+        then restart the local server.
+      </p>
+      <pre>{`VITE_SUPABASE_URL=your Supabase project URL
+VITE_SUPABASE_ANON_KEY=your anon public key`}</pre>
+      <p className="setup-note">
+        You can find both in Supabase under Project Settings, then API.
+      </p>
+    </div>
+  </div>
+);
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -443,8 +463,15 @@ const App: React.FC = () => {
   const [smartWeeklyApplying, setSmartWeeklyApplying] = useState(false);
   const [smartWeeklySuggestions, setSmartWeeklySuggestions] = useState<SmartWeekSuggestion[]>([]);
   const [mobileDayIndex, setMobileDayIndex] = useState(0);
+  const [mobileHomeView, setMobileHomeView] = useState<MobileHomeView>("today");
+  const [mobileCaptureMode, setMobileCaptureMode] = useState<MobileCaptureMode>("block");
 
   useEffect(() => {
+    if (!hasSupabaseConfig) {
+      setLoading(false);
+      return;
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setLoading(false);
@@ -3440,6 +3467,36 @@ const App: React.FC = () => {
           })
       : [];
 
+  const quickCapture = async () => {
+    const label = blockLabel.trim();
+    if (!label) {
+      showToast("Enter something to capture.", "error");
+      return;
+    }
+
+    const modeHashtag = mobileCaptureMode === "block" ? undefined : mobileCaptureMode;
+    const captureHashtag = blockHashtag.trim() || modeHashtag;
+    const captureLabel =
+      mobileCaptureMode === "block"
+        ? label
+        : `${mobileCaptureMode === "note" ? "Note" : "Task"}: ${label}`;
+    const blockId = await createBlock(captureLabel, false, undefined, captureHashtag);
+    if (!blockId) return;
+
+    if (mobileCaptureMode === "note") {
+      await saveBlockNote(blockId, label);
+    }
+    if (mobileCaptureMode === "task") {
+      await addBlockTask(blockId, label);
+    }
+
+    showToast(`${mobileCaptureMode === "block" ? "Block" : mobileCaptureMode === "note" ? "Note" : "Task"} captured`, "success");
+  };
+
+  if (!hasSupabaseConfig) {
+    return <MissingSupabaseConfigScreen />;
+  }
+
   if (loading) {
     return (
       <div style={{
@@ -4606,7 +4663,7 @@ const App: React.FC = () => {
 
         <div className="right-column">
           <div className="mobile-use-view">
-            <section className="mobile-today-card">
+            <section className={`mobile-today-card ${mobileHomeView !== "today" ? "mobile-view-hidden" : ""}`}>
               <div className="mobile-today-heading">
                 <span>Today</span>
                 <strong>
@@ -4629,12 +4686,24 @@ const App: React.FC = () => {
                 className="mobile-quick-add"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  createBlock(blockLabel, false, undefined, blockHashtag);
+                  quickCapture();
                 }}
               >
+                <div className="mobile-capture-modes" role="group" aria-label="Capture type">
+                  {(["block", "note", "task"] as MobileCaptureMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={mobileCaptureMode === mode ? "active" : ""}
+                      onClick={() => setMobileCaptureMode(mode)}
+                    >
+                      {mode === "block" ? "Block" : mode === "note" ? "Note" : "Task"}
+                    </button>
+                  ))}
+                </div>
                 <input
                   type="text"
-                  placeholder="Quick block or note..."
+                  placeholder={`Quick ${mobileCaptureMode}...`}
                   value={blockLabel}
                   onChange={(event) => setBlockLabel(event.target.value)}
                 />
@@ -4644,7 +4713,7 @@ const App: React.FC = () => {
               </form>
             </section>
 
-            <section className="mobile-section-card">
+            <section className={`mobile-section-card ${mobileHomeView !== "today" ? "mobile-view-hidden" : ""}`}>
               <div className="mobile-section-header">
                 <span>Today</span>
                 <strong>{todayScheduledBlocks.length} scheduled</strong>
@@ -4667,6 +4736,7 @@ const App: React.FC = () => {
                         <BlockCard
                           block={block}
                           variant="slot"
+                          openDetailsOnClick
                           priorityRank={priority ? (priority.priority_rank as 1 | 2 | 3) : undefined}
                           hasAdjacentBelow={hasAdjacentBlockBelow(block)}
                           mealPopoverBlockId={mealPopoverBlockId}
@@ -4712,7 +4782,7 @@ const App: React.FC = () => {
               )}
             </section>
 
-            <section className="mobile-section-card mobile-day-planner-card">
+            <section className={`mobile-section-card mobile-day-planner-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}>
               <div className="mobile-section-header">
                 <span>Day planner</span>
                 <strong>{days[mobileSelectedDayIndex]}</strong>
@@ -4788,6 +4858,7 @@ const App: React.FC = () => {
                               key={block.id}
                               block={block}
                               variant="slot"
+                              openDetailsOnClick
                               priorityRank={priority ? (priority.priority_rank as 1 | 2 | 3) : undefined}
                               hasAdjacentBelow={hasAdjacentBlockBelow(block)}
                               mealPopoverBlockId={mealPopoverBlockId}
@@ -4844,7 +4915,7 @@ const App: React.FC = () => {
               </div>
             </section>
 
-            <section className="mobile-section-card">
+            <section className={`mobile-section-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}>
               <div className="mobile-section-header">
                 <span>Waiting</span>
                 <strong>{unscheduledBlocks.length} unscheduled</strong>
@@ -4858,6 +4929,7 @@ const App: React.FC = () => {
                       key={`mobile-unscheduled-${block.id}`}
                       block={block}
                       variant="unscheduled"
+                      openDetailsOnClick
                       onDragStart={handleDragStart}
                       onDragEnd={handleDragEnd}
                       onDelete={deleteBlockWithUndo}
@@ -4886,6 +4958,44 @@ const App: React.FC = () => {
                 </div>
               )}
             </section>
+
+            <nav className="mobile-bottom-nav" aria-label="Mobile planner navigation">
+              <button
+                type="button"
+                className={mobileHomeView === "today" ? "active" : ""}
+                onClick={() => setMobileHomeView("today")}
+              >
+                <span>Today</span>
+              </button>
+              <button
+                type="button"
+                className={mobileHomeView === "planner" ? "active" : ""}
+                onClick={() => setMobileHomeView("planner")}
+              >
+                <span>Planner</span>
+              </button>
+              <button
+                type="button"
+                className={showRoutineNotes ? "active" : ""}
+                onClick={() => setShowRoutineNotes(true)}
+              >
+                <span>Routines</span>
+              </button>
+              <button
+                type="button"
+                className={showWorkoutLibrary ? "active" : ""}
+                onClick={() => setShowWorkoutLibrary(true)}
+              >
+                <span>Workout</span>
+              </button>
+              <button
+                type="button"
+                className={showPlanningOutliner ? "active" : ""}
+                onClick={() => setShowPlanningOutliner(true)}
+              >
+                <span>Outliner</span>
+              </button>
+            </nav>
           </div>
 
           <div className="card planner-controls-card">
