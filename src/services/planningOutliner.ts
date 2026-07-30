@@ -157,6 +157,30 @@ export const savePlanningOutliner = async (userId: string, nodes: OutlineNode[])
     .upsert({ user_id: userId, nodes, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
 };
 
+export const addQuickCaptureToPlanningOutliner = (
+  userId: string,
+  input: QuickCaptureOutlinerInput
+): { nodeId: string; nodes: OutlineNode[] } => {
+  const text = input.text.trim();
+  const note = input.draftNote?.trim() ?? "";
+  const node: OutlineNode = {
+    ...createOutlineNode(text || (input.tag === "task" ? "New task" : "New note")),
+    tag: input.tag,
+    draftNote: input.tag === "note" ? note || text : note,
+    draftNoteUpdatedAt: input.tag === "note" && (note || text) ? new Date().toISOString() : null,
+    linked: input.blockId
+      ? {
+          blockId: input.blockId,
+          label: text || "Captured block",
+          renameDeclinedFor: null,
+        }
+      : null,
+  };
+  const nextNodes = [...loadPlanningOutliner(userId), node];
+  savePlanningOutliner(userId, nextNodes);
+  return { nodeId: node.id, nodes: nextNodes };
+};
+
 const findNodeByLinkedHabit = (nodes: OutlineNode[], habitId: string): OutlineNode | null => {
   for (const node of nodes) {
     if (node.linked?.habitId === habitId) return node;

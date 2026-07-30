@@ -36,6 +36,47 @@ export default defineConfig({
             purpose: 'maskable',
           },
         ],
+        shortcuts: [
+          {
+            name: 'Ambient Mode',
+            short_name: 'Ambient',
+            description: 'Open the calm routine and next task view',
+            url: '/?mode=ambient',
+            icons: [
+              {
+                src: 'icons/icon-192.png',
+                sizes: '192x192',
+                type: 'image/png',
+              },
+            ],
+          },
+          {
+            name: 'Quick Note',
+            short_name: 'Note',
+            description: 'Capture a quick note',
+            url: '/?capture=note',
+            icons: [
+              {
+                src: 'icons/icon-192.png',
+                sizes: '192x192',
+                type: 'image/png',
+              },
+            ],
+          },
+          {
+            name: 'Today',
+            short_name: 'Today',
+            description: 'Open today',
+            url: '/?view=today',
+            icons: [
+              {
+                src: 'icons/icon-192.png',
+                sizes: '192x192',
+                type: 'image/png',
+              },
+            ],
+          },
+        ],
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
