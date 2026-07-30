@@ -68,6 +68,8 @@ export default function RoutineNotesPopup({
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-overlay-toggle]")) return;
       if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
         onClose();
       }
@@ -176,6 +178,26 @@ export default function RoutineNotesPopup({
     });
   };
 
+  const completeRoutineToday = () => {
+    if (!activeRoutine) return;
+    updateRoutine(activeRoutine.id, {
+      completedByDate: {
+        ...activeRoutine.completedByDate,
+        [todayDate]: activeRoutine.items.map((item) => item.id),
+      },
+    });
+  };
+
+  const resetRoutineToday = () => {
+    if (!activeRoutine) return;
+    updateRoutine(activeRoutine.id, {
+      completedByDate: {
+        ...activeRoutine.completedByDate,
+        [todayDate]: [],
+      },
+    });
+  };
+
   const addOpenItemsToBlocks = async () => {
     for (const item of openItems) {
       await onCreateBlock(item.label);
@@ -220,7 +242,7 @@ export default function RoutineNotesPopup({
           >
             {editMode ? "Done" : "Edit"}
           </button>
-          <button className="routine-notes-btn" onClick={onClose} title="Close">
+          <button className="routine-notes-btn routine-notes-close-btn" onClick={onClose} title="Close">
             x
           </button>
         </div>
@@ -309,6 +331,22 @@ export default function RoutineNotesPopup({
                     ? `${openItems.length} item${openItems.length === 1 ? "" : "s"} still open.`
                     : "Add items in Edit mode."}
               </em>
+              <div className="routine-runner-actions">
+                <button
+                  type="button"
+                  onClick={completeRoutineToday}
+                  disabled={totalItemCount === 0 || completedItemCount === totalItemCount}
+                >
+                  Complete all
+                </button>
+                <button
+                  type="button"
+                  onClick={resetRoutineToday}
+                  disabled={completedItemCount === 0}
+                >
+                  Reset today
+                </button>
+              </div>
             </div>
 
             <div className="routine-checklist-header">

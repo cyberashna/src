@@ -77,6 +77,11 @@ type BlockCardProps = {
   onToggleBlockTask?: (blockId: string, taskId: string) => void;
   onDeleteBlockTask?: (blockId: string, taskId: string) => void;
   openDetailsOnClick?: boolean;
+  mobileMode?: boolean;
+  onMobileMoveLater?: (blockId: string) => void;
+  onMobileMoveTomorrow?: (blockId: string) => void;
+  onMobileMoveUnscheduled?: (blockId: string) => void;
+  onMobileScheduleToday?: (blockId: string) => void;
 
   // themed-specific
   convertingBlockId?: string | null;
@@ -90,6 +95,11 @@ type BlockCardProps = {
   onSetConvertGroupId?: (id: string) => void;
   onConvertToHabit?: (blockId: string, themeId: string) => void;
   onRemoveFromTheme?: (blockId: string) => void;
+  onAddThemeBlockToToday?: (blockId: string) => void;
+  onScheduleThemeBlock?: (blockId: string, dayIndex: number, timeIndex: number) => void;
+  scheduleDays?: string[];
+  scheduleTimeSlots?: string[];
+  defaultScheduleDayIndex?: number;
   themeId?: string;
 };
 
@@ -134,6 +144,11 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onToggleBlockTask,
   onDeleteBlockTask,
   openDetailsOnClick,
+  mobileMode,
+  onMobileMoveLater,
+  onMobileMoveTomorrow,
+  onMobileMoveUnscheduled,
+  onMobileScheduleToday,
   convertingBlockId,
   convertFrequency,
   convertTarget,
@@ -145,6 +160,11 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onSetConvertGroupId,
   onConvertToHabit,
   onRemoveFromTheme,
+  onAddThemeBlockToToday,
+  onScheduleThemeBlock,
+  scheduleDays = [],
+  scheduleTimeSlots = [],
+  defaultScheduleDayIndex = 0,
   themeId,
 }) => {
   const hasSessionGroup = !!block.sessionGroup;
@@ -155,12 +175,20 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("notes");
   const [noteValue, setNoteValue] = useState(block.blockNote ?? "");
   const [newTaskLabel, setNewTaskLabel] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleDayIndex, setScheduleDayIndex] = useState(defaultScheduleDayIndex);
+  const [scheduleTimeIndex, setScheduleTimeIndex] = useState(0);
   const noteSaveTimer = useRef<number | null>(null);
 
   // Keep noteValue in sync if block.blockNote changes externally
   useEffect(() => {
     setNoteValue(block.blockNote ?? "");
   }, [block.blockNote]);
+
+  useEffect(() => {
+    setScheduleDayIndex(defaultScheduleDayIndex);
+  }, [block.id, defaultScheduleDayIndex]);
 
   useEffect(() => {
     return () => {
@@ -240,6 +268,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
 
   const blockClass = [
     "block",
+    mobileMode ? "block-mobile-safe" : "",
     block.isHabitBlock ? "habit-block" : "",
     block.isLinkedGroup ? "linked-group" : "",
     block.completed ? "block-done" : "",
@@ -261,6 +290,17 @@ export const BlockCard: React.FC<BlockCardProps> = ({
     openBlockDetails();
   };
 
+  const handleMobileDelete = () => {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      window.setTimeout(() => setConfirmingDelete(false), 2400);
+      return;
+    }
+    setDetailOpen(false);
+    setConfirmingDelete(false);
+    onDelete(block.id);
+  };
+
   return (
     <div className={variant === "themed" ? "themed-block-wrapper" : undefined}>
       <div
@@ -270,7 +310,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         onDragStart={(e) => onDragStart(block.id, e)}
         onDragEnd={onDragEnd}
         onClick={handleBlockClick}
-        onDoubleClick={onDoubleClick ? () => onDoubleClick(block.id) : undefined}
+        onDoubleClick={onDoubleClick && !mobileMode ? () => onDoubleClick(block.id) : undefined}
         title={hoverInfo}
         data-tooltip={hoverInfo}
         style={{ position: "relative" }}
@@ -487,6 +527,65 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           </div>
         )}
 
+        {mobileMode && variant === "slot" && (
+          <div className="mobile-block-actions">
+            {onToggleCompletion && (
+              <button
+                type="button"
+                className={`mobile-block-done-btn ${block.completed ? "is-done" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCompletion(block.id);
+                }}
+              >
+                {block.completed ? "Undo" : "Done"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMobileMoveLater?.(block.id);
+              }}
+            >
+              Later
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMobileMoveTomorrow?.(block.id);
+              }}
+            >
+              Tomorrow
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMobileMoveUnscheduled?.(block.id);
+              }}
+            >
+              Waiting
+            </button>
+          </div>
+        )}
+
+        {mobileMode && variant === "unscheduled" && onMobileScheduleToday && (
+          <div className="mobile-block-actions mobile-block-actions--waiting">
+            <button
+              type="button"
+              className="mobile-block-done-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMobileScheduleToday(block.id);
+              }}
+            >
+              Today
+            </button>
+          </div>
+        )}
+
         {/* Notes/Tasks toggle button */}
         {(onSaveBlockNote || onAddBlockTask) && (
           <button
@@ -544,6 +643,68 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           </button>
         )}
       </div>
+
+      {variant === "themed" && (
+        <div className="theme-block-actions">
+          <button
+            type="button"
+            onClick={() => onAddThemeBlockToToday?.(block.id)}
+            disabled={!onAddThemeBlockToToday}
+          >
+            Today
+          </button>
+          <button
+            type="button"
+            onClick={() => setScheduleOpen((value) => !value)}
+            disabled={!onScheduleThemeBlock || scheduleDays.length === 0 || scheduleTimeSlots.length === 0}
+          >
+            Schedule
+          </button>
+          <button
+            type="button"
+            onClick={() => onRemoveFromTheme?.(block.id)}
+            disabled={!onRemoveFromTheme}
+          >
+            Waiting
+          </button>
+        </div>
+      )}
+
+      {variant === "themed" && scheduleOpen && (
+        <div className="theme-block-schedule-row">
+          <select
+            value={scheduleDayIndex}
+            onChange={(event) => setScheduleDayIndex(Number(event.target.value))}
+            aria-label="Schedule day"
+          >
+            {scheduleDays.map((day, index) => (
+              <option key={day} value={index}>
+                {day}
+              </option>
+            ))}
+          </select>
+          <select
+            value={scheduleTimeIndex}
+            onChange={(event) => setScheduleTimeIndex(Number(event.target.value))}
+            aria-label="Schedule time"
+          >
+            {scheduleTimeSlots.map((slot, index) => (
+              <option key={`${slot}-${index}`} value={index}>
+                {slot}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => {
+              onScheduleThemeBlock?.(block.id, scheduleDayIndex, scheduleTimeIndex);
+              setScheduleOpen(false);
+            }}
+          >
+            Add
+          </button>
+        </div>
+      )}
 
       {detailOpen && (
         <div className="block-detail-backdrop" onClick={() => setDetailOpen(false)}>
@@ -667,6 +828,18 @@ export const BlockCard: React.FC<BlockCardProps> = ({
                   {block.isHabitBlock && (
                     <div className="block-note-hint">Notes are also saved to habit notes</div>
                   )}
+                </div>
+              )}
+
+              {mobileMode && variant !== "themed" && (
+                <div className="block-detail-danger-zone">
+                  <button
+                    type="button"
+                    className={`block-detail-delete-btn ${confirmingDelete ? "confirming" : ""}`}
+                    onClick={handleMobileDelete}
+                  >
+                    {confirmingDelete ? "Tap again to delete" : "Delete block"}
+                  </button>
                 </div>
               )}
             </div>

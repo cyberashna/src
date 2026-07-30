@@ -76,6 +76,7 @@ type Props = {
   onLoadLinkedNote: (link: OutlineLink) => Promise<LinkedNoteResult>;
   onSaveLinkedNote: (link: OutlineLink, content: string) => Promise<LinkedNoteResult | null>;
   boardHabitIds: string[];
+  externalVersion?: number;
 };
 
 function findNode(
@@ -287,6 +288,7 @@ export default function PlanningOutlinerPanel({
   onLoadLinkedNote,
   onSaveLinkedNote,
   boardHabitIds,
+  externalVersion = 0,
 }: Props) {
   const [nodes, setNodes] = useState<OutlineNode[]>(() => loadPlanningOutliner(userId));
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
@@ -312,7 +314,7 @@ export default function PlanningOutlinerPanel({
   useEffect(() => {
     setNodes(loadPlanningOutliner(userId));
     setFocusNodeId(null);
-  }, [userId]);
+  }, [userId, externalVersion]);
 
   useEffect(() => {
     savePlanningOutliner(userId, nodes);
@@ -326,6 +328,8 @@ export default function PlanningOutlinerPanel({
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-overlay-toggle]")) return;
       if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
         onClose();
       }
@@ -777,11 +781,19 @@ export default function PlanningOutlinerPanel({
     setDragOverNodeId(null);
   };
 
+  const focusRow = (node: OutlineNode) => {
+    setFocusNodeId(node.id);
+    setSearchQuery("");
+    setReviewOnly(false);
+    setActionMenuNodeId(null);
+  };
+
   const renderRows = (items: OutlineNode[], depth = 0, forceExpanded = false): JSX.Element[] =>
     items.map((node, index) => {
       const hasChildren = node.children.length > 0;
       const isHabitLinked = !!node.linked?.habitId;
       const isThemeLinked = !!node.linked?.themeId && !node.linked?.habitId;
+      const isBlockLinked = !!node.linked?.blockId;
       const isOnBoard = !!node.linked?.habitId && boardHabitIdSet.has(node.linked.habitId);
       const canMakeTheme = !node.linked && !!node.text.trim();
       const isDoneTask = node.tag === "task" && node.taskDone;
@@ -856,7 +868,7 @@ export default function PlanningOutlinerPanel({
               <button
                 type="button"
                 className="outliner-bullet"
-                onClick={() => setFocusNodeId(node.id)}
+                onClick={() => focusRow(node)}
                 title="Focus this row"
                 aria-label="Focus this row"
               />
@@ -891,10 +903,11 @@ export default function PlanningOutlinerPanel({
               <option value="task">Task</option>
               <option value="habit">Habit</option>
             </select>
-            {(isThemeLinked || isHabitLinked || isOnBoard) && (
+            {(isThemeLinked || isHabitLinked || isBlockLinked || isOnBoard) && (
               <div className="outliner-link-pills">
                 {isThemeLinked && <span>Linked theme</span>}
                 {isHabitLinked && <span>Linked habit</span>}
+                {isBlockLinked && <span>Linked waiting</span>}
                 {isOnBoard && <span>On board</span>}
               </div>
             )}
@@ -915,13 +928,13 @@ export default function PlanningOutlinerPanel({
                   Add board
                 </button>
               )}
-              {node.tag === "task" && (
+              {node.tag !== "habit" && (
                 <button
                   type="button"
                   onClick={() => convertToBlock(node)}
-                  title="Turn this task row into an unscheduled block"
+                  title="Send this row back to Waiting as an unscheduled block"
                 >
-                  To block
+                  To waiting
                 </button>
               )}
               {node.tag === "habit" && (
@@ -976,6 +989,12 @@ export default function PlanningOutlinerPanel({
                 </button>
                 {actionMenuNodeId === node.id && (
                   <div className="outliner-action-menu">
+                    <button
+                      type="button"
+                      onClick={() => focusRow(node)}
+                    >
+                      Focus row
+                    </button>
                     {node.linked && (
                       <button
                         type="button"
@@ -998,7 +1017,7 @@ export default function PlanningOutlinerPanel({
                         Add to board
                       </button>
                     )}
-                    {node.tag === "task" && (
+                    {node.tag !== "habit" && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1006,7 +1025,7 @@ export default function PlanningOutlinerPanel({
                           setActionMenuNodeId(null);
                         }}
                       >
-                        Turn into block
+                        Send to Waiting
                       </button>
                     )}
                     {node.tag === "habit" && (
@@ -1292,8 +1311,13 @@ export default function PlanningOutlinerPanel({
 
       {focusNode && (
         <div className="outliner-focus-card">
-          <span>Focused on</span>
-          <strong>{focusNode.text.trim() || "Untitled"}</strong>
+          <div>
+            <span>Focused on</span>
+            <strong>{focusNode.text.trim() || "Untitled"}</strong>
+          </div>
+          <button type="button" onClick={() => setFocusNodeId(null)}>
+            All rows
+          </button>
         </div>
       )}
 

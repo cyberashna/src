@@ -207,6 +207,11 @@ export default function WorkoutLibraryPanel({
                   ? "Choose exercises below, start blank, or load a saved routine."
                   : "Add to planner when this set feels right."}
               </em>
+              {selectedExercises.length > 0 && (
+                <button type="button" onClick={() => setSelectedIds([])}>
+                  Clear picks
+                </button>
+              )}
             </div>
             {selectedExercises.length === 0 ? (
               <div className="workout-library-empty">Pick exercises or start blank.</div>
