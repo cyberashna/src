@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Habit Care Planner">
+  <rect width="512" height="512" fill="#0f766e"/>
+  <rect x="96" y="108" width="320" height="296" rx="44" fill="#f8fafc"/>
+  <path d="M146 176h220" stroke="#0f766e" stroke-width="24" stroke-linecap="round"/>
+  <path d="M164 238h78M164 300h118M164 360h70" stroke="#334155" stroke-width="22" stroke-linecap="round"/>
+  <circle cx="336" cy="302" r="50" fill="#14b8a6"/>
+  <path d="m314 302 17 17 33-40" fill="none" stroke="#ffffff" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -18,7 +18,6 @@ type Props = {
   userId: string;
   todayDate: string;
   onClose: () => void;
-  onCreateBlock: (label: string) => Promise<void>;
   onCreateRoutineBlock: (routine: RoutineTab) => Promise<void>;
   workoutRoutines?: WorkoutRoutineSummary[];
   onCreateWorkoutFromRoutine?: (routineId: string) => Promise<void>;
@@ -28,7 +27,6 @@ export default function RoutineNotesPopup({
   userId,
   todayDate,
   onClose,
-  onCreateBlock,
   onCreateRoutineBlock,
   workoutRoutines = [],
   onCreateWorkoutFromRoutine,
@@ -198,12 +196,6 @@ export default function RoutineNotesPopup({
     });
   };
 
-  const addOpenItemsToBlocks = async () => {
-    for (const item of openItems) {
-      await onCreateBlock(item.label);
-    }
-  };
-
   const createRoutineBlock = async () => {
     if (!activeRoutine) return;
     await onCreateRoutineBlock(activeRoutine);
@@ -356,7 +348,7 @@ export default function RoutineNotesPopup({
 
             <div className="routine-checklist">
               {activeRoutine.items.length === 0 && (
-                <div className="routine-empty">Add items you want visible as options.</div>
+                <div className="routine-empty">No routine items here yet.</div>
               )}
               {activeRoutine.items.map((item) => {
                 const done = completedItemIds.has(item.id);
@@ -384,13 +376,6 @@ export default function RoutineNotesPopup({
                     ) : (
                       <span className="routine-item-label">{item.label}</span>
                     )}
-                    <button
-                      className="routine-to-block"
-                      onClick={() => onCreateBlock(item.label)}
-                      title="Add as unscheduled block"
-                    >
-                      + Block
-                    </button>
                     {editMode && (
                       <button
                         className="routine-delete-item"
@@ -479,22 +464,15 @@ export default function RoutineNotesPopup({
           <div className="routine-notes-footer">
             <span>Kept off-calendar until you add it.</span>
             <div className="routine-footer-actions">
-              <button
-                type="button"
-                onClick={createRoutineBlock}
-                disabled={activeRoutine.items.length === 0 && !activeRoutine.notes.trim()}
-              >
-                Add routine to planner
-              </button>
-              <button
-                type="button"
-                onClick={addOpenItemsToBlocks}
-                disabled={openItems.length === 0}
-              >
-                Add open items
-              </button>
-            </div>
-          </div>
+	              <button
+	                type="button"
+	                onClick={createRoutineBlock}
+	                disabled={activeRoutine.items.length === 0 && !activeRoutine.notes.trim()}
+	              >
+	                Add routine to planner
+	              </button>
+	            </div>
+	          </div>
         </>
       ) : (
         <div className="routine-notes-body">

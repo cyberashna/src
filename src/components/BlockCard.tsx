@@ -6,6 +6,7 @@ import type {
   WorkoutData,
   WorkoutExerciseHistoryEntry,
   WorkoutRoutine,
+  WorkoutRoutineHistoryEntry,
 } from "../App";
 import type { BlockTask } from "../services/database";
 import PriorityBadge from "./PriorityBadge";
@@ -61,6 +62,8 @@ type BlockCardProps = {
   blockExercises?: WorkoutBlockExercise[];
   exerciseHistory?: Record<string, WorkoutExerciseHistoryEntry[]>;
   workoutRoutines?: WorkoutRoutine[];
+  workoutRoutineHistory?: WorkoutRoutineHistoryEntry[];
+  linkedWorkoutRoutineId?: string | null;
   onAddExerciseToBlock?: (blockId: string, exerciseName: string) => void;
   onUpdateBlockExercise?: (
     blockId: string,
@@ -70,6 +73,14 @@ type BlockCardProps = {
   onDeleteBlockExercise?: (blockId: string, rowId: string) => void;
   onLoadWorkoutRoutine?: (blockId: string, routineId: string) => void;
   onSaveWorkoutRoutine?: (blockId: string, name: string) => void;
+  onSaveWorkoutRoutineAsNew?: (blockId: string, name: string) => void;
+  onUpdateWorkoutRoutineFromBlock?: (blockId: string, routineId: string) => void;
+  onAttachWorkoutRoutine?: (
+    blockId: string,
+    routineId: string,
+    options?: { loadExercises?: boolean }
+  ) => void;
+  onDetachWorkoutRoutine?: (blockId: string) => void;
 
   // notes + tasks
   onSaveBlockNote?: (blockId: string, content: string) => void;
@@ -82,6 +93,8 @@ type BlockCardProps = {
   onMobileMoveTomorrow?: (blockId: string) => void;
   onMobileMoveUnscheduled?: (blockId: string) => void;
   onMobileScheduleToday?: (blockId: string) => void;
+  kindLabel?: string;
+  relationshipChips?: string[];
 
   // themed-specific
   convertingBlockId?: string | null;
@@ -134,11 +147,17 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   blockExercises = [],
   exerciseHistory = {},
   workoutRoutines = [],
+  workoutRoutineHistory = [],
+  linkedWorkoutRoutineId,
   onAddExerciseToBlock,
   onUpdateBlockExercise,
   onDeleteBlockExercise,
   onLoadWorkoutRoutine,
   onSaveWorkoutRoutine,
+  onSaveWorkoutRoutineAsNew,
+  onUpdateWorkoutRoutineFromBlock,
+  onAttachWorkoutRoutine,
+  onDetachWorkoutRoutine,
   onSaveBlockNote,
   onAddBlockTask,
   onToggleBlockTask,
@@ -149,6 +168,8 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onMobileMoveTomorrow,
   onMobileMoveUnscheduled,
   onMobileScheduleToday,
+  kindLabel,
+  relationshipChips = [],
   convertingBlockId,
   convertFrequency,
   convertTarget,
@@ -221,6 +242,17 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const hasDetailContent = tasks.length > 0 || hasNoteContent || hasExerciseContent;
   const canManageTasks = !!onAddBlockTask || tasks.length > 0;
   const canManageNotes = !!onSaveBlockNote;
+  const noteDetailLabel = block.isHabitBlock ? "Instance note" : "Note";
+  const inferredKindLabel =
+    kindLabel ??
+    (block.isHabitBlock
+      ? "Habit"
+      : block.hashtag?.trim().toLowerCase() === "task" || block.label.trim().toLowerCase().startsWith("task:")
+        ? "Task"
+        : block.hashtag?.trim().toLowerCase() === "note" || block.label.trim().toLowerCase().startsWith("note:")
+          ? "Note"
+          : "Block");
+  const kindClass = inferredKindLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const getDefaultDetailTab = (): DetailTab => {
     if (canBuildWorkout) return "workout";
     if (canManageTasks) return "tasks";
@@ -397,7 +429,12 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           <div className={`session-connector session-${sessionColor}`} />
         )}
 
-        <div>
+        <div className="block-main-line">
+          {inferredKindLabel && (
+            <span className={`block-kind-chip block-kind-chip--${kindClass}`}>
+              {inferredKindLabel}
+            </span>
+          )}
           {variant === "slot" && block.isHabitBlock ? (
             <label
               className="block-label-with-check"
@@ -738,6 +775,17 @@ export const BlockCard: React.FC<BlockCardProps> = ({
               ))}
             </div>
 
+            {relationshipChips.length > 0 && (
+              <div className="block-relationship-strip">
+                <span>Linked to</span>
+                <div>
+                  {relationshipChips.map((chip) => (
+                    <em key={chip}>{chip}</em>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="block-detail-modal-body">
               {activeDetailTab === "workout" && canBuildWorkout && (
                 <div className="block-detail-section">
@@ -749,12 +797,18 @@ export const BlockCard: React.FC<BlockCardProps> = ({
                     blockExercises={blockExercises}
                     exerciseHistory={exerciseHistory}
                     workoutRoutines={workoutRoutines}
+                    workoutRoutineHistory={workoutRoutineHistory}
+                    linkedWorkoutRoutineId={linkedWorkoutRoutineId}
                     workoutSubmitted={block.workoutSubmitted}
                     onAddExercise={onAddExerciseToBlock}
                     onUpdateExercise={onUpdateBlockExercise}
                     onDeleteExercise={onDeleteBlockExercise}
                     onLoadRoutine={onLoadWorkoutRoutine}
                     onSaveRoutine={onSaveWorkoutRoutine}
+                    onSaveRoutineAsNew={onSaveWorkoutRoutineAsNew}
+                    onUpdateRoutine={onUpdateWorkoutRoutineFromBlock}
+                    onAttachRoutine={onAttachWorkoutRoutine}
+                    onDetachRoutine={onDetachWorkoutRoutine}
                     onSubmitWorkout={onSubmitWorkout}
                   />
                 </div>
@@ -816,17 +870,22 @@ export const BlockCard: React.FC<BlockCardProps> = ({
 
               {activeDetailTab === "notes" && canManageNotes && (
                 <div className="block-detail-section">
-                  <div className="block-detail-section-label">Notes</div>
+                  <div className="block-detail-section-label">{noteDetailLabel}</div>
+                  {!noteValue.trim() && (
+                    <div className="block-detail-empty">
+                      {block.isHabitBlock ? "No instance note yet." : "No notes yet."}
+                    </div>
+                  )}
                   <textarea
                     className="block-note-textarea block-note-textarea-large"
                     value={noteValue}
                     onChange={(e) => handleNoteChange(e.target.value)}
-                    placeholder="Add a note..."
+                    placeholder={block.isHabitBlock ? "Add a note for this instance..." : "Add a note..."}
                     rows={5}
                     onClick={(e) => e.stopPropagation()}
                   />
                   {block.isHabitBlock && (
-                    <div className="block-note-hint">Notes are also saved to habit notes</div>
+                    <div className="block-note-hint">Appears under habit notes as a dated instance.</div>
                   )}
                 </div>
               )}

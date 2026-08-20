@@ -1,16 +1,27 @@
 interface GhostBlockProps {
   label: string;
-  confidenceScore: number;
+  confidenceScore?: number;
+  badgeLabel?: string;
+  variant?: "suggestion" | "intention";
   onAccept: () => void;
   onDismiss: () => void;
 }
 
-export default function GhostBlock({ label, confidenceScore, onAccept, onDismiss }: GhostBlockProps) {
+export default function GhostBlock({
+  label,
+  confidenceScore,
+  badgeLabel,
+  variant = "suggestion",
+  onAccept,
+  onDismiss,
+}: GhostBlockProps) {
+  const displayBadge = badgeLabel ?? (confidenceScore != null ? `${confidenceScore}%` : "");
+
   return (
-    <div className="ghost-block" onClick={onAccept}>
+    <div className={`ghost-block ghost-block--${variant}`} onClick={onAccept}>
       <div className="ghost-content">
         <span className="ghost-label">{label}</span>
-        <span className="ghost-confidence">{confidenceScore}%</span>
+        {displayBadge && <span className="ghost-confidence">{displayBadge}</span>}
       </div>
       <button
         className="ghost-dismiss"
@@ -46,6 +57,18 @@ export default function GhostBlock({ label, confidenceScore, onAccept, onDismiss
           background: rgba(75, 111, 255, 0.1);
         }
 
+        .ghost-block--intention {
+          background: rgba(20, 184, 166, 0.08);
+          border-color: #2dd4bf;
+          opacity: 0.78;
+          animation: none;
+        }
+
+        .ghost-block--intention:hover {
+          background: rgba(20, 184, 166, 0.15);
+          border-color: #0f766e;
+        }
+
         .ghost-content {
           display: flex;
           justify-content: space-between;
@@ -74,6 +97,14 @@ export default function GhostBlock({ label, confidenceScore, onAccept, onDismiss
           color: white;
           border-radius: 10px;
           flex-shrink: 0;
+        }
+
+        .ghost-block--intention .ghost-label {
+          color: #0f766e;
+        }
+
+        .ghost-block--intention .ghost-confidence {
+          background: #0f766e;
         }
 
         /* In condensed past columns, show only the dashed border strip */

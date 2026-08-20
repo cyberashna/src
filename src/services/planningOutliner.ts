@@ -8,6 +8,7 @@ export type OutlineLink = {
   habitId?: string;
   themeId?: string;
   blockId?: string;
+  routineId?: string;
   label: string;
   renameDeclinedFor?: string | null;
 };
@@ -24,6 +25,7 @@ export type OutlineNode = {
   reminderDismissedAt: string | null;
   reminderKind: OutlineReminderKind;
   reminderIntervalMinutes: number | null;
+  planDate: string | null;
   linked: OutlineLink | null;
   draftNote: string;
   draftNoteUpdatedAt: string | null;
@@ -55,12 +57,34 @@ export type AddHabitToOutlinerResult = {
   nodes: OutlineNode[];
 };
 
+export type AddThemeToOutlinerInput = {
+  themeId: string;
+  themeName: string;
+};
+
+export type AddThemeToOutlinerResult = {
+  added: boolean;
+  existing: boolean;
+  nodeId: string;
+  nodes: OutlineNode[];
+};
+
+export type QuickCaptureOutlinerInput = {
+  text: string;
+  tag: OutlineTag;
+  draftNote?: string;
+  blockId?: string | null;
+  planDate?: string | null;
+  parentNodeId?: string | null;
+  newParentText?: string | null;
+};
+
 const legacyStorageKey = (userId: string) => `planning-outliner:${userId}`;
 
 export const createOutlineId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-export const createOutlineNode = (text = "New note"): OutlineNode => ({
+export const createOutlineNode = (text = "New row"): OutlineNode => ({
   id: createOutlineId("outline"),
   text,
   collapsed: false,
@@ -72,6 +96,7 @@ export const createOutlineNode = (text = "New note"): OutlineNode => ({
   reminderDismissedAt: null,
   reminderKind: "regular",
   reminderIntervalMinutes: null,
+  planDate: null,
   linked: null,
   draftNote: "",
   draftNoteUpdatedAt: null,
@@ -90,7 +115,7 @@ const defaultNodes = (): OutlineNode[] => {
 
 export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode => ({
   id: node.id ?? createOutlineId("outline"),
-  text: node.text ?? "New note",
+  text: node.text ?? "New row",
   collapsed: node.collapsed ?? false,
   tag: node.tag ?? "note",
   taskDone: node.taskDone ?? false,
@@ -100,11 +125,13 @@ export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode =>
   reminderDismissedAt: node.reminderDismissedAt ?? null,
   reminderKind: node.reminderKind ?? "regular",
   reminderIntervalMinutes: node.reminderIntervalMinutes ?? null,
+  planDate: node.planDate ?? null,
   linked: node.linked
     ? {
         habitId: node.linked.habitId,
         themeId: node.linked.themeId,
         blockId: node.linked.blockId,
+        routineId: node.linked.routineId,
         label: node.linked.label ?? node.text ?? "Untitled",
         renameDeclinedFor: node.linked.renameDeclinedFor ?? null,
       }
@@ -157,17 +184,49 @@ export const savePlanningOutliner = async (userId: string, nodes: OutlineNode[])
     .upsert({ user_id: userId, nodes, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
 };
 
-export const addQuickCaptureToPlanningOutliner = (
+const findNodeById = (nodes: OutlineNode[], nodeId: string): OutlineNode | null => {
+  for (const node of nodes) {
+    if (node.id === nodeId) return node;
+    const child = findNodeById(node.children, nodeId);
+    if (child) return child;
+  }
+  return null;
+};
+
+const appendChildToNode = (nodes: OutlineNode[], parentId: string, child: OutlineNode): OutlineNode[] =>
+  nodes.map((node) => {
+    if (node.id === parentId) return { ...node, collapsed: false, children: [...node.children, child] };
+    return { ...node, children: appendChildToNode(node.children, parentId, child) };
+  });
+
+const findNodeByLinkedBlock = (nodes: OutlineNode[], blockId: string): OutlineNode | null => {
+  for (const node of nodes) {
+    if (node.linked?.blockId === blockId) return node;
+    const child = findNodeByLinkedBlock(node.children, blockId);
+    if (child) return child;
+  }
+  return null;
+};
+
+export const addQuickCaptureToPlanningOutliner = async (
   userId: string,
   input: QuickCaptureOutlinerInput
-): { nodeId: string; nodes: OutlineNode[] } => {
+): Promise<{ nodeId: string; nodes: OutlineNode[]; existing?: boolean }> => {
   const text = input.text.trim();
   const note = input.draftNote?.trim() ?? "";
+  const currentNodes = await loadPlanningOutliner(userId, false);
+  const existingBlockNode = input.blockId ? findNodeByLinkedBlock(currentNodes, input.blockId) : null;
+
+  if (existingBlockNode) {
+    return { nodeId: existingBlockNode.id, nodes: currentNodes, existing: true };
+  }
+
   const node: OutlineNode = {
-    ...createOutlineNode(text || (input.tag === "task" ? "New task" : "New note")),
+    ...createOutlineNode(text || (input.tag === "task" ? "New task" : "New row")),
     tag: input.tag,
     draftNote: input.tag === "note" ? note || text : note,
     draftNoteUpdatedAt: input.tag === "note" && (note || text) ? new Date().toISOString() : null,
+    planDate: input.planDate ?? null,
     linked: input.blockId
       ? {
           blockId: input.blockId,
@@ -176,8 +235,15 @@ export const addQuickCaptureToPlanningOutliner = (
         }
       : null,
   };
-  const nextNodes = [...loadPlanningOutliner(userId), node];
-  savePlanningOutliner(userId, nextNodes);
+  const newParentText = input.newParentText?.trim() ?? "";
+  const nodeToInsert = newParentText
+    ? { ...createOutlineNode(newParentText), collapsed: false, children: [node] }
+    : node;
+  const nextNodes =
+    input.parentNodeId && findNodeById(currentNodes, input.parentNodeId)
+      ? appendChildToNode(currentNodes, input.parentNodeId, nodeToInsert)
+      : [...currentNodes, nodeToInsert];
+  await savePlanningOutliner(userId, nextNodes);
   return { nodeId: node.id, nodes: nextNodes };
 };
 
@@ -199,11 +265,30 @@ const findNodeByLinkedTheme = (nodes: OutlineNode[], themeId: string): OutlineNo
   return null;
 };
 
-const appendChildToNode = (nodes: OutlineNode[], parentId: string, child: OutlineNode): OutlineNode[] =>
-  nodes.map((node) => {
-    if (node.id === parentId) return { ...node, collapsed: false, children: [...node.children, child] };
-    return { ...node, children: appendChildToNode(node.children, parentId, child) };
-  });
+export const addThemeToPlanningOutliner = async (
+  userId: string,
+  theme: AddThemeToOutlinerInput
+): Promise<AddThemeToOutlinerResult> => {
+  const nodes = await loadPlanningOutliner(userId, false);
+  const existingThemeNode = findNodeByLinkedTheme(nodes, theme.themeId);
+
+  if (existingThemeNode) {
+    return { added: false, existing: true, nodeId: existingThemeNode.id, nodes };
+  }
+
+  const themeNode: OutlineNode = {
+    ...createOutlineNode(theme.themeName),
+    linked: {
+      themeId: theme.themeId,
+      label: theme.themeName,
+      renameDeclinedFor: null,
+    },
+  };
+  const nextNodes = [...nodes, themeNode];
+
+  await savePlanningOutliner(userId, nextNodes);
+  return { added: true, existing: false, nodeId: themeNode.id, nodes: nextNodes };
+};
 
 export const addHabitToPlanningOutliner = async (
   userId: string,

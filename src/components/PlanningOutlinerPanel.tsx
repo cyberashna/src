@@ -49,11 +49,26 @@ type AttachTarget = {
   link: OutlineLink;
 };
 
+type OutlinerBlockOptions = {
+  planDate?: string | null;
+  note?: string;
+  taskLabels?: string[];
+  hashtag?: string;
+};
+
+type RoutineLinkResult = {
+  routineId: string;
+};
+
+type ReviewFilter = "all" | "review" | "schedule" | "today" | "overdue" | "waiting";
+
+const OUTLINER_TOP_LEVEL_PARENT = "__top-level__";
+
 type Props = {
   userId: string;
   onClose: () => void;
   themes: ThemeOption[];
-  onCreateBlock: (label: string) => Promise<void>;
+  onCreateBlock: (label: string, options?: OutlinerBlockOptions) => Promise<string | null>;
   onCreateHabit: (
     themeId: string,
     name: string,
@@ -70,6 +85,11 @@ type Props = {
     name: string,
     habits: Array<{ nodeId: string; name: string; target: number; frequency: OutlineFrequency }>
   ) => Promise<ThemeLinkResult | null>;
+  onCreateRoutineFromRow: (
+    name: string,
+    items: string[],
+    notes?: string
+  ) => Promise<RoutineLinkResult | null>;
   onAddBoardForLinkedHabit: (link: OutlineLink) => Promise<HabitLinkResult | null>;
   onOpenLinked: (link: OutlineLink) => void;
   onRenameLinked: (link: OutlineLink, nextName: string) => Promise<boolean>;
@@ -77,6 +97,9 @@ type Props = {
   onSaveLinkedNote: (link: OutlineLink, content: string) => Promise<LinkedNoteResult | null>;
   boardHabitIds: string[];
   externalVersion?: number;
+  focusNodeIdRequest?: string | null;
+  focusRequestKey?: number;
+  onNodesChange?: (nodes: OutlineNode[]) => void;
 };
 
 function findNode(
@@ -121,6 +144,19 @@ function deleteNode(nodes: OutlineNode[], id: string): OutlineNode[] {
     .map((node) => ({ ...node, children: deleteNode(node.children, id) }));
 }
 
+function findNodeLinkedToHabit(
+  nodes: OutlineNode[],
+  habitId: string,
+  excludedNodeId?: string
+): OutlineNode | null {
+  for (const node of nodes) {
+    if (node.id !== excludedNodeId && node.linked?.habitId === habitId) return node;
+    const child = findNodeLinkedToHabit(node.children, habitId, excludedNodeId);
+    if (child) return child;
+  }
+  return null;
+}
+
 function nestPreviousSiblingUnder(nodes: OutlineNode[], targetId: string): OutlineNode[] {
   const targetIndex = nodes.findIndex((node) => node.id === targetId);
 
@@ -141,6 +177,29 @@ function nestPreviousSiblingUnder(nodes: OutlineNode[], targetId: string): Outli
   return nodes.map((node) => ({
     ...node,
     children: nestPreviousSiblingUnder(node.children, targetId),
+  }));
+}
+
+function nestRowUnderPreviousSibling(nodes: OutlineNode[], targetId: string): OutlineNode[] {
+  const targetIndex = nodes.findIndex((node) => node.id === targetId);
+
+  if (targetIndex > 0) {
+    const previousSibling = nodes[targetIndex - 1];
+    const targetNode = nodes[targetIndex];
+    return [
+      ...nodes.slice(0, targetIndex - 1),
+      {
+        ...previousSibling,
+        collapsed: false,
+        children: [...previousSibling.children, targetNode],
+      },
+      ...nodes.slice(targetIndex + 1),
+    ];
+  }
+
+  return nodes.map((node) => ({
+    ...node,
+    children: nestRowUnderPreviousSibling(node.children, targetId),
   }));
 }
 
@@ -239,12 +298,82 @@ function moveNodeRelative(
   return insertResult.inserted ? insertResult.nodes : nodes;
 }
 
+function isDescendantOf(nodes: OutlineNode[], possibleChildId: string, possibleParentId: string): boolean {
+  const parentResult = findNode(nodes, possibleParentId);
+  if (!parentResult) return false;
+  return !!findNode(parentResult.node.children, possibleChildId);
+}
+
+function moveNodeUnderParent(
+  nodes: OutlineNode[],
+  nodeId: string,
+  parentId: string | null
+): OutlineNode[] {
+  if (parentId === nodeId) return nodes;
+  if (parentId && isDescendantOf(nodes, parentId, nodeId)) return nodes;
+
+  const removeResult = removeNodeById(nodes, nodeId);
+  if (!removeResult.removed) return nodes;
+
+  if (!parentId) return [...removeResult.nodes, removeResult.removed];
+  if (!findNode(removeResult.nodes, parentId)) return nodes;
+  return addChild(removeResult.nodes, parentId, removeResult.removed);
+}
+
+function wrapNodeInNewParent(
+  nodes: OutlineNode[],
+  nodeId: string,
+  parentNode: OutlineNode
+): { nodes: OutlineNode[]; wrapped: boolean } {
+  const nextNodes: OutlineNode[] = [];
+  let wrapped = false;
+
+  for (const node of nodes) {
+    if (node.id === nodeId) {
+      nextNodes.push({ ...parentNode, collapsed: false, children: [node] });
+      wrapped = true;
+      continue;
+    }
+
+    const childResult = wrapNodeInNewParent(node.children, nodeId, parentNode);
+    if (childResult.wrapped) {
+      wrapped = true;
+      nextNodes.push({ ...node, children: childResult.nodes });
+    } else {
+      nextNodes.push(node);
+    }
+  }
+
+  return { nodes: nextNodes, wrapped };
+}
+
 function toLocalDatetimeValue(iso?: string | null) {
   if (!iso) return "";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const offsetMs = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function toDateInputValue(date: Date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatPlanDate(dateString: string | null, todayDate: string) {
+  if (!dateString) return "";
+  if (dateString === todayDate) return "Today";
+  const tomorrowDate = toDateInputValue(addDays(new Date(`${todayDate}T12:00:00`), 1));
+  if (dateString === tomorrowDate) return "Tomorrow";
+  const date = new Date(`${dateString}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return dateString;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", weekday: "short" });
 }
 
 function formatReminder(iso: string | null) {
@@ -282,6 +411,7 @@ export default function PlanningOutlinerPanel({
   onCreateHabit,
   onCreateHabitBlock,
   onCreateThemeFromRow,
+  onCreateRoutineFromRow,
   onAddBoardForLinkedHabit,
   onOpenLinked,
   onRenameLinked,
@@ -289,6 +419,9 @@ export default function PlanningOutlinerPanel({
   onSaveLinkedNote,
   boardHabitIds,
   externalVersion = 0,
+  focusNodeIdRequest,
+  focusRequestKey = 0,
+  onNodesChange,
 }: Props) {
   const [nodes, setNodes] = useState<OutlineNode[]>([]);
   const [nodesLoaded, setNodesLoaded] = useState(false);
@@ -299,27 +432,38 @@ export default function PlanningOutlinerPanel({
   const [reminderValue, setReminderValue] = useState("");
   const [reminderKind, setReminderKind] = useState<OutlineReminderKind>("regular");
   const [reminderIntervalMinutes, setReminderIntervalMinutes] = useState(1440);
+  const [planNodeId, setPlanNodeId] = useState<string | null>(null);
+  const [planDateValue, setPlanDateValue] = useState("");
   const [noteNodeId, setNoteNodeId] = useState<string | null>(null);
   const [linkedNotes, setLinkedNotes] = useState<Record<string, LinkedNoteState>>({});
   const [noteAttachTargets, setNoteAttachTargets] = useState<Record<string, string>>({});
+  const [habitLinkNodeId, setHabitLinkNodeId] = useState<string | null>(null);
+  const [selectedHabitLinkValue, setSelectedHabitLinkValue] = useState("");
+  const [parentMoveNodeId, setParentMoveNodeId] = useState<string | null>(null);
+  const [selectedParentNodeId, setSelectedParentNodeId] = useState(OUTLINER_TOP_LEVEL_PARENT);
+  const [createParentNodeId, setCreateParentNodeId] = useState<string | null>(null);
+  const [createParentName, setCreateParentName] = useState("");
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null);
   const [actionMenuNodeId, setActionMenuNodeId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [reviewOnly, setReviewOnly] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const [panelStatus, setPanelStatus] = useState("");
   const [selectedThemeId, setSelectedThemeId] = useState("");
   const noteSaveTimers = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const handledFocusRequestRef = useRef<number | null>(null);
 
   useEffect(() => {
     setNodesLoaded(false);
     setFocusNodeId(null);
     loadPlanningOutliner(userId).then((loaded) => {
       setNodes(loaded);
+      onNodesChange?.(loaded);
       setNodesLoaded(true);
     });
-  }, [userId]);
+  }, [userId, externalVersion, onNodesChange]);
 
   useEffect(() => {
     if (!nodesLoaded) return;
@@ -354,11 +498,34 @@ export default function PlanningOutlinerPanel({
     setPendingFocusNodeId(null);
   }, [nodes, pendingFocusNodeId]);
 
+  useEffect(() => {
+    if (!focusNodeIdRequest || !nodesLoaded) return;
+    if (handledFocusRequestRef.current === focusRequestKey) return;
+    if (!findNode(nodes, focusNodeIdRequest)) return;
+    handledFocusRequestRef.current = focusRequestKey;
+    setFocusNodeId(focusNodeIdRequest);
+    setSearchQuery("");
+    setReviewFilter("all");
+  }, [focusNodeIdRequest, focusRequestKey, nodes, nodesLoaded]);
+
   const focusResult = focusNodeId ? findNode(nodes, focusNodeId) : null;
   const focusNode = focusResult?.node ?? null;
   const focusPath = focusResult?.path ?? [];
   const visibleNodes = focusNode ? focusNode.children : nodes;
+  const parentRowOptions = useMemo(() => {
+    const collect = (items: OutlineNode[], path: string[] = []): Array<{ id: string; label: string }> =>
+      items.flatMap((node) => {
+        const label = node.text.trim() || "Untitled";
+        const nextPath = [...path, label];
+        return [
+          { id: node.id, label: nextPath.join(" > ") },
+          ...collect(node.children, nextPath),
+        ];
+      });
+    return collect(nodes);
+  }, [nodes]);
   const normalizedSearch = searchQuery.trim().toLowerCase();
+  const todayDate = toDateInputValue(new Date());
   const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? themes[0];
   const boardHabitIdSet = useMemo(() => new Set(boardHabitIds), [boardHabitIds]);
   const attachTargets = useMemo<AttachTarget[]>(
@@ -382,6 +549,10 @@ export default function PlanningOutlinerPanel({
       ]),
     [themes]
   );
+  const habitLinkTargets = useMemo(
+    () => attachTargets.filter((target) => !!target.link.habitId),
+    [attachTargets]
+  );
 
   const displayedNodes = useMemo(() => {
     const nodeMatchesSearch = (node: OutlineNode) => {
@@ -396,7 +567,9 @@ export default function PlanningOutlinerPanel({
         node.taskDone ? "done completed" : "",
         node.reminderAt ? formatReminder(node.reminderAt) : "",
         node.reminderKind,
+        node.planDate ? formatPlanDate(node.planDate, todayDate) : "",
         node.draftNote,
+        node.linked?.routineId ? "linked routine routine" : "",
         linkedNote,
       ]
         .filter(Boolean)
@@ -406,15 +579,44 @@ export default function PlanningOutlinerPanel({
       return searchable.includes(normalizedSearch);
     };
 
-    const nodeNeedsReview = (node: OutlineNode) =>
-      Boolean(
-        node.reminderAt ||
-          node.tag === "task" ||
-          node.tag === "habit" ||
-          node.linked ||
-          node.draftNote.trim() ||
-          linkedNotes[node.id]?.content.trim()
-      );
+    const isNodeComplete = (node: OutlineNode) => node.taskDone || !!node.linked?.blockId;
+    const reminderDate = (node: OutlineNode) =>
+      node.reminderAt ? toDateInputValue(new Date(node.reminderAt)) : null;
+    const nodeMatchesFilter = (node: OutlineNode) => {
+      if (reviewFilter === "all") return true;
+      if (reviewFilter === "review") {
+        return Boolean(
+          node.reminderAt ||
+            node.planDate ||
+            node.tag === "task" ||
+            node.tag === "habit" ||
+            node.linked ||
+            node.draftNote.trim() ||
+            linkedNotes[node.id]?.content.trim()
+        );
+      }
+      if (reviewFilter === "schedule") {
+        return Boolean(
+          !isNodeComplete(node) &&
+            !node.linked?.blockId &&
+            (node.planDate || node.tag === "task" || node.tag === "habit")
+        );
+      }
+      if (reviewFilter === "today") {
+        return node.planDate === todayDate || reminderDate(node) === todayDate;
+      }
+      if (reviewFilter === "overdue") {
+        return Boolean(
+          !isNodeComplete(node) &&
+            ((node.planDate && node.planDate < todayDate) ||
+              (node.reminderAt && !node.reminderDismissedAt && new Date(node.reminderAt).getTime() < Date.now()))
+        );
+      }
+      if (reviewFilter === "waiting") {
+        return !!node.linked?.blockId && !node.taskDone;
+      }
+      return true;
+    };
 
     const filterNodes = (items: OutlineNode[]): OutlineNode[] =>
       items
@@ -428,29 +630,33 @@ export default function PlanningOutlinerPanel({
       items
         .map((node) => {
           const children = filterReviewNodes(node.children);
-          return nodeNeedsReview(node) || children.length > 0 ? { ...node, children } : null;
+          return nodeMatchesFilter(node) || children.length > 0 ? { ...node, children } : null;
         })
         .filter((node): node is OutlineNode => !!node);
 
-    const baseNodes = reviewOnly ? filterReviewNodes(visibleNodes) : visibleNodes;
+    const baseNodes = reviewFilter !== "all" ? filterReviewNodes(visibleNodes) : visibleNodes;
     return normalizedSearch ? filterNodes(baseNodes) : baseNodes;
-  }, [visibleNodes, normalizedSearch, linkedNotes, reviewOnly]);
+  }, [visibleNodes, normalizedSearch, linkedNotes, reviewFilter, todayDate]);
 
   const visibleCount = useMemo(() => {
     const count = (items: OutlineNode[]): number =>
       items.reduce((total, item) => total + 1 + count(item.children), 0);
     return count(displayedNodes);
   }, [displayedNodes]);
-  const filteredViewActive = !!focusNode || !!normalizedSearch || reviewOnly;
+  const filteredViewActive = !!focusNode || !!normalizedSearch || reviewFilter !== "all";
 
   const showAllRows = () => {
     setFocusNodeId(null);
     setSearchQuery("");
-    setReviewOnly(false);
+    setReviewFilter("all");
   };
 
   const updateAndSave = (updater: (current: OutlineNode[]) => OutlineNode[]) => {
-    setNodes((current) => updater(cloneOutlineNodes(current)));
+    setNodes((current) => {
+      const next = updater(cloneOutlineNodes(current));
+      onNodesChange?.(next);
+      return next;
+    });
   };
 
   const updateRow = (id: string, updates: Partial<OutlineNode>) => {
@@ -468,6 +674,18 @@ export default function PlanningOutlinerPanel({
       updateOutlineNode(current, id, (item) => ({
         ...item,
         linked: link,
+      }))
+    );
+  };
+
+  const mergeOrCreateRowLink = (id: string, updates: Partial<OutlineLink>) => {
+    updateAndSave((current) =>
+      updateOutlineNode(current, id, (item) => ({
+        ...item,
+        linked: {
+          ...(item.linked ?? { label: item.text.trim() || "Untitled", renameDeclinedFor: null }),
+          ...updates,
+        },
       }))
     );
   };
@@ -533,10 +751,91 @@ export default function PlanningOutlinerPanel({
     updateAndSave((current) => nestPreviousSiblingUnder(current, id));
   };
 
-  const convertToBlock = async (node: OutlineNode) => {
+  const indentRowUnderPrevious = (id: string) => {
+    updateAndSave((current) => nestRowUnderPreviousSibling(current, id));
+  };
+
+  const openParentMovePanel = (node: OutlineNode) => {
+    const nextOpen = parentMoveNodeId !== node.id;
+    setParentMoveNodeId(nextOpen ? node.id : null);
+    setCreateParentNodeId(null);
+    setActionMenuNodeId(null);
+    if (!nextOpen) return;
+
+    const result = findNode(nodes, node.id);
+    const currentParentId =
+      result && result.path.length > 1
+        ? result.path[result.path.length - 2].id
+        : OUTLINER_TOP_LEVEL_PARENT;
+    setSelectedParentNodeId(currentParentId);
+  };
+
+  const openCreateParentPanel = (node: OutlineNode) => {
+    const nextOpen = createParentNodeId !== node.id;
+    setCreateParentNodeId(nextOpen ? node.id : null);
+    setParentMoveNodeId(null);
+    setActionMenuNodeId(null);
+    setCreateParentName("");
+  };
+
+  const saveParentMove = (node: OutlineNode) => {
+    const nextParentId =
+      selectedParentNodeId === OUTLINER_TOP_LEVEL_PARENT ? null : selectedParentNodeId;
+    updateAndSave((current) => moveNodeUnderParent(current, node.id, nextParentId));
+    setParentMoveNodeId(null);
+    setSelectedParentNodeId(OUTLINER_TOP_LEVEL_PARENT);
+  };
+
+  const saveCreatedParent = (node: OutlineNode) => {
+    const name = createParentName.trim();
+    if (!name) return;
+
+    const parentNode = createOutlineNode(name);
+    updateAndSave((current) => {
+      const result = wrapNodeInNewParent(current, node.id, parentNode);
+      return result.wrapped ? result.nodes : current;
+    });
+    setCreateParentNodeId(null);
+    setCreateParentName("");
+    setPendingFocusNodeId(parentNode.id);
+  };
+
+  const getNodeNoteForBlock = (node: OutlineNode) =>
+    (linkedNotes[node.id]?.content ?? node.draftNote).trim();
+
+  const childLabelsForTasks = (node: OutlineNode) =>
+    node.children
+      .map((child) => child.text.trim())
+      .filter((label) => label.length > 0);
+
+  const convertToBlock = async (node: OutlineNode, planDate: string | null = null) => {
     const label = node.text.trim();
     if (!label) return;
-    await onCreateBlock(label);
+    const blockId = await onCreateBlock(label, {
+      planDate,
+      note: getNodeNoteForBlock(node),
+      taskLabels: childLabelsForTasks(node),
+      hashtag: node.tag === "task" ? "task" : node.tag === "note" ? "note" : undefined,
+    });
+    if (blockId) {
+      mergeOrCreateRowLink(node.id, {
+        blockId,
+        label,
+        renameDeclinedFor: null,
+      });
+    }
+  };
+
+  const createRoutineFromRow = async (node: OutlineNode) => {
+    const label = node.text.trim();
+    if (!label) return;
+    const result = await onCreateRoutineFromRow(label, childLabelsForTasks(node), getNodeNoteForBlock(node));
+    if (!result) return;
+    mergeOrCreateRowLink(node.id, {
+      routineId: result.routineId,
+      label,
+      renameDeclinedFor: null,
+    });
   };
 
   const convertToHabit = async (node: OutlineNode) => {
@@ -600,11 +899,69 @@ export default function PlanningOutlinerPanel({
     if (result?.blockId) mergeRowLink(node.id, { blockId: result.blockId });
   };
 
+  const openHabitLinkPanel = (node: OutlineNode) => {
+    const nextOpen = habitLinkNodeId !== node.id;
+    setHabitLinkNodeId(nextOpen ? node.id : null);
+    setHabitConvertNodeId(null);
+    if (!nextOpen) return;
+    const currentValue = node.linked?.habitId
+      ? habitLinkTargets.find((target) => target.link.habitId === node.linked?.habitId)?.value
+      : "";
+    setSelectedHabitLinkValue(currentValue || habitLinkTargets[0]?.value || "");
+  };
+
+  const linkRowToExistingHabit = (node: OutlineNode) => {
+    const target = habitLinkTargets.find((item) => item.value === selectedHabitLinkValue) ?? habitLinkTargets[0];
+    if (!target) return;
+    const habitId = target.link.habitId;
+    const existingLinkedRow = habitId ? findNodeLinkedToHabit(nodes, habitId, node.id) : null;
+
+    if (existingLinkedRow) {
+      setFocusNodeId(existingLinkedRow.id);
+      setSearchQuery("");
+      setReviewFilter("all");
+      setHabitLinkNodeId(null);
+      setPanelStatus("That habit is already linked in the outliner.");
+      window.setTimeout(() => setPanelStatus(""), 2200);
+      return;
+    }
+
+    updateAndSave((current) =>
+      updateOutlineNode(current, node.id, (item) => ({
+        ...item,
+        tag: "habit",
+        text: item.text.trim() || target.link.label || "Linked habit",
+        linked: {
+          ...target.link,
+          renameDeclinedFor: null,
+        },
+      }))
+    );
+    setHabitLinkNodeId(null);
+    setPanelStatus("");
+  };
+
   const openReminderPanel = (node: OutlineNode) => {
     setReminderNodeId((current) => current === node.id ? null : node.id);
     setReminderValue(toLocalDatetimeValue(node.reminderAt));
     setReminderKind(node.reminderKind);
     setReminderIntervalMinutes(node.reminderIntervalMinutes ?? 1440);
+  };
+
+  const openPlanPanel = (node: OutlineNode) => {
+    setPlanNodeId((current) => (current === node.id ? null : node.id));
+    setPlanDateValue(node.planDate ?? todayDate);
+  };
+
+  const savePlanDate = (nodeId: string, value = planDateValue) => {
+    if (!value) return;
+    updateRow(nodeId, { planDate: value });
+    setPlanNodeId(null);
+  };
+
+  const clearPlanDate = (nodeId: string) => {
+    updateRow(nodeId, { planDate: null });
+    setPlanNodeId(null);
   };
 
   const saveReminder = (nodeId: string) => {
@@ -750,30 +1107,34 @@ export default function PlanningOutlinerPanel({
     delete noteSaveTimers.current[node.id];
 
     const content = (linkedNotes[node.id]?.content ?? node.draftNote).trim();
-    const title = node.text.trim() || "Outliner note";
-    const detailNote = content ? `## ${title}\n${content}` : `## ${title}`;
+    const title = node.text.trim();
+    if (!content && !title) return;
+
+    const detailNote = title && content ? `## ${title}\n${content}` : content || title;
     const existing = await onLoadLinkedNote(target.link);
-    const merged = existing.content.trim()
+    const existingContent = existing.content.trim();
+    const merged = existingContent.includes(detailNote.trim())
+      ? existingContent
+      : existingContent
       ? `${existing.content.trim()}\n\n${detailNote}`
       : detailNote;
     const saved = await onSaveLinkedNote(target.link, merged);
     if (!saved) return;
 
-    setRowLink(node.id, {
-      ...target.link,
-      label: title,
-      renameDeclinedFor: null,
-    });
+    const updatedAt = new Date().toISOString();
+    updateRow(node.id, { draftNote: content, draftNoteUpdatedAt: updatedAt });
     setLinkedNotes((prev) => ({
       ...prev,
       [node.id]: {
-        content: saved.content,
+        content,
         loading: false,
         saving: false,
         saved: true,
-        updatedAt: saved.updatedAt,
+        updatedAt,
       },
     }));
+    setPanelStatus(`Attached note to ${target.label.replace(/^(Theme|Habit):\s*/, "")}. Row note stayed separate.`);
+    window.setTimeout(() => setPanelStatus(""), 2600);
   };
 
   const reorderRow = (
@@ -790,7 +1151,7 @@ export default function PlanningOutlinerPanel({
   const focusRow = (node: OutlineNode) => {
     setFocusNodeId(node.id);
     setSearchQuery("");
-    setReviewOnly(false);
+    setReviewFilter("all");
     setActionMenuNodeId(null);
   };
 
@@ -800,16 +1161,28 @@ export default function PlanningOutlinerPanel({
       const isHabitLinked = !!node.linked?.habitId;
       const isThemeLinked = !!node.linked?.themeId && !node.linked?.habitId;
       const isBlockLinked = !!node.linked?.blockId;
+      const isRoutineLinked = !!node.linked?.routineId;
       const isOnBoard = !!node.linked?.habitId && boardHabitIdSet.has(node.linked.habitId);
       const canMakeTheme = !node.linked && !!node.text.trim();
-      const isDoneTask = node.tag === "task" && node.taskDone;
+      const isDoneRow = node.taskDone;
       const isDragTarget = dragOverNodeId === node.id && draggingNodeId !== node.id;
-      const noteLabel = node.linked ? (node.linked.habitId ? "Habit note" : "Theme note") : "Draft note";
-      const notePlaceholder = node.linked?.habitId
+      const availableParentOptions = parentRowOptions.filter(
+        (option) => option.id !== node.id && !isDescendantOf(nodes, option.id, node.id)
+      );
+      const noteLabel = node.linked
+        ? node.linked.routineId
+          ? "Routine note"
+          : node.linked.habitId
+            ? "Habit note"
+            : "Theme note"
+        : "Row note";
+      const notePlaceholder = node.linked?.routineId
+        ? "Write notes for this routine..."
+        : node.linked?.habitId
         ? "Write notes for this habit..."
         : node.linked?.themeId
         ? "Write notes for this theme..."
-        : "Write a note here, then attach it to a habit or theme when you are ready...";
+        : "Write a row note here, then attach it to a habit or theme when you are ready...";
       return (
         <div key={node.id} className="outliner-row-wrap">
           <div
@@ -885,7 +1258,7 @@ export default function PlanningOutlinerPanel({
               ref={(element) => {
                 inputRefs.current[node.id] = element;
               }}
-              className={`outliner-input ${isDoneTask ? "outliner-input--done" : ""}`}
+              className={`outliner-input ${isDoneRow ? "outliner-input--done" : ""}`}
               value={node.text}
               onChange={(event) => updateRow(node.id, { text: event.target.value })}
               onBlur={() => maybeSyncLinkedRename(node)}
@@ -895,7 +1268,7 @@ export default function PlanningOutlinerPanel({
                 if (event.shiftKey) addChildWithFocus(node.id);
                 else addSiblingWithFocus(node.id);
               }}
-              placeholder="Planning note..."
+              placeholder="Planning row..."
             />
             <select
               className={`outliner-tag-select outliner-tag-select--${node.tag}`}
@@ -905,26 +1278,38 @@ export default function PlanningOutlinerPanel({
               }
               title="Tag this row"
             >
-              <option value="note">Note</option>
+              <option value="note">Row</option>
               <option value="task">Task</option>
               <option value="habit">Habit</option>
             </select>
-            {(isThemeLinked || isHabitLinked || isBlockLinked || isOnBoard) && (
+            {(isThemeLinked || isHabitLinked || isBlockLinked || isRoutineLinked || isOnBoard || node.planDate || isDoneRow) && (
               <div className="outliner-link-pills">
                 {isThemeLinked && <span>Linked theme</span>}
                 {isHabitLinked && <span>Linked habit</span>}
-                {isBlockLinked && <span>Linked waiting</span>}
+                {isBlockLinked && <span>Linked block</span>}
+                {isRoutineLinked && <span>Routine</span>}
                 {isOnBoard && <span>On board</span>}
+                {node.planDate && <span>Plan {formatPlanDate(node.planDate, todayDate)}</span>}
+                {isDoneRow && <span>Done</span>}
               </div>
             )}
             <div className="outliner-row-actions">
               <button
                 type="button"
                 onClick={() => openRowNote(node)}
-                title={node.linked ? "Write in the same note shown in Habit Notes" : "Write a note and attach it later"}
+                title={node.linked ? "Open the note attached to this row" : "Write a row note and attach it later"}
               >
-                Notes
+                Row note
               </button>
+              {!node.linked && habitLinkTargets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => openHabitLinkPanel(node)}
+                  title="Link this row to an existing habit"
+                >
+                  Link habit
+                </button>
+              )}
               {isHabitLinked && !isOnBoard && (
                 <button
                   type="button"
@@ -937,10 +1322,26 @@ export default function PlanningOutlinerPanel({
               {node.tag !== "habit" && (
                 <button
                   type="button"
-                  onClick={() => convertToBlock(node)}
+                  onClick={() => convertToBlock(node, null)}
                   title="Send this row back to Waiting as an unscheduled block"
                 >
                   To waiting
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => updateRow(node.id, { planDate: todayDate })}
+                title="Mark this row as part of today"
+              >
+                Today
+              </button>
+              {node.planDate && !isBlockLinked && (
+                <button
+                  type="button"
+                  onClick={() => convertToBlock(node, node.planDate)}
+                  title="Create a linked planner block for this planned row"
+                >
+                  Schedule
                 </button>
               )}
               {node.tag === "habit" && (
@@ -983,6 +1384,15 @@ export default function PlanningOutlinerPanel({
               >
                 + Next
               </button>
+              {!normalizedSearch && index > 0 && (
+                <button
+                  type="button"
+                  onClick={() => indentRowUnderPrevious(node.id)}
+                  title="Move this row under the row above"
+                >
+                  Indent
+                </button>
+              )}
               <div className="outliner-more-wrap">
                 <button
                   type="button"
@@ -1001,6 +1411,18 @@ export default function PlanningOutlinerPanel({
                     >
                       Focus row
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => openParentMovePanel(node)}
+                    >
+                      Change parent
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openCreateParentPanel(node)}
+                    >
+                      Create parent
+                    </button>
                     {node.linked && (
                       <button
                         type="button"
@@ -1010,6 +1432,17 @@ export default function PlanningOutlinerPanel({
                         }}
                       >
                         Open linked
+                      </button>
+                    )}
+                    {!node.linked && habitLinkTargets.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          openHabitLinkPanel(node);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Link existing habit
                       </button>
                     )}
                     {isHabitLinked && !isOnBoard && (
@@ -1027,11 +1460,61 @@ export default function PlanningOutlinerPanel({
                       <button
                         type="button"
                         onClick={() => {
-                          convertToBlock(node);
+                          convertToBlock(node, null);
                           setActionMenuNodeId(null);
                         }}
                       >
                         Send to Waiting
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateRow(node.id, { planDate: todayDate });
+                        setActionMenuNodeId(null);
+                      }}
+                    >
+                      Mark for today
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const tomorrow = toDateInputValue(addDays(new Date(`${todayDate}T12:00:00`), 1));
+                        updateRow(node.id, { planDate: tomorrow });
+                        setActionMenuNodeId(null);
+                      }}
+                    >
+                      Mark for tomorrow
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openPlanPanel(node);
+                        setActionMenuNodeId(null);
+                      }}
+                    >
+                      Pick plan date
+                    </button>
+                    {node.planDate && !isBlockLinked && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          convertToBlock(node, node.planDate);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Schedule block
+                      </button>
+                    )}
+                    {hasChildren && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          createRoutineFromRow(node);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Make routine
                       </button>
                     )}
                     {node.tag === "habit" && (
@@ -1070,11 +1553,22 @@ export default function PlanningOutlinerPanel({
                       <button
                         type="button"
                         onClick={() => {
+                          indentRowUnderPrevious(node.id);
+                          setActionMenuNodeId(null);
+                        }}
+                      >
+                        Indent under previous
+                      </button>
+                    )}
+                    {!normalizedSearch && index > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
                           nestPreviousUnder(node.id);
                           setActionMenuNodeId(null);
                         }}
                       >
-                        Nest previous row
+                        Pull previous row under this
                       </button>
                     )}
                     <button
@@ -1098,6 +1592,55 @@ export default function PlanningOutlinerPanel({
               style={{ marginLeft: `${depth * 18 + 44}px` }}
             >
               {node.reminderKind === "pesky" ? "Pesky" : "Reminds"} {formatReminder(node.reminderAt)}
+            </div>
+          )}
+          {parentMoveNodeId === node.id && (
+            <div className="outliner-parent-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <span>Parent row</span>
+              <select
+                value={
+                  selectedParentNodeId === OUTLINER_TOP_LEVEL_PARENT ||
+                  availableParentOptions.some((option) => option.id === selectedParentNodeId)
+                    ? selectedParentNodeId
+                    : OUTLINER_TOP_LEVEL_PARENT
+                }
+                onChange={(event) => setSelectedParentNodeId(event.target.value)}
+              >
+                <option value={OUTLINER_TOP_LEVEL_PARENT}>Top level</option>
+                {availableParentOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => saveParentMove(node)}>
+                Move
+              </button>
+              <button type="button" className="outliner-reminder-clear" onClick={() => setParentMoveNodeId(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
+          {createParentNodeId === node.id && (
+            <div className="outliner-parent-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <span>New parent</span>
+              <input
+                type="text"
+                value={createParentName}
+                onChange={(event) => setCreateParentName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  saveCreatedParent(node);
+                }}
+                placeholder="Parent row name..."
+              />
+              <button type="button" onClick={() => saveCreatedParent(node)} disabled={!createParentName.trim()}>
+                Create
+              </button>
+              <button type="button" className="outliner-reminder-clear" onClick={() => setCreateParentNodeId(null)}>
+                Cancel
+              </button>
             </div>
           )}
           {reminderNodeId === node.id && (
@@ -1143,6 +1686,65 @@ export default function PlanningOutlinerPanel({
               )}
             </div>
           )}
+          {planNodeId === node.id && (
+            <div className="outliner-plan-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <span>Plan date</span>
+              <input
+                type="date"
+                value={planDateValue}
+                onChange={(event) => setPlanDateValue(event.target.value)}
+              />
+              <button type="button" onClick={() => savePlanDate(node.id)}>
+                Save
+              </button>
+              <button type="button" onClick={() => savePlanDate(node.id, todayDate)}>
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  savePlanDate(node.id, toDateInputValue(addDays(new Date(`${todayDate}T12:00:00`), 1)))
+                }
+              >
+                Tomorrow
+              </button>
+              {node.planDate && (
+                <button type="button" className="outliner-reminder-clear" onClick={() => clearPlanDate(node.id)}>
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+          {habitLinkNodeId === node.id && (
+            <div className="outliner-convert-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <span>Link existing habit</span>
+              <select
+                value={selectedHabitLinkValue}
+                onChange={(event) => setSelectedHabitLinkValue(event.target.value)}
+                disabled={habitLinkTargets.length === 0}
+              >
+                {habitLinkTargets.length === 0 ? (
+                  <option value="">No habits yet</option>
+                ) : (
+                  habitLinkTargets.map((target) => (
+                    <option key={target.value} value={target.value}>
+                      {target.label.replace(/^Habit:\s*/, "")}
+                    </option>
+                  ))
+                )}
+              </select>
+              <button
+                type="button"
+                onClick={() => linkRowToExistingHabit(node)}
+                disabled={habitLinkTargets.length === 0}
+              >
+                Link
+              </button>
+              <button type="button" className="secondary" onClick={() => setHabitLinkNodeId(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
           {noteNodeId === node.id && (
             <div className="outliner-linked-note" style={{ marginLeft: `${depth * 18 + 44}px` }}>
               <span className="outliner-linked-note-dot" aria-hidden="true" />
@@ -1164,7 +1766,7 @@ export default function PlanningOutlinerPanel({
                 />
                 {!node.linked && (
                   <div className="outliner-note-attach">
-                    <span>Attach to</span>
+                    <span>Attach note to theme/habit</span>
                     <select
                       value={noteAttachTargets[node.id] || attachTargets[0]?.value || ""}
                       onChange={(event) =>
@@ -1190,14 +1792,14 @@ export default function PlanningOutlinerPanel({
                       onClick={() => attachDraftNote(node)}
                       disabled={attachTargets.length === 0}
                     >
-                      Attach
+                      Attach note
                     </button>
                   </div>
                 )}
               </div>
             </div>
           )}
-          {node.tag === "habit" && (
+          {node.tag === "habit" && !isHabitLinked && (
             <div className="outliner-habit-settings" style={{ marginLeft: `${depth * 18 + 44}px` }}>
               <span>Frequency</span>
               <select
@@ -1253,8 +1855,41 @@ export default function PlanningOutlinerPanel({
           )}
           {hasChildren && (forceExpanded || !node.collapsed) && renderRows(node.children, depth + 1, forceExpanded)}
         </div>
-      );
-    });
+	      );
+	    });
+
+  const filterOptions: Array<{ id: ReviewFilter; label: string }> = [
+    { id: "all", label: "All" },
+    { id: "review", label: "Review" },
+    { id: "schedule", label: "Schedule" },
+    { id: "today", label: "Today" },
+    { id: "overdue", label: "Overdue" },
+    { id: "waiting", label: "Waiting" },
+  ];
+  const filterNoticeText =
+    reviewFilter === "review"
+      ? "Review is showing rows with reminders, plan dates, tasks, habits, links, or notes."
+      : reviewFilter === "schedule"
+        ? "Schedule is showing rows that are ready to place on the planner."
+        : reviewFilter === "today"
+          ? "Today is showing rows dated or reminded for today."
+          : reviewFilter === "overdue"
+            ? "Overdue is showing unfinished rows whose plan date or reminder has passed."
+            : reviewFilter === "waiting"
+              ? "Waiting is showing outline rows already linked to waiting/planner blocks."
+              : normalizedSearch
+                ? "Search is hiding rows that do not match."
+                : "You are focused inside one row.";
+  const emptyText = normalizedSearch
+    ? "No matching rows."
+    : reviewFilter !== "all"
+      ? "Nothing in this view at this level."
+      : "Add a row to start planning at this level.";
+  const footerQualifier = normalizedSearch
+    ? "matching"
+    : reviewFilter !== "all"
+      ? "in this view"
+      : "in view";
 
   return (
     <div className="outliner-panel" ref={panelRef}>
@@ -1279,39 +1914,45 @@ export default function PlanningOutlinerPanel({
         ))}
       </div>
 
-      <div className="outliner-search-row">
-        <input
-          type="search"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="Search rows, notes, tasks, habits, reminders..."
-        />
-        <button
-          type="button"
-          className={`outliner-review-toggle ${reviewOnly ? "active" : ""}`}
-          onClick={() => setReviewOnly((value) => !value)}
-        >
-          {reviewOnly ? "Review on" : "Review"}
-        </button>
-        {searchQuery && (
-          <button type="button" onClick={() => setSearchQuery("")}>
-            Clear
+	      <div className="outliner-search-row">
+	        <input
+	          type="search"
+	          value={searchQuery}
+	          onChange={(event) => setSearchQuery(event.target.value)}
+	          placeholder="Search rows, notes, tasks, habits, reminders..."
+	        />
+	        {searchQuery && (
+	          <button type="button" onClick={() => setSearchQuery("")}>
+	            Clear
+	          </button>
+	        )}
+	      </div>
+
+      <div className="outliner-filter-tabs">
+        {filterOptions.map((filter) => (
+          <button
+            key={filter.id}
+            type="button"
+            className={reviewFilter === filter.id ? "active" : ""}
+            onClick={() => setReviewFilter(filter.id)}
+          >
+            {filter.label}
           </button>
-        )}
+        ))}
       </div>
 
       {filteredViewActive && (
         <div className="outliner-filter-notice">
-          <span>
-            {reviewOnly
-              ? "Review is showing only rows with reminders, tasks, habits, links, or notes."
-              : normalizedSearch
-                ? "Search is hiding rows that do not match."
-                : "You are focused inside one row."}
-          </span>
-          <button type="button" onClick={showAllRows}>
-            Show all
+          <span>{filterNoticeText}</span>
+	          <button type="button" onClick={showAllRows}>
+	            Show all
           </button>
+        </div>
+      )}
+
+      {panelStatus && (
+        <div className="outliner-status-note">
+          {panelStatus}
         </div>
       )}
 
@@ -1327,24 +1968,18 @@ export default function PlanningOutlinerPanel({
         </div>
       )}
 
-      <div className="outliner-body">
-        {displayedNodes.length === 0 ? (
-          <div className="outliner-empty">
-            {normalizedSearch
-              ? "No matching rows."
-              : reviewOnly
-                ? "Nothing needs review at this level."
-                : "Add a row to start planning at this level."}
-          </div>
-        ) : (
-          renderRows(displayedNodes, 0, !!normalizedSearch || reviewOnly)
-        )}
-      </div>
+	      <div className="outliner-body">
+	        {displayedNodes.length === 0 ? (
+	          <div className="outliner-empty">{emptyText}</div>
+	        ) : (
+	          renderRows(displayedNodes, 0, !!normalizedSearch || reviewFilter !== "all")
+	        )}
+	      </div>
 
-      <div className="outliner-footer">
-        <span>
-          {visibleCount} row{visibleCount === 1 ? "" : "s"} {normalizedSearch ? "matching" : reviewOnly ? "to review" : "in view"}
-        </span>
+	      <div className="outliner-footer">
+	        <span>
+	          {visibleCount} row{visibleCount === 1 ? "" : "s"} {footerQualifier}
+	        </span>
         <button type="button" onClick={addRootOrFocusedChild}>
           + Add row here
         </button>

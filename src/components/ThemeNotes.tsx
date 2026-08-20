@@ -50,12 +50,33 @@ type NoteState = {
 };
 
 type MarkdownCommand = "heading" | "bold" | "italic" | "bullet" | "check";
-type ThemeNotesTab = "all" | "theme" | "habits" | "blocks" | "pinned";
+type ThemeNotesTab = "all" | "theme" | "habits" | "pinned";
 type NoteActionItem = {
   label: string;
   onClick: () => void;
   destructive?: boolean;
 };
+
+const plannerDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const plannerTimes = [
+  "6:00 AM",
+  "7:00 AM",
+  "8:00 AM",
+  "9:00 AM",
+  "10:00 AM",
+  "11:00 AM",
+  "12:00 PM",
+  "1:00 PM",
+  "2:00 PM",
+  "3:00 PM",
+  "4:00 PM",
+  "5:00 PM",
+  "6:00 PM",
+  "7:00 PM",
+  "8:00 PM",
+  "9:00 PM",
+  "10:00 PM",
+];
 
 const getActionLabel = (text: string) =>
   text
@@ -637,6 +658,13 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
     });
   };
 
+  const formatBlockInstanceSlot = (block: Block) => {
+    if (block.location.type !== "slot") return "Waiting";
+    const day = plannerDays[block.location.dayIndex] ?? "Planned";
+    const time = plannerTimes[block.location.timeIndex];
+    return time ? `${day} ${time}` : day;
+  };
+
   const formatTimeSince = (timestamp: string): string => {
     const now = new Date();
     const then = new Date(timestamp);
@@ -669,14 +697,12 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
   });
   const showThemeSection = activeTab === "all" || activeTab === "theme";
   const showPinnedSection = (activeTab === "all" || activeTab === "pinned") && visiblePinnedInsights.length > 0;
-  const showHabitSection = activeTab === "all" || activeTab === "habits" || activeTab === "blocks";
-  const onlyBlockNotes = activeTab === "blocks";
+  const showHabitSection = activeTab === "all" || activeTab === "habits";
   const themeNoteMatchesSearch = matchesSearch(themePrefs.generalNote, themeName);
   const tabs: Array<{ id: ThemeNotesTab; label: string }> = [
     { id: "all", label: "All" },
     { id: "theme", label: "Theme" },
     { id: "habits", label: "Habits" },
-    { id: "blocks", label: "Blocks" },
     { id: "pinned", label: "Pinned" },
   ];
 
@@ -806,10 +832,10 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
               {showHabitSection && (
               <section className="theme-notes-section">
                 <div className="theme-notes-section-header">
-                  <h3>{onlyBlockNotes ? "Block Notes" : "Linked Habit Notes"}</h3>
+                  <h3>Habit Notes</h3>
                   {hiddenCount > 0 && (
                     <button className="secondary small-btn" onClick={restoreHiddenBlockNotes}>
-                      Show {hiddenCount} archived
+                      Show {hiddenCount} archived instance{hiddenCount === 1 ? "" : "s"}
                     </button>
                   )}
                 </div>
@@ -905,7 +931,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                         <div style={{ marginTop: "10px" }}>
                           <div className="theme-notes-subsection-header">
                             <label style={{ fontSize: "12px", fontWeight: 600, color: "#555", marginBottom: "4px", display: "block" }}>
-                            Notes
+                            General
                             {note?.saving && <span style={{ fontWeight: 400, color: "#999", marginLeft: "8px" }}>Saving...</span>}
                             {note?.saved && <span style={{ fontWeight: 400, color: "#16a34a", marginLeft: "8px" }}>Saved</span>}
                             </label>
@@ -914,7 +940,7 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                                 Last edited {formatTimestamp(note.updatedAt)}
                               </span>
                             )}
-                            {!onlyBlockNotes && (note?.content ?? "").trim() && (
+                            {(note?.content ?? "").trim() && (
                               <NoteActionMenu
                                 id={`habit-note-${habit.id}`}
                                 actions={[
@@ -928,7 +954,6 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                               />
                             )}
                           </div>
-                          {!onlyBlockNotes && (
                           <MarkdownNoteEditor
                             value={note?.content ?? ""}
                             placeholder={`Write notes about ${habit.name}...`}
@@ -940,7 +965,6 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                             onStartEdit={() => setActiveNoteEditor(habit.id)}
                             onStopEdit={() => setActiveNoteEditor((current) => current === habit.id ? null : current)}
                           />
-                          )}
                         </div>
 
                         {(() => {
@@ -950,28 +974,36 @@ export const ThemeNotes: React.FC<ThemeNotesProps> = ({
                               (b.blockNote ?? "").trim() &&
                               !themePrefs.hiddenBlockNoteIds.includes(b.id)
                           );
-                          if (habitBlocks.length === 0) return null;
-                          return (
-                            <div style={{ marginTop: "10px" }}>
-                              <label style={{ fontSize: "12px", fontWeight: 600, color: "#555", marginBottom: "4px", display: "block" }}>
-                                Block Notes
-                              </label>
-                              <div className="theme-notes-block-notes">
-                                {habitBlocks.map((b) => (
-                                  <div key={b.id} className="theme-notes-block-note-item">
-                                    <div className="theme-notes-block-note-label-row">
-                                      <div className="theme-notes-block-note-label">{b.label}</div>
-                                      {b.blockNoteUpdatedAt && (
-                                        <span className="theme-notes-timestamp">
-                                          {formatTimestamp(b.blockNoteUpdatedAt)}
+                          if (habitBlocks.length === 0) {
+                            return (
+                              <div className="theme-notes-instances-empty">
+                                No instance notes yet.
+                              </div>
+                            );
+                          }
+	                          return (
+	                            <div style={{ marginTop: "10px" }}>
+	                              <label style={{ fontSize: "12px", fontWeight: 600, color: "#555", marginBottom: "4px", display: "block" }}>
+	                                Instances
+	                              </label>
+	                              <div className="theme-notes-block-notes">
+	                                {habitBlocks.map((b) => (
+	                                  <div key={b.id} className="theme-notes-block-note-item">
+	                                    <div className="theme-notes-block-note-label-row">
+	                                      <div className="theme-notes-block-note-label">
+                                          {formatBlockInstanceSlot(b)}
+                                        </div>
+	                                      {b.blockNoteUpdatedAt && (
+	                                        <span className="theme-notes-timestamp">
+	                                          {formatTimestamp(b.blockNoteUpdatedAt)}
                                         </span>
                                       )}
                                     </div>
                                     <div className="theme-notes-block-note-content">{b.blockNote}</div>
                                     <NoteActionMenu
                                       id={`block-note-${b.id}`}
-                                      actions={[
-                                        { label: "Pin insight", onClick: () => pinInsight(b.blockNote ?? "", `${habit.name} block`) },
+	                                      actions={[
+	                                        { label: "Pin insight", onClick: () => pinInsight(b.blockNote ?? "", `${habit.name} instance`) },
                                         { label: "Turn into block", onClick: () => createBlockFromText(b.blockNote ?? "") },
                                         { label: "Turn into habit", onClick: () => createHabitFromText(b.blockNote ?? "") },
                                         { label: "Add to routine", onClick: () => copyToRoutine(b.blockNote ?? "") },

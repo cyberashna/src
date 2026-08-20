@@ -30,7 +30,7 @@ import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import RoutineNotesPopup from "./components/RoutineNotesPopup";
 import AmbientMode from "./components/AmbientMode";
 import type { AmbientSettings, AmbientTask } from "./components/AmbientMode";
-import { loadRoutineNotes, saveRoutineNotes, type RoutineTab } from "./services/routineNotes";
+import { createRoutineId, inferRoutineCategory, loadRoutineNotes, saveRoutineNotes, type RoutineTab } from "./services/routineNotes";
 import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
 import WorkoutLibraryPanel from "./components/WorkoutLibraryPanel";
 import BlockCard from "./components/BlockCard";
@@ -39,16 +39,21 @@ import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
 import {
   addQuickCaptureToPlanningOutliner,
   addHabitToPlanningOutliner,
+  addThemeToPlanningOutliner,
   clearOutlinerReminder,
   dismissOutlinerReminder,
   getDueOutlinerReminder,
+  loadPlanningOutliner,
+  savePlanningOutliner,
   snoozeOutlinerReminder,
+  updateOutlineNode,
   type OutlineFrequency,
   type OutlineLink,
+  type OutlineNode,
   type OutlinerReminder,
 } from "./services/planningOutliner";
 import { loadThemeNotesPrefs, saveThemeGeneralNote } from "./services/themeNotes";
-import { createWorkoutExerciseRow } from "./services/workoutLibrary";
+import { createWorkoutExerciseRow, formatExerciseResult } from "./services/workoutLibrary";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
 
 type HabitGroup = {
@@ -69,6 +74,8 @@ type Habit = {
   parentHabitId?: string;
   subtasks: Habit[];
 };
+
+type HabitWithTheme = Habit & { themeName: string; themeId: string };
 
 type Theme = {
   id: string;
@@ -115,6 +122,10 @@ export type WorkoutBlockExercise = {
 };
 
 export type WorkoutRoutineExercise = Omit<WorkoutBlockExercise, "id">;
+export type WorkoutRoutineFocus = "full" | "upper" | "lower" | "core" | "mobility" | "cardio";
+export type WorkoutRoutineEnergy = "low" | "medium" | "high";
+export type WorkoutRoutineTime = "short" | "medium" | "long";
+export type WorkoutRoutineEquipment = "any" | "none" | "dumbbells" | "gym";
 
 export type WorkoutRoutine = {
   id: string;
@@ -122,6 +133,10 @@ export type WorkoutRoutine = {
   createdAt: string;
   updatedAt: string;
   exercises: WorkoutRoutineExercise[];
+  focus?: WorkoutRoutineFocus;
+  energy?: WorkoutRoutineEnergy;
+  timeBudget?: WorkoutRoutineTime;
+  equipment?: WorkoutRoutineEquipment;
 };
 
 export type WorkoutExerciseHistoryEntry = {
@@ -136,6 +151,17 @@ export type WorkoutExerciseHistoryEntry = {
   unit: "lbs" | "kg" | null;
   duration: number | null;
   notes: string;
+};
+
+export type WorkoutRoutineHistoryEntry = {
+  id: string;
+  routineId: string;
+  routineName: string;
+  blockId: string;
+  completedAt: string;
+  exerciseNames: string[];
+  notes: string;
+  bestEffort: string;
 };
 
 export type Block = {
@@ -161,9 +187,36 @@ export type Block = {
   blockTasks?: BlockTask[];
 };
 
+type WeeklyHabitIntentionPlacement = {
+  id: string;
+  dayIndex: number;
+  timeIndex: number;
+};
+
+type WeeklyHabitIntention = {
+  id: string;
+  habitId: string;
+  habitName: string;
+  themeId: string;
+  themeName: string;
+  weekStartDate: string;
+  desiredCount: number;
+  preferredDayIndexes: number[];
+  placements: WeeklyHabitIntentionPlacement[];
+};
+
+type WeeklyRoutineIntention = {
+  id: string;
+  routineId: string;
+  routineName: string;
+  weekStartDate: string;
+  desiredCount: number;
+  preferredDayIndexes: number[];
+  placements: WeeklyHabitIntentionPlacement[];
+};
+
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const normalizePlanningName = (s: string) => s.trim().toLowerCase();
 
 const createClientId = (prefix: string) =>
@@ -262,10 +315,27 @@ const getBucketForHourlyIndex = (hourlyIndex: number): number => {
 };
 
 type ViewMode = "hourly" | "buckets";
-type MobileHomeView = "today" | "planner";
+type MobileHomeView = "today" | "planner" | "themes";
 type OverlayPanel = "routines" | "workout" | "outliner";
 type MobileCaptureMode = "block" | "note" | "task";
-type MobileCaptureDestination = "waiting" | "outliner" | "both";
+type MobileCaptureDestination = "waiting" | "today" | "theme-note" | "habit-note";
+
+type PendingQuickCapture = {
+  id: string;
+  label: string;
+  mode: MobileCaptureMode;
+  destination: MobileCaptureDestination;
+  captureLabel: string;
+  hashtag?: string;
+  themeId?: string;
+  habitId?: string;
+  dayIndex?: number;
+  timeIndex?: number;
+  createdAt: string;
+};
+
+const OUTLINER_TOP_LEVEL_PARENT = "__top-level__";
+const OUTLINER_NEW_PARENT = "__new-parent__";
 
 const defaultAmbientSettings: AmbientSettings = {
   layout: "focus",
@@ -280,6 +350,11 @@ const defaultAmbientSettings: AmbientSettings = {
 };
 
 const createAmbientSettingsKey = (userId: string) => `ambient-settings:${userId}`;
+const createWeeklyIntentionsKey = (userId: string, weekStartDate: string) =>
+  `weekly-habit-intentions:${userId}:${weekStartDate}`;
+const createWeeklyRoutineIntentionsKey = (userId: string, weekStartDate: string) =>
+  `weekly-routine-intentions:${userId}:${weekStartDate}`;
+const createPendingQuickCapturesKey = (userId: string) => `pending-quick-captures:${userId}`;
 
 const loadAmbientSettings = (userId: string): AmbientSettings => {
   try {
@@ -288,6 +363,116 @@ const loadAmbientSettings = (userId: string): AmbientSettings => {
     return { ...defaultAmbientSettings, ...(JSON.parse(saved) as Partial<AmbientSettings>) };
   } catch {
     return defaultAmbientSettings;
+  }
+};
+
+const loadWeeklyHabitIntentions = (userId: string, weekStartDate: string): WeeklyHabitIntention[] => {
+  try {
+    const saved = window.localStorage.getItem(createWeeklyIntentionsKey(userId, weekStartDate));
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as Partial<WeeklyHabitIntention>[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((intention) => ({
+        id: intention.id ?? createClientId("weekly-intention"),
+        habitId: intention.habitId ?? "",
+        habitName: intention.habitName ?? "Habit",
+        themeId: intention.themeId ?? "",
+        themeName: intention.themeName ?? "Theme",
+        weekStartDate: intention.weekStartDate ?? weekStartDate,
+        desiredCount: Math.max(1, intention.desiredCount ?? 1),
+        preferredDayIndexes: Array.isArray(intention.preferredDayIndexes)
+          ? intention.preferredDayIndexes.filter(
+              (dayIndex): dayIndex is number =>
+                typeof dayIndex === "number" && dayIndex >= 0 && dayIndex < days.length
+            )
+          : [],
+        placements: Array.isArray(intention.placements)
+          ? intention.placements
+              .filter(
+                (placement): placement is WeeklyHabitIntentionPlacement =>
+                  typeof placement?.dayIndex === "number" && typeof placement?.timeIndex === "number"
+              )
+              .map((placement) => ({
+                id: placement.id ?? createClientId("intention-slot"),
+                dayIndex: placement.dayIndex,
+                timeIndex: placement.timeIndex,
+              }))
+          : [],
+      }))
+      .filter((intention) => intention.habitId && intention.placements.length > 0);
+  } catch {
+    return [];
+  }
+};
+
+const loadWeeklyRoutineIntentions = (userId: string, weekStartDate: string): WeeklyRoutineIntention[] => {
+  try {
+    const saved = window.localStorage.getItem(createWeeklyRoutineIntentionsKey(userId, weekStartDate));
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as Partial<WeeklyRoutineIntention>[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((intention) => ({
+        id: intention.id ?? createClientId("weekly-routine-intention"),
+        routineId: intention.routineId ?? "",
+        routineName: intention.routineName ?? "Routine",
+        weekStartDate: intention.weekStartDate ?? weekStartDate,
+        desiredCount: Math.max(1, intention.desiredCount ?? 1),
+        preferredDayIndexes: Array.isArray(intention.preferredDayIndexes)
+          ? intention.preferredDayIndexes.filter(
+              (dayIndex): dayIndex is number =>
+                typeof dayIndex === "number" && dayIndex >= 0 && dayIndex < days.length
+            )
+          : [],
+        placements: Array.isArray(intention.placements)
+          ? intention.placements
+              .filter(
+                (placement): placement is WeeklyHabitIntentionPlacement =>
+                  typeof placement?.dayIndex === "number" && typeof placement?.timeIndex === "number"
+              )
+              .map((placement) => ({
+                id: placement.id ?? createClientId("routine-intention-slot"),
+                dayIndex: placement.dayIndex,
+                timeIndex: placement.timeIndex,
+              }))
+          : [],
+      }))
+      .filter((intention) => intention.routineId && intention.placements.length > 0);
+  } catch {
+    return [];
+  }
+};
+
+const loadPendingQuickCaptures = (userId: string): PendingQuickCapture[] => {
+  try {
+    const saved = window.localStorage.getItem(createPendingQuickCapturesKey(userId));
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as Partial<PendingQuickCapture>[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({
+        id: item.id ?? createClientId("pending-capture"),
+        label: item.label ?? "",
+        mode: item.mode === "task" || item.mode === "note" || item.mode === "block" ? item.mode : "note",
+        destination:
+          item.destination === "today" ||
+          item.destination === "theme-note" ||
+          item.destination === "habit-note" ||
+          item.destination === "waiting"
+            ? item.destination
+            : "waiting",
+        captureLabel: item.captureLabel ?? item.label ?? "",
+        hashtag: item.hashtag,
+        themeId: item.themeId,
+        habitId: item.habitId,
+        dayIndex: typeof item.dayIndex === "number" ? item.dayIndex : undefined,
+        timeIndex: typeof item.timeIndex === "number" ? item.timeIndex : undefined,
+        createdAt: item.createdAt ?? new Date().toISOString(),
+      }))
+      .filter((item) => item.label.trim());
+  } catch {
+    return [];
   }
 };
 
@@ -393,8 +578,10 @@ const App: React.FC = () => {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [exerciseLibrary, setExerciseLibrary] = useState<ExerciseLibraryItem[]>(defaultExerciseLibrary);
   const [blockExercises, setBlockExercises] = useState<Record<string, WorkoutBlockExercise[]>>({});
+  const [workoutBlockRoutineLinks, setWorkoutBlockRoutineLinks] = useState<Record<string, string>>({});
   const [exerciseHistory, setExerciseHistory] = useState<Record<string, WorkoutExerciseHistoryEntry[]>>({});
   const [workoutRoutines, setWorkoutRoutines] = useState<WorkoutRoutine[]>([]);
+  const [workoutRoutineHistory, setWorkoutRoutineHistory] = useState<WorkoutRoutineHistoryEntry[]>([]);
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dragHabitId, setDragHabitId] = useState<string | null>(null);
   const [dragOverThemeId, setDragOverThemeId] = useState<string | null>(null);
@@ -477,6 +664,11 @@ const App: React.FC = () => {
 
   const [ghostBlocks, setGhostBlocks] = useState<GhostBlockType[]>([]);
   const [showGhostBlocks, setShowGhostBlocks] = useState(true);
+  const [weeklyIntentions, setWeeklyIntentions] = useState<WeeklyHabitIntention[]>([]);
+  const [weeklyRoutineIntentions, setWeeklyRoutineIntentions] = useState<WeeklyRoutineIntention[]>([]);
+  const [planningIntentionHabitId, setPlanningIntentionHabitId] = useState<string | null>(null);
+  const [planningIntentionCount, setPlanningIntentionCount] = useState(3);
+  const [planningIntentionDayIndexes, setPlanningIntentionDayIndexes] = useState<number[]>([]);
   const [showQuickStartModal, setShowQuickStartModal] = useState(false);
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
@@ -487,12 +679,13 @@ const App: React.FC = () => {
   const [showAmbientMode, setShowAmbientMode] = useState(false);
   const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(defaultAmbientSettings);
   const [ambientQuickNote, setAmbientQuickNote] = useState("");
-  const [ambientQuickNoteDestination, setAmbientQuickNoteDestination] = useState<MobileCaptureDestination>("both");
   const [ambientWakeLockActive, setAmbientWakeLockActive] = useState(false);
   const [ambientWakeLockError, setAmbientWakeLockError] = useState("");
   const ambientWakeLockRef = useRef<{ release: () => Promise<void>; addEventListener: (type: "release", listener: () => void) => void } | null>(null);
   const launchParamsHandledRef = useRef(false);
   const keepMobileDayOnWeekChangeRef = useRef(false);
+  const mobileQuickCaptureInputRef = useRef<HTMLInputElement | null>(null);
+  const syncingPendingCapturesRef = useRef(false);
   const [showPlanningMenu, setShowPlanningMenu] = useState(false);
   const [showQuickHabit, setShowQuickHabit] = useState(false);
   const [outlinerReminder, setOutlinerReminder] = useState<OutlinerReminder | null>(null);
@@ -504,7 +697,22 @@ const App: React.FC = () => {
   const [mobileHomeView, setMobileHomeView] = useState<MobileHomeView>("today");
   const [mobileCaptureMode, setMobileCaptureMode] = useState<MobileCaptureMode>("block");
   const [mobileCaptureDestination, setMobileCaptureDestination] = useState<MobileCaptureDestination>("waiting");
+  const [mobileCaptureThemeId, setMobileCaptureThemeId] = useState("");
+  const [mobileCaptureHabitId, setMobileCaptureHabitId] = useState("");
+  const [mobileQuickCapturePrimed, setMobileQuickCapturePrimed] = useState(false);
+  const [pendingQuickCaptures, setPendingQuickCaptures] = useState<PendingQuickCapture[]>([]);
+  const [mobileHabitPickerSlot, setMobileHabitPickerSlot] = useState<{
+    dayIndex: number;
+    timeIndex: number;
+  } | null>(null);
+  const [mobileHabitPickerQuery, setMobileHabitPickerQuery] = useState("");
+  const [outlinerNodes, setOutlinerNodes] = useState<OutlineNode[]>([]);
   const [outlinerRefreshKey, setOutlinerRefreshKey] = useState(0);
+  const [outlinerFocusNodeId, setOutlinerFocusNodeId] = useState<string | null>(null);
+  const [outlinerFocusRequestKey, setOutlinerFocusRequestKey] = useState(0);
+  const [waitingOutlinerParentBlockId, setWaitingOutlinerParentBlockId] = useState<string | null>(null);
+  const [waitingOutlinerParentNodeId, setWaitingOutlinerParentNodeId] = useState(OUTLINER_TOP_LEVEL_PARENT);
+  const [waitingOutlinerNewParentName, setWaitingOutlinerNewParentName] = useState("");
   const [routineTabs, setRoutineTabs] = useState<RoutineTab[]>([]);
 
   useEffect(() => {
@@ -535,6 +743,41 @@ const App: React.FC = () => {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  const persistWeeklyIntentions = (nextIntentions: WeeklyHabitIntention[]) => {
+    setWeeklyIntentions(nextIntentions);
+    if (!user) return;
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    window.localStorage.setItem(
+      createWeeklyIntentionsKey(user.id, weekStartDate),
+      JSON.stringify(nextIntentions)
+    );
+  };
+
+  const persistWeeklyRoutineIntentions = (nextIntentions: WeeklyRoutineIntention[]) => {
+    setWeeklyRoutineIntentions(nextIntentions);
+    if (!user) return;
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    window.localStorage.setItem(
+      createWeeklyRoutineIntentionsKey(user.id, weekStartDate),
+      JSON.stringify(nextIntentions)
+    );
+  };
+
+  const savePendingQuickCaptures = (nextCaptures: PendingQuickCapture[]) => {
+    setPendingQuickCaptures(nextCaptures);
+    if (!user) return;
+    window.localStorage.setItem(
+      createPendingQuickCapturesKey(user.id),
+      JSON.stringify(nextCaptures)
+    );
+  };
+
+  const triggerMobileTap = () => {
+    if ("vibrate" in navigator) {
+      navigator.vibrate(10);
+    }
+  };
 
   const refreshRoutineTabs = useCallback(() => {
     if (!user) {
@@ -602,29 +845,57 @@ const App: React.FC = () => {
     setShowAmbientMode(false);
   }, []);
 
+  const resetMobileTabViewport = useCallback((button?: HTMLButtonElement) => {
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof HTMLInputElement ||
+      activeElement instanceof HTMLTextAreaElement ||
+      activeElement instanceof HTMLSelectElement ||
+      activeElement instanceof HTMLButtonElement
+    ) {
+      activeElement.blur();
+    }
+    button?.blur();
+    setMobileQuickCapturePrimed(false);
+    window.setTimeout(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      [
+        document.documentElement,
+        document.body,
+        document.querySelector(".app"),
+        document.querySelector(".right-column"),
+        document.querySelector(".mobile-use-view"),
+      ].forEach((element) => {
+        if (element instanceof HTMLElement) {
+          element.scrollLeft = 0;
+        }
+      });
+    }, 0);
+  }, []);
+
   const handleMobileHomeNav = (view: MobileHomeView, event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    resetMobileTabViewport(event.currentTarget);
     setMobileHomeView(view);
     if (view === "today") {
       setMobileDayIndex(todayDayIndex >= 0 ? todayDayIndex : 0);
     }
     closeOverlayPanels();
-    event.currentTarget.blur();
   };
 
   const handleMobileOverlayNav = (panel: OverlayPanel, event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    resetMobileTabViewport(event.currentTarget);
     toggleOverlayPanel(panel);
-    event.currentTarget.blur();
   };
 
   const handleMobileAmbientNav = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    resetMobileTabViewport(event.currentTarget);
     openAmbientMode();
-    event.currentTarget.blur();
   };
 
   const checkOutlinerReminders = useCallback(() => {
@@ -664,18 +935,77 @@ const App: React.FC = () => {
       setRoutineTabs([]);
       setAmbientSettings(defaultAmbientSettings);
       setShowAmbientMode(false);
+      setOutlinerNodes([]);
+      setWeeklyIntentions([]);
+      setWeeklyRoutineIntentions([]);
+      setPendingQuickCaptures([]);
       return;
     }
 
     refreshRoutineTabs();
     setAmbientSettings(loadAmbientSettings(user.id));
+    setPendingQuickCaptures(loadPendingQuickCaptures(user.id));
   }, [user, refreshRoutineTabs]);
+
+  useEffect(() => {
+    if (!user) {
+      setWeeklyIntentions([]);
+      setWeeklyRoutineIntentions([]);
+      return;
+    }
+
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    setWeeklyIntentions(loadWeeklyHabitIntentions(user.id, weekStartDate));
+    setWeeklyRoutineIntentions(loadWeeklyRoutineIntentions(user.id, weekStartDate));
+    setPlanningIntentionHabitId(null);
+  }, [user, weekOffset]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    let cancelled = false;
+    loadPlanningOutliner(user.id, false).then((nodes) => {
+      if (!cancelled) setOutlinerNodes(nodes);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, outlinerRefreshKey]);
+
+  useEffect(() => {
+    if (!themes.length) {
+      setMobileCaptureThemeId("");
+      setMobileCaptureHabitId("");
+      return;
+    }
+
+    setMobileCaptureThemeId((current) =>
+      current && themes.some((theme) => theme.id === current) ? current : themes[0].id
+    );
+
+    setMobileCaptureHabitId((current) => {
+      const habitIds = themes.flatMap((theme) =>
+        flattenHabits(theme.habits, theme.name, theme.id).map((habit) => habit.id)
+      );
+      return current && habitIds.includes(current) ? current : habitIds[0] ?? "";
+    });
+  }, [themes]);
 
   useEffect(() => {
     if (!user || launchParamsHandledRef.current) return;
 
     const params = new URLSearchParams(window.location.search);
     const capture = params.get("capture");
+    const destination = params.get("destination");
+    const panel = params.get("panel");
+    const section = params.get("section");
+    const view = params.get("view");
+
+    const focusQuickCapture = () => {
+      setMobileQuickCapturePrimed(true);
+      window.setTimeout(() => mobileQuickCaptureInputRef.current?.focus(), 150);
+    };
 
     if (params.get("mode") === "ambient") {
       openAmbientMode();
@@ -686,18 +1016,38 @@ const App: React.FC = () => {
     if (capture === "note" || capture === "task") {
       setMobileHomeView("today");
       setMobileCaptureMode(capture);
-      setMobileCaptureDestination("both");
+      setMobileCaptureDestination(
+        destination === "today" ||
+          destination === "theme-note" ||
+          destination === "habit-note" ||
+          destination === "waiting"
+          ? destination
+          : "waiting"
+      );
       closeOverlayPanels();
+      focusQuickCapture();
       launchParamsHandledRef.current = true;
       return;
     }
 
-    if (params.get("view") === "today") {
+    if (panel === "workout" || panel === "routines" || panel === "outliner") {
       setMobileHomeView("today");
+      openOverlayPanel(panel);
+      launchParamsHandledRef.current = true;
+      return;
+    }
+
+    if (view === "planner" || view === "themes" || view === "today") {
+      setMobileHomeView(view);
       closeOverlayPanels();
+      if (section === "waiting") {
+        window.setTimeout(() => {
+          document.getElementById("mobile-waiting-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 250);
+      }
       launchParamsHandledRef.current = true;
     }
-  }, [closeOverlayPanels, openAmbientMode, user]);
+  }, [closeOverlayPanels, openAmbientMode, openOverlayPanel, user]);
 
   useEffect(() => {
     if (user) {
@@ -793,16 +1143,20 @@ const App: React.FC = () => {
     if (!user) {
       setExerciseLibrary(defaultExerciseLibrary);
       setBlockExercises({});
+      setWorkoutBlockRoutineLinks({});
       setExerciseHistory({});
       setWorkoutRoutines([]);
+      setWorkoutRoutineHistory([]);
       return;
     }
 
     try {
       const savedLibrary = window.localStorage.getItem(`exercise-library:${user.id}`);
       const savedBlockExercises = window.localStorage.getItem(`workout-block-exercises:${user.id}`);
+      const savedBlockRoutineLinks = window.localStorage.getItem(`workout-block-routine-links:${user.id}`);
       const savedExerciseHistory = window.localStorage.getItem(`workout-exercise-history:${user.id}`);
       const savedWorkoutRoutines = window.localStorage.getItem(`workout-routines:${user.id}`);
+      const savedWorkoutRoutineHistory = window.localStorage.getItem(`workout-routine-history:${user.id}`);
       const parsedLibrary = savedLibrary
         ? (JSON.parse(savedLibrary) as ExerciseLibraryItem[])
         : defaultExerciseLibrary;
@@ -817,18 +1171,30 @@ const App: React.FC = () => {
           ? (JSON.parse(savedBlockExercises) as Record<string, WorkoutBlockExercise[]>)
           : {}
       );
+      setWorkoutBlockRoutineLinks(
+        savedBlockRoutineLinks
+          ? (JSON.parse(savedBlockRoutineLinks) as Record<string, string>)
+          : {}
+      );
       setExerciseHistory(
         savedExerciseHistory
           ? (JSON.parse(savedExerciseHistory) as Record<string, WorkoutExerciseHistoryEntry[]>)
           : {}
       );
       setWorkoutRoutines(savedWorkoutRoutines ? (JSON.parse(savedWorkoutRoutines) as WorkoutRoutine[]) : []);
+      setWorkoutRoutineHistory(
+        savedWorkoutRoutineHistory
+          ? (JSON.parse(savedWorkoutRoutineHistory) as WorkoutRoutineHistoryEntry[])
+          : []
+      );
     } catch (error) {
       console.error("Error loading exercise library:", error);
       setExerciseLibrary(defaultExerciseLibrary);
       setBlockExercises({});
+      setWorkoutBlockRoutineLinks({});
       setExerciseHistory({});
       setWorkoutRoutines([]);
+      setWorkoutRoutineHistory([]);
     }
   }, [user]);
 
@@ -1780,7 +2146,9 @@ const App: React.FC = () => {
     label: string,
     isHabitBlock = false,
     habitId?: string,
-    hashtag?: string
+    hashtag?: string,
+    locationOverride?: BlockLocation,
+    options: { resetInputs?: boolean; suppressErrorToast?: boolean } = {}
   ): Promise<string | null> => {
     const trimmed = label.trim();
     if (!trimmed) {
@@ -1791,16 +2159,20 @@ const App: React.FC = () => {
     if (!user) return null;
 
     try {
+      const nextLocation = locationOverride ?? { type: "unscheduled" as const };
+      const weekStartDate =
+        nextLocation.type === "slot" ? getWeekStartDateString(weekOffset) : null;
+
       const blockData = await database.blocks.create(user.id, {
         label: trimmed,
         is_habit_block: isHabitBlock,
         habit_id: habitId ?? null,
-        location_type: "unscheduled",
-        day_index: null,
-        time_index: null,
+        location_type: nextLocation.type,
+        day_index: nextLocation.type === "slot" ? nextLocation.dayIndex : null,
+        time_index: nextLocation.type === "slot" ? nextLocation.timeIndex : null,
         completed: false,
         hashtag: hashtag?.trim() || null,
-        week_start_date: null,
+        week_start_date: weekStartDate,
         linked_block_id: null,
         is_linked_group: false,
         workout_submitted: false,
@@ -1813,7 +2185,7 @@ const App: React.FC = () => {
         id: blockData.id,
         label: blockData.label,
         isHabitBlock: blockData.is_habit_block,
-        location: { type: "unscheduled" },
+        location: nextLocation,
         habitId: blockData.habit_id ?? undefined,
         completed: blockData.completed,
         hashtag: blockData.hashtag ?? undefined,
@@ -1824,14 +2196,139 @@ const App: React.FC = () => {
       };
 
       setBlocks((prev) => [...prev, newBlock]);
-      setBlockLabel("");
-      setBlockHashtag("");
+      if (options.resetInputs ?? true) {
+        setBlockLabel("");
+        setBlockHashtag("");
+      }
       return blockData.id;
     } catch (error) {
       console.error("Error creating block:", error);
-      showToast("Failed to create block", "error");
+      if (!options.suppressErrorToast) {
+        showToast("Failed to create block", "error");
+      }
       return null;
     }
+  };
+
+  const getPlanDateLocation = (planDate?: string | null): BlockLocation | undefined => {
+    if (!planDate) return undefined;
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    const weekStart = new Date(`${weekStartDate}T12:00:00`);
+    const target = new Date(`${planDate}T12:00:00`);
+    if (Number.isNaN(target.getTime())) return undefined;
+
+    const dayIndex = Math.round((target.getTime() - weekStart.getTime()) / 86400000);
+    if (dayIndex < 0 || dayIndex >= days.length) return undefined;
+
+    return {
+      type: "slot",
+      dayIndex,
+      timeIndex: getHourlyIndexForMobileSlot(firstOpenVisibleSlotIndex(dayIndex)),
+    };
+  };
+
+  const createOutlinerBlock = async (
+    label: string,
+    options?: {
+      planDate?: string | null;
+      note?: string;
+      taskLabels?: string[];
+      hashtag?: string;
+    }
+  ): Promise<string | null> => {
+    const location = getPlanDateLocation(options?.planDate);
+    const blockId = await createBlock(
+      label,
+      false,
+      undefined,
+      options?.hashtag,
+      location
+    );
+    if (!blockId || !user) return blockId;
+
+    try {
+      const note = options?.note?.trim();
+      if (note) {
+        await saveBlockNote(blockId, note);
+      }
+
+      const taskLabels = (options?.taskLabels ?? [])
+        .map((task) => task.trim())
+        .filter((task) => task.length > 0);
+      if (taskLabels.length > 0) {
+        const createdTasks = await Promise.all(
+          taskLabels.map((taskLabel, index) =>
+            database.blockTasks.create(user.id, blockId, taskLabel, index)
+          )
+        );
+        setBlocks((prev) =>
+          prev.map((block) =>
+            block.id === blockId
+              ? { ...block, blockTasks: [...(block.blockTasks ?? []), ...createdTasks] }
+              : block
+          )
+        );
+      }
+
+      showToast(location ? "Outliner row scheduled" : "Outliner row added to waiting", "success");
+    } catch (error) {
+      console.error("Error finishing outliner block:", error);
+      showToast("Block created, but details did not finish", "error");
+    }
+
+    return blockId;
+  };
+
+  const createRoutineFromOutliner = async (
+    name: string,
+    itemLabels: string[],
+    notes = ""
+  ): Promise<{ routineId: string } | null> => {
+    if (!user) return null;
+    const trimmedName = name.trim() || "Routine";
+    const routine: RoutineTab = {
+      id: createRoutineId("routine"),
+      name: trimmedName,
+      category: inferRoutineCategory([trimmedName, notes, ...itemLabels].join(" ")),
+      notes: notes.trim(),
+      items: itemLabels
+        .map((label) => label.trim())
+        .filter((label) => label.length > 0)
+        .map((label) => ({ id: createRoutineId("routine-item"), label })),
+      completedByDate: {},
+      linkedWorkoutRoutineId: null,
+    };
+
+    const sourceRoutines = routineTabs.length > 0 ? routineTabs : loadRoutineNotes(user.id);
+    const nextRoutines = [...sourceRoutines, routine];
+    setRoutineTabs(nextRoutines);
+    saveRoutineNotes(user.id, nextRoutines);
+    showToast("Routine created from outliner", "success");
+    return { routineId: routine.id };
+  };
+
+  const findOutlinerNodeIdByBlock = (nodes: OutlineNode[], blockId: string): string | null => {
+    for (const node of nodes) {
+      if (node.linked?.blockId === blockId) return node.id;
+      const childMatch = findOutlinerNodeIdByBlock(node.children, blockId);
+      if (childMatch) return childMatch;
+    }
+    return null;
+  };
+
+  const syncOutlinerBlockCompletion = async (blockId: string, completed: boolean) => {
+    if (!user) return;
+    const sourceNodes = outlinerNodes.length > 0 ? outlinerNodes : await loadPlanningOutliner(user.id, false);
+    const nodeId = findOutlinerNodeIdByBlock(sourceNodes, blockId);
+    if (!nodeId) return;
+
+    const nextNodes = updateOutlineNode(sourceNodes, nodeId, (node) => ({
+      ...node,
+      taskDone: completed,
+    }));
+    setOutlinerNodes(nextNodes);
+    await savePlanningOutliner(user.id, nextNodes);
+    setOutlinerRefreshKey((key) => key + 1);
   };
 
   const addLinkedHabitToBoard = async (
@@ -1875,6 +2372,12 @@ const App: React.FC = () => {
       return;
     }
 
+    if (link.routineId) {
+      refreshRoutineTabs();
+      openOverlayPanel("routines");
+      return;
+    }
+
     if (link.habitId) {
       const habit = allHabits.find((item) => item.id === link.habitId);
       if (!habit) {
@@ -1903,7 +2406,7 @@ const App: React.FC = () => {
   const renameLinkedOutlinerItem = async (link: OutlineLink, nextName: string): Promise<boolean> => {
     const trimmed = nextName.trim();
     if (!trimmed) return false;
-    const label = link.habitId ? "habit" : "theme";
+    const label = link.habitId ? "habit" : link.routineId ? "routine" : "theme";
     const shouldRename = await askConfirm(
       `Rename the linked ${label} to "${trimmed}" too?`,
       { confirmLabel: "Rename", cancelLabel: "Only row" }
@@ -1935,6 +2438,19 @@ const App: React.FC = () => {
         return true;
       }
 
+      if (link.routineId && user) {
+        const sourceRoutines = routineTabs.length > 0 ? routineTabs : loadRoutineNotes(user.id);
+        const nextRoutines = sourceRoutines.map((routine) =>
+          routine.id === link.routineId
+            ? { ...routine, name: trimmed, category: inferRoutineCategory(trimmed) }
+            : routine
+        );
+        setRoutineTabs(nextRoutines);
+        saveRoutineNotes(user.id, nextRoutines);
+        showToast("Linked routine renamed", "success");
+        return true;
+      }
+
       if (link.themeId) {
         await database.themes.update(link.themeId, trimmed);
         setThemes((prevThemes) =>
@@ -1952,6 +2468,13 @@ const App: React.FC = () => {
   };
 
   const loadLinkedOutlinerNote = async (link: OutlineLink): Promise<{ content: string; updatedAt?: string }> => {
+    if (link.routineId && user) {
+      const routine = (routineTabs.length > 0 ? routineTabs : loadRoutineNotes(user.id)).find(
+        (item) => item.id === link.routineId
+      );
+      return { content: routine?.notes ?? "" };
+    }
+
     if (link.habitId) {
       const note = await database.habitNotes.getByHabit(link.habitId);
       return { content: note?.content ?? "", updatedAt: note?.updated_at };
@@ -1972,6 +2495,17 @@ const App: React.FC = () => {
     if (!user) return null;
 
     try {
+      if (link.routineId) {
+        const updatedAt = new Date().toISOString();
+        const sourceRoutines = routineTabs.length > 0 ? routineTabs : loadRoutineNotes(user.id);
+        const nextRoutines = sourceRoutines.map((routine) =>
+          routine.id === link.routineId ? { ...routine, notes: content } : routine
+        );
+        setRoutineTabs(nextRoutines);
+        saveRoutineNotes(user.id, nextRoutines);
+        return { content, updatedAt };
+      }
+
       if (link.habitId) {
         const note = await database.habitNotes.upsert(user.id, link.habitId, content);
         return { content: note.content, updatedAt: note.updated_at };
@@ -2001,9 +2535,32 @@ const App: React.FC = () => {
       target: habit.targetPerWeek,
     });
 
+    setOutlinerNodes(result.nodes);
+    setOutlinerRefreshKey((value) => value + 1);
+    setOutlinerFocusNodeId(result.nodeId);
+    setOutlinerFocusRequestKey((value) => value + 1);
     openOverlayPanel("outliner");
     showToast(
       result.existing ? "That habit is already in Planning Outliner" : "Habit added to Planning Outliner",
+      result.existing ? "info" : "success"
+    );
+  };
+
+  const addThemeViewToOutliner = async (theme: Theme) => {
+    if (!user) return;
+
+    const result = await addThemeToPlanningOutliner(user.id, {
+      themeId: theme.id,
+      themeName: theme.name,
+    });
+
+    setOutlinerNodes(result.nodes);
+    setOutlinerRefreshKey((value) => value + 1);
+    setOutlinerFocusNodeId(result.nodeId);
+    setOutlinerFocusRequestKey((value) => value + 1);
+    openOverlayPanel("outliner");
+    showToast(
+      result.existing ? "That theme is already in Planning Outliner" : "Theme added to Planning Outliner",
       result.existing ? "info" : "success"
     );
   };
@@ -2115,6 +2672,20 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error creating habit block:", error);
     }
+  };
+
+  const addHabitToTodayFromCare = async (habit: Habit) => {
+    if (todayDayIndex < 0) {
+      showToast("Go to the current week to add this to today.", "info");
+      return;
+    }
+
+    await createHabitBlockAtSlot(
+      habit.id,
+      todayDayIndex,
+      getHourlyIndexForMobileSlot(firstOpenVisibleSlotIndex(todayDayIndex))
+    );
+    showToast(`${habit.name} added to today`, "success");
   };
 
   const handleDragStart = (blockId: string, e?: React.DragEvent) => {
@@ -2512,6 +3083,7 @@ const App: React.FC = () => {
         setBlocks((prev) =>
           prev.map((b) => (b.id === blockId ? { ...b, completed: newCompleted } : b))
         );
+        await syncOutlinerBlockCompletion(blockId, newCompleted);
       } catch (error) {
         console.error("Error toggling block completion:", error);
       }
@@ -2609,6 +3181,7 @@ const App: React.FC = () => {
           b.id === blockId ? { ...b, completed: newCompleted } : b
         )
       );
+      await syncOutlinerBlockCompletion(blockId, newCompleted);
     } catch (error) {
       console.error("Error toggling completion:", error);
     }
@@ -2622,6 +3195,7 @@ const App: React.FC = () => {
     } else {
       await database.blocks.update(blockId, { completed: true });
       setBlocks((prev) => prev.map((b) => b.id === blockId ? { ...b, completed: true } : b));
+      await syncOutlinerBlockCompletion(blockId, true);
     }
   };
 
@@ -2662,21 +3236,6 @@ const App: React.FC = () => {
         ))
       );
 
-      // If this block is a habit block, also append/sync to the habit note
-      const block = blocks.find((b) => b.id === blockId);
-      if (block?.habitId && content.trim()) {
-        const existing = await database.habitNotes.getByHabit(block.habitId);
-        const blockHeader = `[Block: ${block.label}]`;
-        const currentContent = existing?.content ?? "";
-        // Replace existing block section or append
-        const blockSectionRegex = new RegExp(`\\[Block: ${escapeRegex(block.label)}\\][^\\[]*`, "g");
-        const newContent = blockSectionRegex.test(currentContent)
-          ? currentContent.replace(blockSectionRegex, `${blockHeader}\n${content}\n\n`)
-          : currentContent
-            ? `${currentContent}\n\n${blockHeader}\n${content}`
-            : `${blockHeader}\n${content}`;
-        await database.habitNotes.upsert(user.id, block.habitId, newContent.trim());
-      }
     } catch (error) {
       console.error("Error saving block note:", error);
     }
@@ -2840,6 +3399,37 @@ const App: React.FC = () => {
         });
 
         saveExerciseHistory(nextHistory);
+
+        const linkedRoutineId = workoutBlockRoutineLinks[blockId];
+        const linkedRoutine = linkedRoutineId
+          ? workoutRoutines.find((routine) => routine.id === linkedRoutineId)
+          : null;
+        if (linkedRoutine) {
+          const exerciseNames = rows
+            .map((row) => exerciseLibrary.find((exercise) => exercise.id === row.exerciseId)?.name)
+            .filter((name): name is string => !!name);
+          const notes = [
+            block.blockNote?.trim(),
+            ...rows.map((row) => row.notes?.trim()).filter((note): note is string => !!note),
+          ]
+            .filter(Boolean)
+            .join("\n");
+          const routineEntry: WorkoutRoutineHistoryEntry = {
+            id: createClientId("routine-history"),
+            routineId: linkedRoutine.id,
+            routineName: linkedRoutine.name,
+            blockId,
+            completedAt,
+            exerciseNames,
+            notes,
+            bestEffort: formatWorkoutRoutineBestEffort(rows),
+          };
+
+          saveWorkoutRoutineHistory([
+            routineEntry,
+            ...workoutRoutineHistory.filter((entry) => entry.id !== routineEntry.id),
+          ].slice(0, 80));
+        }
       }
 
       setBlocks((prev) =>
@@ -2867,6 +3457,23 @@ const App: React.FC = () => {
     }
   };
 
+  const saveWorkoutBlockRoutineLinks = (nextLinks: Record<string, string>) => {
+    setWorkoutBlockRoutineLinks(nextLinks);
+    if (user) {
+      window.localStorage.setItem(`workout-block-routine-links:${user.id}`, JSON.stringify(nextLinks));
+    }
+  };
+
+  const setWorkoutBlockRoutineLink = (blockId: string, routineId: string | null) => {
+    const nextLinks = { ...workoutBlockRoutineLinks };
+    if (routineId) {
+      nextLinks[blockId] = routineId;
+    } else {
+      delete nextLinks[blockId];
+    }
+    saveWorkoutBlockRoutineLinks(nextLinks);
+  };
+
   const saveExerciseHistory = (nextHistory: Record<string, WorkoutExerciseHistoryEntry[]>) => {
     setExerciseHistory(nextHistory);
     if (user) {
@@ -2881,53 +3488,254 @@ const App: React.FC = () => {
     }
   };
 
-  const saveWorkoutRoutineFromRows = (name: string, rows: WorkoutBlockExercise[]) => {
+  const saveWorkoutRoutineHistory = (nextHistory: WorkoutRoutineHistoryEntry[]) => {
+    setWorkoutRoutineHistory(nextHistory);
+    if (user) {
+      window.localStorage.setItem(`workout-routine-history:${user.id}`, JSON.stringify(nextHistory));
+    }
+  };
+
+  const estimateRoutineMinutes = (rows: Array<WorkoutRoutineExercise | WorkoutBlockExercise>) =>
+    rows.reduce((total, row) => {
+      if ((row.duration ?? 0) > 0) return total + Math.max(3, row.duration ?? 0);
+      if ((row.sets ?? 0) > 0) return total + Math.max(5, (row.sets ?? 0) * 3);
+      return total + 6;
+    }, 0);
+
+  const inferWorkoutRoutineMetadata = (
+    rows: Array<WorkoutRoutineExercise | WorkoutBlockExercise>,
+    overrides: Partial<Pick<WorkoutRoutine, "focus" | "energy" | "timeBudget" | "equipment">> = {}
+  ): Pick<WorkoutRoutine, "focus" | "energy" | "timeBudget" | "equipment"> => {
+    const routineExercises = rows
+      .map((row) => exerciseLibrary.find((item) => item.id === row.exerciseId))
+      .filter((exercise): exercise is ExerciseLibraryItem => !!exercise);
+    const countBy = (predicate: (exercise: ExerciseLibraryItem) => boolean) =>
+      routineExercises.filter(predicate).length;
+    const lowerCount = countBy(
+      (exercise) => exercise.bodyArea === "lower" || ["squat", "hinge"].includes(exercise.pattern ?? "")
+    );
+    const upperCount = countBy(
+      (exercise) => exercise.bodyArea === "upper" || ["push", "pull"].includes(exercise.pattern ?? "")
+    );
+    const coreCount = countBy(
+      (exercise) =>
+        exercise.category === "core" ||
+        exercise.bodyArea === "core" ||
+        ["brace", "rotation", "carry"].includes(exercise.pattern ?? "")
+    );
+    const mobilityCount = countBy((exercise) => exercise.category === "mobility" || exercise.pattern === "stretch");
+    const cardioCount = countBy((exercise) => exercise.category === "cardio" || exercise.pattern === "cardio");
+    const strengthCount = countBy((exercise) => exercise.category === "strength" || exercise.category === "core");
+    const estimatedMinutes = estimateRoutineMinutes(rows);
+    const focus: WorkoutRoutineFocus =
+      overrides.focus ??
+      (mobilityCount > 0 && strengthCount === 0
+        ? "mobility"
+        : cardioCount > 0 && strengthCount === 0
+          ? "cardio"
+          : coreCount >= Math.max(lowerCount, upperCount) && coreCount > 0
+            ? "core"
+            : lowerCount > upperCount
+              ? "lower"
+              : upperCount > lowerCount
+                ? "upper"
+                : "full");
+    const timeBudget: WorkoutRoutineTime =
+      overrides.timeBudget ?? (estimatedMinutes <= 20 ? "short" : estimatedMinutes <= 45 ? "medium" : "long");
+    const energy: WorkoutRoutineEnergy =
+      overrides.energy ??
+      (strengthCount >= 4 || estimatedMinutes > 45 ? "high" : strengthCount <= 1 && estimatedMinutes <= 20 ? "low" : "medium");
+
+    return {
+      focus,
+      energy,
+      timeBudget,
+      equipment: overrides.equipment ?? "any",
+    };
+  };
+
+  const formatWorkoutRoutineBestEffort = (rows: WorkoutBlockExercise[]) => {
+    const sortedRows = [...rows].sort((a, b) => {
+      const volumeA = (a.weight ?? 0) * (a.sets ?? 1) * (a.reps ?? 1);
+      const volumeB = (b.weight ?? 0) * (b.sets ?? 1) * (b.reps ?? 1);
+      const durationA = a.duration ?? 0;
+      const durationB = b.duration ?? 0;
+      return Math.max(volumeB, durationB) - Math.max(volumeA, durationA);
+    });
+    const bestRow = sortedRows.find((row) => formatExerciseResult(row));
+    if (!bestRow) return "";
+    const exercise = exerciseLibrary.find((item) => item.id === bestRow.exerciseId);
+    const result = formatExerciseResult(bestRow);
+    return result ? `${exercise?.name ?? "Exercise"}: ${result}` : "";
+  };
+
+  const formatWorkoutRoutineItemLabel = (row: WorkoutRoutineExercise) => {
+    const exercise = exerciseLibrary.find((item) => item.id === row.exerciseId);
+    const name = exercise?.name ?? "Exercise";
+    const result = formatExerciseResult(row);
+    return result ? `${name} - ${result}` : name;
+  };
+
+  const syncRoutineTabForWorkoutRoutine = (routine: WorkoutRoutine) => {
+    if (!user) return;
+
+    const sourceRoutines = routineTabs.length > 0 ? routineTabs : loadRoutineNotes(user.id);
+    const matchingRoutineTab = sourceRoutines.find((item) => item.linkedWorkoutRoutineId === routine.id)
+      ?? sourceRoutines.find(
+        (item) =>
+          item.category === "workout" &&
+          normalizePlanningName(item.name) === normalizePlanningName(routine.name)
+      );
+    const workoutItems = routine.exercises.map((row) => ({
+      id: createRoutineId("routine-item"),
+      label: formatWorkoutRoutineItemLabel(row),
+    }));
+    const syncedRoutineTab: RoutineTab = {
+      id: matchingRoutineTab?.id ?? createRoutineId("routine"),
+      name: routine.name,
+      category: "workout",
+      notes: matchingRoutineTab?.notes ?? "Workout routine linked from your exercise library.",
+      items: workoutItems,
+      completedByDate: matchingRoutineTab?.completedByDate ?? {},
+      linkedWorkoutRoutineId: routine.id,
+    };
+    const nextRoutineTabs = matchingRoutineTab
+      ? sourceRoutines.map((item) => (item.id === matchingRoutineTab.id ? syncedRoutineTab : item))
+      : [...sourceRoutines, syncedRoutineTab];
+
+    setRoutineTabs(nextRoutineTabs);
+    saveRoutineNotes(user.id, nextRoutineTabs);
+  };
+
+  const unlinkDeletedWorkoutRoutineTabs = (routineId: string) => {
+    if (!user) return;
+
+    const sourceRoutines = routineTabs.length > 0 ? routineTabs : loadRoutineNotes(user.id);
+    const nextRoutineTabs = sourceRoutines.map((routine) =>
+      routine.linkedWorkoutRoutineId === routineId
+        ? { ...routine, linkedWorkoutRoutineId: null }
+        : routine
+    );
+    setRoutineTabs(nextRoutineTabs);
+    saveRoutineNotes(user.id, nextRoutineTabs);
+  };
+
+  const unlinkDeletedWorkoutRoutineBlocks = (routineId: string) => {
+    const nextLinks = Object.fromEntries(
+      Object.entries(workoutBlockRoutineLinks).filter(([, linkedRoutineId]) => linkedRoutineId !== routineId)
+    );
+    saveWorkoutBlockRoutineLinks(nextLinks);
+  };
+
+  const saveWorkoutRoutineFromRows = (
+    name: string,
+    rows: WorkoutBlockExercise[],
+    metadataOverrides: Partial<Pick<WorkoutRoutine, "focus" | "energy" | "timeBudget" | "equipment">> = {},
+    forceNew = false
+  ) => {
     const trimmed = name.trim();
     if (!trimmed) {
       showToast("Name the routine first", "error");
-      return;
+      return null;
     }
 
     if (rows.length === 0) {
       showToast("Add exercises before saving a routine", "info");
-      return;
+      return null;
     }
 
     const now = new Date().toISOString();
     const routineExercises: WorkoutRoutineExercise[] = rows.map(({ id: _id, ...row }) => row);
-    const existing = workoutRoutines.find(
-      (routine) => routine.name.trim().toLowerCase() === trimmed.toLowerCase()
-    );
+    const existing = forceNew
+      ? null
+      : workoutRoutines.find(
+          (routine) => routine.name.trim().toLowerCase() === trimmed.toLowerCase()
+        );
+    const routineMetadata = inferWorkoutRoutineMetadata(routineExercises, {
+      ...metadataOverrides,
+      equipment: metadataOverrides.equipment ?? existing?.equipment,
+    });
     const nextRoutine: WorkoutRoutine = {
       id: existing?.id ?? createClientId("workout-routine"),
       name: trimmed,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       exercises: routineExercises,
+      ...routineMetadata,
     };
     const nextRoutines = existing
       ? workoutRoutines.map((routine) => (routine.id === existing.id ? nextRoutine : routine))
       : [...workoutRoutines, nextRoutine];
 
     saveWorkoutRoutines(nextRoutines);
-    showToast(existing ? "Routine updated" : "Routine saved", "success");
+    syncRoutineTabForWorkoutRoutine(nextRoutine);
+    showToast(existing ? "Routine updated and linked to Routines" : "Routine saved and linked to Routines", "success");
+    return nextRoutine;
   };
 
   const saveWorkoutRoutineFromBlock = (blockId: string, name: string) => {
     saveWorkoutRoutineFromRows(name, blockExercises[blockId] ?? []);
   };
 
-  const saveWorkoutRoutineFromExerciseIds = (name: string, exerciseIds: string[]) => {
+  const saveWorkoutRoutineAsNewFromBlock = (blockId: string, name: string) => {
+    const rows = blockExercises[blockId] ?? [];
+    const fallbackName = name.trim() || `${blocks.find((block) => block.id === blockId)?.label ?? "Workout"} variation`;
+    const routine = saveWorkoutRoutineFromRows(fallbackName, rows, {}, true);
+    if (routine) {
+      setWorkoutBlockRoutineLink(blockId, routine.id);
+    }
+  };
+
+  const updateWorkoutRoutineFromBlock = (blockId: string, routineId: string) => {
+    const existing = workoutRoutines.find((routine) => routine.id === routineId);
+    const rows = blockExercises[blockId] ?? [];
+    if (!existing) {
+      showToast("Choose an attached routine first", "info");
+      return;
+    }
+    if (rows.length === 0) {
+      showToast("Add exercises before updating the routine", "info");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const routineExercises: WorkoutRoutineExercise[] = rows.map(({ id: _id, ...row }) => row);
+    const nextRoutine: WorkoutRoutine = {
+      ...existing,
+      updatedAt: now,
+      exercises: routineExercises,
+      ...inferWorkoutRoutineMetadata(routineExercises, { equipment: existing.equipment }),
+    };
+    const nextRoutines = workoutRoutines.map((routine) =>
+      routine.id === routineId ? nextRoutine : routine
+    );
+
+    saveWorkoutRoutines(nextRoutines);
+    syncRoutineTabForWorkoutRoutine(nextRoutine);
+    showToast(`${nextRoutine.name} updated`, "success");
+  };
+
+  const saveWorkoutRoutineFromExerciseIds = (
+    name: string,
+    exerciseIds: string[],
+    metadataOverrides: Partial<Pick<WorkoutRoutine, "focus" | "energy" | "timeBudget" | "equipment">> = {}
+  ) => {
     const rows = exerciseIds
       .map((exerciseId) => exerciseLibrary.find((exercise) => exercise.id === exerciseId))
       .filter((exercise): exercise is ExerciseLibraryItem => !!exercise)
       .map((exercise) => createWorkoutExerciseRow(exercise));
 
-    saveWorkoutRoutineFromRows(name, rows);
+    saveWorkoutRoutineFromRows(name, rows, metadataOverrides);
   };
 
   const deleteWorkoutRoutine = (routineId: string) => {
     saveWorkoutRoutines(workoutRoutines.filter((routine) => routine.id !== routineId));
+    saveWorkoutRoutineHistory(workoutRoutineHistory.filter((entry) => entry.routineId !== routineId));
+    persistWeeklyRoutineIntentions(
+      weeklyRoutineIntentions.filter((intention) => intention.routineId !== routineId)
+    );
+    unlinkDeletedWorkoutRoutineTabs(routineId);
+    unlinkDeletedWorkoutRoutineBlocks(routineId);
     showToast("Routine deleted", "info");
   };
 
@@ -2969,7 +3777,33 @@ const App: React.FC = () => {
       ...blockExercises,
       [blockId]: rows,
     });
-    showToast(`Loaded ${routine.name}`, "success");
+    setWorkoutBlockRoutineLink(blockId, routine.id);
+    showToast(`Loaded and attached ${routine.name}`, "success");
+  };
+
+  const attachWorkoutRoutineToBlock = (
+    blockId: string,
+    routineId: string,
+    options: { loadExercises?: boolean } = {}
+  ) => {
+    const routine = workoutRoutines.find((item) => item.id === routineId);
+    if (!routine) {
+      showToast("Choose a saved routine first", "info");
+      return;
+    }
+
+    if (options.loadExercises) {
+      loadWorkoutRoutineToBlock(blockId, routine.id);
+      return;
+    }
+
+    setWorkoutBlockRoutineLink(blockId, routine.id);
+    showToast(`Attached ${routine.name}`, "success");
+  };
+
+  const detachWorkoutRoutineFromBlock = (blockId: string) => {
+    setWorkoutBlockRoutineLink(blockId, null);
+    showToast("Routine detached from block", "info");
   };
 
   const createWorkoutBlockFromExercises = async (label: string, exerciseIds: string[]) => {
@@ -3770,21 +4604,147 @@ const App: React.FC = () => {
     incompleteMobileSelectedBlocks.length - (mobileSelectedNowBlock ? 1 : 0) - mobileSelectedNextBlocks.length
   );
   const isMobileSelectedDayToday = todayDayIndex >= 0 && mobileSelectedDayIndex === todayDayIndex;
-  const isMobileInboxBlock = (block: Block) => {
+  const todayDate = new Date().toISOString().split("T")[0];
+
+  const collectOutlinerNodes = (
+    nodes: OutlineNode[],
+    path: string[] = []
+  ): Array<{ node: OutlineNode; path: string[] }> =>
+    nodes.flatMap((node) => {
+      const nodeLabel = node.text.trim() || "Untitled";
+      const nextPath = [...path, nodeLabel];
+      return [{ node, path: nextPath }, ...collectOutlinerNodes(node.children, nextPath)];
+    });
+
+  const outlinerNodeEntries = collectOutlinerNodes(outlinerNodes);
+  const outlinerParentOptions = outlinerNodeEntries.map(({ node, path }) => ({
+    id: node.id,
+    label: path.join(" > "),
+  }));
+  const outlinerLinkedBlockIdSet = new Set(
+    outlinerNodeEntries
+      .map(({ node }) => node.linked?.blockId)
+      .filter((blockId): blockId is string => !!blockId)
+  );
+  const outlinerLinkedBlockNodeIdMap = new Map(
+    outlinerNodeEntries
+      .filter(({ node }) => !!node.linked?.blockId)
+      .map(({ node }) => [node.linked!.blockId!, node.id])
+  );
+  const outlinerLinkedBlockPathMap = new Map(
+    outlinerNodeEntries
+      .filter(({ node }) => !!node.linked?.blockId)
+      .map(({ node, path }) => [node.linked!.blockId!, path])
+  );
+  const dueOutlinerItems = outlinerNodeEntries
+    .filter(({ node }) => {
+      if (!node.reminderAt || node.reminderDismissedAt) return false;
+      return new Date(node.reminderAt).getTime() <= Date.now();
+    })
+    .sort((a, b) => {
+      const aTime = a.node.reminderAt ? new Date(a.node.reminderAt).getTime() : 0;
+      const bTime = b.node.reminderAt ? new Date(b.node.reminderAt).getTime() : 0;
+      return aTime - bTime;
+    });
+  const mobileDueReminder = outlinerReminder
+    ? {
+        text: outlinerReminder.text,
+        path: outlinerReminder.path,
+        kind: outlinerReminder.reminderKind,
+      }
+    : dueOutlinerItems[0]
+      ? {
+          text: dueOutlinerItems[0].node.text.trim() || "Untitled",
+          path: dueOutlinerItems[0].path,
+          kind: dueOutlinerItems[0].node.reminderKind,
+        }
+      : null;
+  const mobileDueReminderCount = Math.max(
+    dueOutlinerItems.length,
+    outlinerReminder ? 1 : 0
+  );
+
+  const isQuickCaptureBlock = (block: Block) => {
     const label = block.label.trim().toLowerCase();
     const hashtag = block.hashtag?.trim().toLowerCase();
     return hashtag === "note" || hashtag === "task" || label.startsWith("note:") || label.startsWith("task:");
   };
-  const mobileInboxBlocks = unscheduledBlocks.filter(isMobileInboxBlock).slice(0, 5);
-  const mobileInboxNoteCount = unscheduledBlocks.filter((block) => {
+  const mobileSelectedDoneCount = mobileSelectedScheduledBlocks.filter((block) => block.completed).length;
+  const mobileOpenTaskCount = mobileSelectedScheduledBlocks.reduce(
+    (total, block) => total + (block.blockTasks ?? []).filter((task) => !task.completed).length,
+    0
+  );
+  const mobileIntentionStartDay =
+    weekOffset === 0 && todayDayIndex >= 0 ? todayDayIndex : mobileSelectedDayIndex;
+  const mobileWeeklyIntentionPlacements = weeklyIntentions
+    .flatMap((intention) =>
+      intention.placements.map((placement) => ({
+        intention,
+        placement,
+      }))
+    )
+    .sort((a, b) => {
+      const aDayDistance = (a.placement.dayIndex - mobileIntentionStartDay + days.length) % days.length;
+      const bDayDistance = (b.placement.dayIndex - mobileIntentionStartDay + days.length) % days.length;
+      return aDayDistance === bDayDistance
+        ? a.placement.timeIndex - b.placement.timeIndex
+        : aDayDistance - bDayDistance;
+    });
+
+  const cleanBlockLabel = (block: Block) =>
+    block.label.replace(/^(Note|Task|Habit):\s*/i, "").trim() || block.label;
+
+  const getBlockKindLabel = (block: Block): "Habit" | "Task" | "Note" | "Routine" | "Workout" | "Block" => {
     const label = block.label.trim().toLowerCase();
-    return block.hashtag?.trim().toLowerCase() === "note" || label.startsWith("note:");
-  }).length;
-  const mobileInboxTaskCount = unscheduledBlocks.filter((block) => {
-    const label = block.label.trim().toLowerCase();
-    return block.hashtag?.trim().toLowerCase() === "task" || label.startsWith("task:");
-  }).length;
-  const todayDate = new Date().toISOString().split("T")[0];
+    const hashtag = block.hashtag?.trim().toLowerCase();
+    if (block.isHabitBlock) return "Habit";
+    if (hashtag === "task" || label.startsWith("task:")) return "Task";
+    if (hashtag === "note" || label.startsWith("note:")) return "Note";
+    if (hashtag === "routine" || routineTabs.some((routine) => routine.name.trim().toLowerCase() === label)) {
+      return "Routine";
+    }
+    if (hashtag === "fitness" || isWorkoutBlock(block)) return "Workout";
+    return "Block";
+  };
+
+  const getBlockSlotLabel = (block: Block) => {
+    if (block.location.type !== "slot") return "";
+    const visibleTimeIndex =
+      viewMode === "buckets"
+        ? getBucketForHourlyIndex(block.location.timeIndex)
+        : block.location.timeIndex;
+    return slotLabels[visibleTimeIndex] ?? "";
+  };
+
+  const getBlockRelationshipChips = (block: Block) => {
+    const chips: string[] = [`Type: ${getBlockKindLabel(block)}`];
+    if (block.location.type === "slot") {
+      const slotLabel = getBlockSlotLabel(block);
+      chips.push(`Scheduled: ${days[block.location.dayIndex]}${slotLabel ? ` ${slotLabel}` : ""}`);
+    } else if (!block.themeId) {
+      chips.push("Waiting");
+    }
+
+    const habit = block.habitId ? allHabits.find((item) => item.id === block.habitId) : undefined;
+    const theme = habit
+      ? themes.find((item) => item.id === habit.themeId)
+      : block.themeId
+        ? themes.find((item) => item.id === block.themeId)
+        : undefined;
+    if (theme) chips.push(`Theme: ${theme.name}`);
+    if (habit) chips.push(`Habit: ${habit.name}`);
+    if (block.hashtag) chips.push(`#${block.hashtag}`);
+    const outlinerPath = outlinerLinkedBlockPathMap.get(block.id);
+    if (outlinerPath) {
+      chips.push(`Outliner: ${outlinerPath.slice(-3).join(" > ")}`);
+    } else if (outlinerLinkedBlockIdSet.has(block.id)) {
+      chips.push("Outliner");
+    }
+    if ((block.blockTasks ?? []).length > 0) chips.push(`${block.blockTasks!.length} task${block.blockTasks!.length === 1 ? "" : "s"}`);
+    if ((block.blockNote ?? "").trim()) chips.push("Note attached");
+    if (block.linkedBlockId) chips.push("Linked block");
+    return [...new Set(chips)];
+  };
   const ambientAutoRoutineId = (() => {
     if (routineTabs.length === 0) return "";
     const hour = new Date().getHours();
@@ -3823,15 +4783,44 @@ const App: React.FC = () => {
     }
 
     const scheduledTaskBlock = todayScheduledBlocks.find(
-      (block) => !block.completed && isMobileInboxBlock(block) && block.label.trim().toLowerCase().startsWith("task:")
+      (block) => !block.completed && isQuickCaptureBlock(block) && block.label.trim().toLowerCase().startsWith("task:")
     );
     if (scheduledTaskBlock) return taskBlockToAmbientTask(scheduledTaskBlock, "Today");
 
     const waitingTaskBlock = unscheduledBlocks.find(
-      (block) => !block.completed && isMobileInboxBlock(block) && block.label.trim().toLowerCase().startsWith("task:")
+      (block) => !block.completed && isQuickCaptureBlock(block) && block.label.trim().toLowerCase().startsWith("task:")
     );
     return waitingTaskBlock ? taskBlockToAmbientTask(waitingTaskBlock, "Waiting") : null;
   })();
+
+  const scrollToMobileWaiting = () => {
+    setMobileHomeView("planner");
+    closeOverlayPanels();
+    window.setTimeout(() => {
+      document.getElementById("mobile-waiting-section")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 80);
+  };
+
+  const openMobileHabitPickerForSlot = (dayIndex: number, timeIndex: number) => {
+    closeOverlayPanels();
+    setMobileHabitPickerQuery("");
+    setMobileHabitPickerSlot({ dayIndex, timeIndex });
+  };
+
+  const addHabitToMobileSlot = async (habitId: string) => {
+    if (!mobileHabitPickerSlot) return;
+
+    await createHabitBlockAtSlot(
+      habitId,
+      mobileHabitPickerSlot.dayIndex,
+      mobileHabitPickerSlot.timeIndex
+    );
+    setMobileHabitPickerSlot(null);
+    showToast("Habit added to planner", "success");
+  };
 
   const updateAmbientRoutineTabs = (updater: (routines: RoutineTab[]) => RoutineTab[]) => {
     if (!user) return;
@@ -3892,11 +4881,89 @@ const App: React.FC = () => {
     );
   };
 
+  const buildCaptureNoteEntry = (label: string, mode: MobileCaptureMode) => {
+    const stampedAt = new Date().toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    const labelPrefix = mode === "task" ? "Task" : mode === "block" ? "Block idea" : "Note";
+    return `- ${labelPrefix}: ${label} (${stampedAt})`;
+  };
+
+  const appendCaptureToThemeNotes = (label: string, mode: MobileCaptureMode, themeId: string) => {
+    if (!user) return false;
+    const theme = themes.find((item) => item.id === themeId);
+    if (!theme) {
+      showToast("Choose a theme for that note.", "error");
+      return false;
+    }
+
+    const prefs = loadThemeNotesPrefs(user.id, theme.id);
+    const entry = buildCaptureNoteEntry(label, mode);
+    const nextNote = [prefs.generalNote.trim(), entry].filter(Boolean).join("\n");
+    saveThemeGeneralNote(user.id, theme.id, nextNote);
+    return true;
+  };
+
+  const appendCaptureToHabitNotes = async (label: string, mode: MobileCaptureMode, habitId: string) => {
+    if (!user) return false;
+    const habit = allHabits.find((item) => item.id === habitId);
+    if (!habit) {
+      showToast("Choose a habit for that note.", "error");
+      return false;
+    }
+
+    try {
+      const existingNote = await database.habitNotes.getByHabit(habit.id);
+      const entry = buildCaptureNoteEntry(label, mode);
+      const nextNote = [existingNote?.content.trim(), entry].filter(Boolean).join("\n");
+      await database.habitNotes.upsert(user.id, habit.id, nextNote);
+      return true;
+    } catch (error) {
+      console.error("Error appending habit note:", error);
+      showToast("Failed to attach habit note", "error");
+      return false;
+    }
+  };
+
+  const queuePendingQuickCapture = (
+    label: string,
+    mode: MobileCaptureMode,
+    destination: MobileCaptureDestination,
+    captureLabel: string,
+    options: {
+      hashtag?: string;
+      themeId?: string;
+      habitId?: string;
+      dayIndex?: number;
+      timeIndex?: number;
+    } = {}
+  ) => {
+    const pendingCapture: PendingQuickCapture = {
+      id: createClientId("pending-capture"),
+      label,
+      mode,
+      destination,
+      captureLabel,
+      hashtag: options.hashtag,
+      themeId: options.themeId,
+      habitId: options.habitId,
+      dayIndex: options.dayIndex,
+      timeIndex: options.timeIndex,
+      createdAt: new Date().toISOString(),
+    };
+    savePendingQuickCaptures([pendingCapture, ...pendingQuickCaptures].slice(0, 30));
+    showToast("Saved on this device. I will sync it when the app is online.", "info");
+    return true;
+  };
+
   const captureEntry = async (
     rawLabel: string,
     mode: MobileCaptureMode,
     destination: MobileCaptureDestination,
-    options?: { hashtag?: string; revealOutliner?: boolean }
+    options?: { hashtag?: string }
   ) => {
     const label = rawLabel.trim();
     if (!label) {
@@ -3906,19 +4973,45 @@ const App: React.FC = () => {
 
     if (!user) return false;
 
-    const goesToWaiting = destination === "waiting" || destination === "both";
-    const goesToOutliner = destination === "outliner" || destination === "both";
+    const goesToWaiting = destination === "waiting";
+    const goesToToday = destination === "today";
+    const goesToThemeNote = destination === "theme-note";
+    const goesToHabitNote = destination === "habit-note";
     const modeHashtag = mode === "block" ? undefined : mode;
     const captureHashtag = options?.hashtag?.trim() || modeHashtag;
     const captureLabel =
       mode === "block"
         ? label
         : `${mode === "note" ? "Note" : "Task"}: ${label}`;
+    const slotDayIndex = mobileSelectedDayIndex;
+    const slotTimeIndex = getHourlyIndexForMobileSlot(firstOpenVisibleSlotIndex(mobileSelectedDayIndex));
     let blockId: string | null = null;
 
-    if (goesToWaiting) {
-      blockId = await createBlock(captureLabel, false, undefined, captureHashtag);
-      if (!blockId) return false;
+    if (!navigator.onLine && (goesToWaiting || goesToToday)) {
+      return queuePendingQuickCapture(label, mode, destination, captureLabel, {
+        hashtag: captureHashtag,
+        dayIndex: goesToToday ? slotDayIndex : undefined,
+        timeIndex: goesToToday ? slotTimeIndex : undefined,
+      });
+    }
+
+    if (goesToWaiting || goesToToday) {
+      const captureLocation =
+        goesToToday
+          ? {
+              type: "slot" as const,
+              dayIndex: slotDayIndex,
+              timeIndex: slotTimeIndex,
+            }
+          : undefined;
+      blockId = await createBlock(captureLabel, false, undefined, captureHashtag, captureLocation);
+      if (!blockId) {
+        return queuePendingQuickCapture(label, mode, destination, captureLabel, {
+          hashtag: captureHashtag,
+          dayIndex: goesToToday ? slotDayIndex : undefined,
+          timeIndex: goesToToday ? slotTimeIndex : undefined,
+        });
+      }
 
       if (mode === "note") {
         await saveBlockNote(blockId, label);
@@ -3928,48 +5021,146 @@ const App: React.FC = () => {
       }
     }
 
-    if (goesToOutliner) {
-      addQuickCaptureToPlanningOutliner(user.id, {
-        text: label,
-        tag: mode === "task" ? "task" : "note",
-        draftNote: mode === "note" ? label : "",
-        blockId,
+    if (goesToThemeNote && !(await appendCaptureToThemeNotes(label, mode, mobileCaptureThemeId))) {
+      return queuePendingQuickCapture(label, mode, destination, captureLabel, {
+        themeId: mobileCaptureThemeId,
       });
-      setOutlinerRefreshKey((value) => value + 1);
-      if (options?.revealOutliner ?? true) {
-        openOverlayPanel("outliner");
-      }
+    }
+
+    if (goesToHabitNote && !(await appendCaptureToHabitNotes(label, mode, mobileCaptureHabitId))) {
+      return queuePendingQuickCapture(label, mode, destination, captureLabel, {
+        habitId: mobileCaptureHabitId,
+      });
     }
 
     const captureName = mode === "block" ? "Block" : mode === "note" ? "Note" : "Task";
     const destinationLabel =
-      destination === "both"
-        ? "Waiting and Outliner"
-        : destination === "outliner"
-          ? "Outliner"
-          : "Waiting";
+      destination === "today"
+        ? isMobileSelectedDayToday ? "Today" : days[mobileSelectedDayIndex]
+        : destination === "theme-note"
+          ? "Theme Notes"
+          : destination === "habit-note"
+            ? "Habit Notes"
+            : "Waiting";
     showToast(`${captureName} captured to ${destinationLabel}`, "success");
+    triggerMobileTap();
     return true;
   };
 
   const quickCapture = async () => {
     const captured = await captureEntry(blockLabel, mobileCaptureMode, mobileCaptureDestination, {
       hashtag: blockHashtag,
-      revealOutliner: true,
     });
     if (!captured) return;
     setBlockLabel("");
     setBlockHashtag("");
+    setMobileQuickCapturePrimed(false);
   };
 
   const captureAmbientQuickNote = async () => {
-    const captured = await captureEntry(ambientQuickNote, "note", ambientQuickNoteDestination, {
-      revealOutliner: false,
-    });
+    const captured = await captureEntry(ambientQuickNote, "note", "waiting");
     if (captured) {
       setAmbientQuickNote("");
     }
   };
+
+  const syncPendingQuickCaptures = async () => {
+    if (!user || pendingQuickCaptures.length === 0 || syncingPendingCapturesRef.current) return;
+    if (!navigator.onLine) return;
+
+    syncingPendingCapturesRef.current = true;
+    const remaining: PendingQuickCapture[] = [];
+    let syncedCount = 0;
+
+    for (const capture of [...pendingQuickCaptures].reverse()) {
+      try {
+        if (capture.destination === "waiting" || capture.destination === "today") {
+          const location =
+            capture.destination === "today" &&
+            typeof capture.dayIndex === "number" &&
+            typeof capture.timeIndex === "number"
+              ? {
+                  type: "slot" as const,
+                  dayIndex: capture.dayIndex,
+                  timeIndex: capture.timeIndex,
+                }
+              : undefined;
+          const blockId = await createBlock(
+            capture.captureLabel,
+            false,
+            undefined,
+            capture.hashtag,
+            location,
+            { resetInputs: false, suppressErrorToast: true }
+          );
+          if (!blockId) {
+            remaining.push(capture);
+            continue;
+          }
+
+          if (capture.mode === "note") {
+            await saveBlockNote(blockId, capture.label);
+          }
+          if (capture.mode === "task") {
+            await addBlockTask(blockId, capture.label);
+          }
+          syncedCount += 1;
+          continue;
+        }
+
+        if (capture.destination === "theme-note") {
+          const saved = await appendCaptureToThemeNotes(
+            capture.label,
+            capture.mode,
+            capture.themeId ?? mobileCaptureThemeId
+          );
+          if (saved) {
+            syncedCount += 1;
+          } else {
+            remaining.push(capture);
+          }
+          continue;
+        }
+
+        if (capture.destination === "habit-note") {
+          const saved = await appendCaptureToHabitNotes(
+            capture.label,
+            capture.mode,
+            capture.habitId ?? mobileCaptureHabitId
+          );
+          if (saved) {
+            syncedCount += 1;
+          } else {
+            remaining.push(capture);
+          }
+        }
+      } catch (error) {
+        console.error("Error syncing pending quick capture:", error);
+        remaining.push(capture);
+      }
+    }
+
+    savePendingQuickCaptures(remaining.reverse());
+    syncingPendingCapturesRef.current = false;
+
+    if (syncedCount > 0) {
+      showToast(`${syncedCount} saved capture${syncedCount === 1 ? "" : "s"} synced`, "success");
+    }
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    const handleOnline = () => {
+      void syncPendingQuickCaptures();
+    };
+
+    window.addEventListener("online", handleOnline);
+    if (navigator.onLine && pendingQuickCaptures.length > 0) {
+      void syncPendingQuickCaptures();
+    }
+
+    return () => window.removeEventListener("online", handleOnline);
+  }, [pendingQuickCaptures, user]);
 
   const completeAmbientNextTask = async (task: AmbientTask) => {
     if (task.taskId) {
@@ -4123,6 +5314,350 @@ const App: React.FC = () => {
     return openIndex >= 0 ? openIndex : 0;
   };
 
+  const getWeeklyIntentionForHabit = (habitId: string) =>
+    weeklyIntentions.find((intention) => intention.habitId === habitId);
+
+  const getWeeklyIntentionPlacementsForSlot = (dayIndex: number, timeIndex: number) =>
+    weeklyIntentions.flatMap((intention) =>
+      intention.placements
+        .filter((placement) => placement.dayIndex === dayIndex && placement.timeIndex === timeIndex)
+        .map((placement) => ({ intention, placement }))
+    );
+
+  const getWeeklyRoutineIntentionPlacementsForSlot = (dayIndex: number, timeIndex: number) =>
+    weeklyRoutineIntentions.flatMap((intention) =>
+      intention.placements
+        .filter((placement) => placement.dayIndex === dayIndex && placement.timeIndex === timeIndex)
+        .map((placement) => ({ intention, placement }))
+    );
+
+  const placeWeeklyHabitIntentions = (
+    habit: HabitWithTheme,
+    desiredCount: number,
+    preferredDayIndexes = planningIntentionDayIndexes
+  ) => {
+    if (!user) return;
+
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    const safeDesiredCount = Math.max(1, Math.min(14, Math.round(desiredCount) || 1));
+    const safePreferredDayIndexes = Array.from(
+      new Set(
+        preferredDayIndexes.filter(
+          (dayIndex) => Number.isInteger(dayIndex) && dayIndex >= 0 && dayIndex < days.length
+        )
+      )
+    );
+    const realHabitBlocks = blocks.filter(
+      (block) => block.habitId === habit.id && block.location.type === "slot"
+    );
+    const realCount = realHabitBlocks.length;
+    const neededCount = Math.max(0, safeDesiredCount - realCount);
+    const otherIntentions = weeklyIntentions.filter((intention) => intention.habitId !== habit.id);
+
+    if (neededCount === 0) {
+      persistWeeklyIntentions(otherIntentions);
+      setPlanningIntentionHabitId(null);
+      showToast(`${habit.name} already has ${realCount} planned this week`, "info");
+      return;
+    }
+
+    const occupiedSlots = new Set<string>();
+    blocks.forEach((block) => {
+      if (block.location.type === "slot") {
+        occupiedSlots.add(`${block.location.dayIndex}-${block.location.timeIndex}`);
+      }
+    });
+    ghostBlocks.forEach((ghost) => {
+      occupiedSlots.add(`${ghost.day_index}-${ghost.time_index}`);
+    });
+    otherIntentions.forEach((intention) => {
+      intention.placements.forEach((placement) => {
+        occupiedSlots.add(`${placement.dayIndex}-${placement.timeIndex}`);
+      });
+    });
+    weeklyRoutineIntentions.forEach((intention) => {
+      intention.placements.forEach((placement) => {
+        occupiedSlots.add(`${placement.dayIndex}-${placement.timeIndex}`);
+      });
+    });
+
+    const startDay = weekOffset === 0 && todayDayIndex >= 0 ? todayDayIndex : 0;
+    const weekDayOrder = [
+      ...days.map((_, index) => index).filter((dayIndex) => dayIndex >= startDay),
+      ...days.map((_, index) => index).filter((dayIndex) => dayIndex < startDay),
+    ];
+    const preferredDaySet = new Set(safePreferredDayIndexes);
+    const preferredDayOrder = weekDayOrder.filter((dayIndex) => preferredDaySet.has(dayIndex));
+    const fallbackDayOrder = weekDayOrder.filter((dayIndex) => !preferredDaySet.has(dayIndex));
+    const dayOrder =
+      preferredDayOrder.length > 0
+        ? [...preferredDayOrder, ...fallbackDayOrder]
+        : weekDayOrder;
+    const placements: WeeklyHabitIntentionPlacement[] = [];
+
+    for (const dayIndex of dayOrder) {
+      for (let visibleSlotIndex = 0; visibleSlotIndex < slotLabels.length; visibleSlotIndex += 1) {
+        const timeIndex = getHourlyIndexForMobileSlot(visibleSlotIndex);
+        const slotKey = `${dayIndex}-${timeIndex}`;
+        if (occupiedSlots.has(slotKey)) continue;
+        if (getBlocksForSlot(dayIndex, visibleSlotIndex).length > 0) continue;
+
+        occupiedSlots.add(slotKey);
+        placements.push({
+          id: createClientId("intention-slot"),
+          dayIndex,
+          timeIndex,
+        });
+        break;
+      }
+
+      if (placements.length >= neededCount) break;
+    }
+
+    if (placements.length === 0) {
+      showToast("No open slots found for this week", "info");
+      return;
+    }
+
+    const nextIntentions = [
+      ...otherIntentions,
+      {
+        id: createClientId("weekly-intention"),
+        habitId: habit.id,
+        habitName: habit.name,
+        themeId: habit.themeId,
+        themeName: habit.themeName,
+        weekStartDate,
+        desiredCount: safeDesiredCount,
+        preferredDayIndexes: safePreferredDayIndexes,
+        placements,
+      },
+    ];
+
+    persistWeeklyIntentions(nextIntentions);
+    setPlanningIntentionHabitId(null);
+    showToast(
+      `Placed ${placements.length} ${habit.name} intention${placements.length === 1 ? "" : "s"} this week`,
+      "success"
+    );
+  };
+
+  const acceptWeeklyHabitIntention = async (
+    intentionId: string,
+    placementId: string
+  ) => {
+    const intention = weeklyIntentions.find((item) => item.id === intentionId);
+    const placement = intention?.placements.find((item) => item.id === placementId);
+    if (!intention || !placement) return;
+
+    await createHabitBlockAtSlot(intention.habitId, placement.dayIndex, placement.timeIndex);
+    const nextIntentions = weeklyIntentions
+      .map((item) =>
+        item.id === intentionId
+          ? {
+              ...item,
+              placements: item.placements.filter((slot) => slot.id !== placementId),
+            }
+          : item
+      )
+      .filter((item) => item.placements.length > 0);
+    persistWeeklyIntentions(nextIntentions);
+    showToast("Intention became a real habit block", "success");
+  };
+
+  const dismissWeeklyHabitIntention = (intentionId: string, placementId: string) => {
+    const nextIntentions = weeklyIntentions
+      .map((intention) =>
+        intention.id === intentionId
+          ? {
+              ...intention,
+              placements: intention.placements.filter((placement) => placement.id !== placementId),
+            }
+          : intention
+      )
+      .filter((intention) => intention.placements.length > 0);
+    persistWeeklyIntentions(nextIntentions);
+    showToast("Intention removed", "info");
+  };
+
+  const placeWeeklyRoutineIntentions = (
+    routineId: string,
+    desiredCount: number,
+    preferredDayIndexes: number[] = []
+  ) => {
+    if (!user) return;
+
+    const routine = workoutRoutines.find((item) => item.id === routineId);
+    if (!routine) {
+      showToast("Choose a saved routine first", "info");
+      return;
+    }
+
+    const weekStartDate = getWeekStartDateString(weekOffset);
+    const safeDesiredCount = Math.max(1, Math.min(14, Math.round(desiredCount) || 1));
+    const safePreferredDayIndexes = Array.from(
+      new Set(
+        preferredDayIndexes.filter(
+          (dayIndex) => Number.isInteger(dayIndex) && dayIndex >= 0 && dayIndex < days.length
+        )
+      )
+    );
+    const realRoutineBlocks = blocks.filter(
+      (block) => block.location.type === "slot" && workoutBlockRoutineLinks[block.id] === routine.id
+    );
+    const realCount = realRoutineBlocks.length;
+    const neededCount = Math.max(0, safeDesiredCount - realCount);
+    const otherRoutineIntentions = weeklyRoutineIntentions.filter(
+      (intention) => intention.routineId !== routine.id
+    );
+
+    if (neededCount === 0) {
+      persistWeeklyRoutineIntentions(otherRoutineIntentions);
+      showToast(`${routine.name} already has ${realCount} planned this week`, "info");
+      return;
+    }
+
+    const occupiedSlots = new Set<string>();
+    blocks.forEach((block) => {
+      if (block.location.type === "slot") {
+        occupiedSlots.add(`${block.location.dayIndex}-${block.location.timeIndex}`);
+      }
+    });
+    ghostBlocks.forEach((ghost) => {
+      occupiedSlots.add(`${ghost.day_index}-${ghost.time_index}`);
+    });
+    weeklyIntentions.forEach((intention) => {
+      intention.placements.forEach((placement) => {
+        occupiedSlots.add(`${placement.dayIndex}-${placement.timeIndex}`);
+      });
+    });
+    otherRoutineIntentions.forEach((intention) => {
+      intention.placements.forEach((placement) => {
+        occupiedSlots.add(`${placement.dayIndex}-${placement.timeIndex}`);
+      });
+    });
+
+    const startDay = weekOffset === 0 && todayDayIndex >= 0 ? todayDayIndex : 0;
+    const weekDayOrder = [
+      ...days.map((_, index) => index).filter((dayIndex) => dayIndex >= startDay),
+      ...days.map((_, index) => index).filter((dayIndex) => dayIndex < startDay),
+    ];
+    const preferredDaySet = new Set(safePreferredDayIndexes);
+    const preferredDayOrder = weekDayOrder.filter((dayIndex) => preferredDaySet.has(dayIndex));
+    const fallbackDayOrder = weekDayOrder.filter((dayIndex) => !preferredDaySet.has(dayIndex));
+    const dayOrder =
+      preferredDayOrder.length > 0
+        ? [...preferredDayOrder, ...fallbackDayOrder]
+        : weekDayOrder;
+    const placements: WeeklyHabitIntentionPlacement[] = [];
+
+    for (const dayIndex of dayOrder) {
+      for (let visibleSlotIndex = 0; visibleSlotIndex < slotLabels.length; visibleSlotIndex += 1) {
+        const timeIndex = getHourlyIndexForMobileSlot(visibleSlotIndex);
+        const slotKey = `${dayIndex}-${timeIndex}`;
+        if (occupiedSlots.has(slotKey)) continue;
+        if (getBlocksForSlot(dayIndex, visibleSlotIndex).length > 0) continue;
+
+        occupiedSlots.add(slotKey);
+        placements.push({
+          id: createClientId("routine-intention-slot"),
+          dayIndex,
+          timeIndex,
+        });
+        break;
+      }
+
+      if (placements.length >= neededCount) break;
+    }
+
+    if (placements.length === 0) {
+      showToast("No open slots found for this week", "info");
+      return;
+    }
+
+    persistWeeklyRoutineIntentions([
+      ...otherRoutineIntentions,
+      {
+        id: createClientId("weekly-routine-intention"),
+        routineId: routine.id,
+        routineName: routine.name,
+        weekStartDate,
+        desiredCount: safeDesiredCount,
+        preferredDayIndexes: safePreferredDayIndexes,
+        placements,
+      },
+    ]);
+    showToast(
+      `Placed ${placements.length} ${routine.name} routine intention${placements.length === 1 ? "" : "s"}`,
+      "success"
+    );
+  };
+
+  const createWorkoutBlockFromRoutineAtSlot = async (
+    routineId: string,
+    dayIndex: number,
+    timeIndex: number
+  ) => {
+    const routine = workoutRoutines.find((item) => item.id === routineId);
+    if (!routine) return null;
+
+    const blockId = await createBlock(routine.name, false, undefined, "fitness", {
+      type: "slot",
+      dayIndex,
+      timeIndex,
+    });
+    if (!blockId) return null;
+
+    loadWorkoutRoutineToBlock(blockId, routineId);
+    return blockId;
+  };
+
+  const acceptWeeklyRoutineIntention = async (intentionId: string, placementId: string) => {
+    const intention = weeklyRoutineIntentions.find((item) => item.id === intentionId);
+    const placement = intention?.placements.find((item) => item.id === placementId);
+    if (!intention || !placement) return;
+
+    await createWorkoutBlockFromRoutineAtSlot(
+      intention.routineId,
+      placement.dayIndex,
+      placement.timeIndex
+    );
+    const nextIntentions = weeklyRoutineIntentions
+      .map((item) =>
+        item.id === intentionId
+          ? {
+              ...item,
+              placements: item.placements.filter((slot) => slot.id !== placementId),
+            }
+          : item
+      )
+      .filter((item) => item.placements.length > 0);
+    persistWeeklyRoutineIntentions(nextIntentions);
+    showToast("Routine intention became a workout block", "success");
+  };
+
+  const dismissWeeklyRoutineIntention = (intentionId: string, placementId: string) => {
+    const nextIntentions = weeklyRoutineIntentions
+      .map((intention) =>
+        intention.id === intentionId
+          ? {
+              ...intention,
+              placements: intention.placements.filter((placement) => placement.id !== placementId),
+            }
+          : intention
+      )
+      .filter((intention) => intention.placements.length > 0);
+    persistWeeklyRoutineIntentions(nextIntentions);
+    showToast("Routine intention removed", "info");
+  };
+
+  const clearWeeklyRoutineIntention = (routineId: string) => {
+    persistWeeklyRoutineIntentions(
+      weeklyRoutineIntentions.filter((intention) => intention.routineId !== routineId)
+    );
+    showToast("Routine intention cleared", "info");
+  };
+
   const scheduleThemeBlock = async (
     blockId: string,
     dayIndex: number,
@@ -4159,6 +5694,126 @@ const App: React.FC = () => {
     showMoveUndoToast("Added to today", block);
   };
 
+  const openWaitingLinkedOutlinerBlock = async (blockId: string) => {
+    if (!user) return;
+
+    let nodeId = outlinerLinkedBlockNodeIdMap.get(blockId) ?? null;
+    if (!nodeId) {
+      const loadedNodes = await loadPlanningOutliner(user.id, false);
+      nodeId = findOutlinerNodeIdByBlock(loadedNodes, blockId);
+      setOutlinerNodes(loadedNodes);
+    }
+
+    setOutlinerFocusNodeId(nodeId);
+    setOutlinerFocusRequestKey((value) => value + 1);
+    openOverlayPanel("outliner");
+  };
+
+  const openWaitingOutlinerParentPicker = (block: Block) => {
+    if (outlinerLinkedBlockIdSet.has(block.id)) {
+      openWaitingLinkedOutlinerBlock(block.id);
+      return;
+    }
+
+    setWaitingOutlinerParentBlockId((current) => (current === block.id ? null : block.id));
+    setWaitingOutlinerParentNodeId(OUTLINER_TOP_LEVEL_PARENT);
+    setWaitingOutlinerNewParentName("");
+  };
+
+  const sendWaitingBlockToOutliner = async (block: Block, parentNodeId?: string | null) => {
+    if (!user) return;
+
+    if (outlinerLinkedBlockIdSet.has(block.id)) {
+      openWaitingLinkedOutlinerBlock(block.id);
+      return;
+    }
+
+    const kind = getBlockKindLabel(block);
+    const newParentText =
+      parentNodeId === OUTLINER_NEW_PARENT ? waitingOutlinerNewParentName.trim() : "";
+    const result = await addQuickCaptureToPlanningOutliner(user.id, {
+      text: cleanBlockLabel(block),
+      tag: kind === "Task" ? "task" : "note",
+      draftNote: kind === "Note" ? cleanBlockLabel(block) : block.blockNote ?? "",
+      blockId: block.id,
+      parentNodeId:
+        parentNodeId === OUTLINER_TOP_LEVEL_PARENT || parentNodeId === OUTLINER_NEW_PARENT
+          ? null
+          : parentNodeId ?? null,
+      newParentText,
+    });
+    setOutlinerNodes(result.nodes);
+    setOutlinerRefreshKey((value) => value + 1);
+    setOutlinerFocusNodeId(result.nodeId);
+    setOutlinerFocusRequestKey((value) => value + 1);
+    setWaitingOutlinerParentBlockId(null);
+    setWaitingOutlinerParentNodeId(OUTLINER_TOP_LEVEL_PARENT);
+    setWaitingOutlinerNewParentName("");
+    if (result.existing) openOverlayPanel("outliner");
+    showToast(result.existing ? "Opened existing Outliner row" : "Linked to Outliner", result.existing ? "info" : "success");
+  };
+
+  const renderWaitingOutlinerParentPicker = (block: Block) => {
+    if (waitingOutlinerParentBlockId !== block.id || outlinerLinkedBlockIdSet.has(block.id)) return null;
+
+    return (
+      <div className="waiting-parent-picker">
+        <label>
+          <span>Parent row</span>
+          <select
+            value={waitingOutlinerParentNodeId}
+            onChange={(event) => setWaitingOutlinerParentNodeId(event.target.value)}
+          >
+            <option value={OUTLINER_TOP_LEVEL_PARENT}>Top level</option>
+            {outlinerParentOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+            <option value={OUTLINER_NEW_PARENT}>New parent row...</option>
+          </select>
+        </label>
+        {waitingOutlinerParentNodeId === OUTLINER_NEW_PARENT && (
+          <label>
+            <span>New parent</span>
+            <input
+              type="text"
+              value={waitingOutlinerNewParentName}
+              onChange={(event) => setWaitingOutlinerNewParentName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                if (waitingOutlinerNewParentName.trim()) {
+                  sendWaitingBlockToOutliner(block, waitingOutlinerParentNodeId);
+                }
+              }}
+              placeholder="Parent row name..."
+            />
+          </label>
+        )}
+        <div>
+          <button
+            type="button"
+            onClick={() => sendWaitingBlockToOutliner(block, waitingOutlinerParentNodeId)}
+            disabled={
+              waitingOutlinerParentNodeId === OUTLINER_NEW_PARENT &&
+              !waitingOutlinerNewParentName.trim()
+            }
+          >
+            Add to Outliner
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => setWaitingOutlinerParentBlockId(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   if (!hasSupabaseConfig) {
     return <MissingSupabaseConfigScreen />;
   }
@@ -4184,7 +5839,10 @@ const App: React.FC = () => {
 
   return (
     <>
-      <div className="app" style={{ gridTemplateColumns: `${leftColWidth}px 4px 1fr` }}>
+      <div
+        className={`app ${mobileHomeView === "themes" ? "app-mobile-themes" : ""}`}
+        style={{ gridTemplateColumns: `${leftColWidth}px 4px 1fr` }}
+      >
         <div className="left-column">
           <DailyFocus
             blocks={blocks}
@@ -4210,7 +5868,7 @@ const App: React.FC = () => {
             onCreateBlock={(label) => createBlock(label)}
           />
 
-          <div className="card">
+          <div className="card themes-card">
             <div className="top-row">
               <h2>Habit themes</h2>
               <div className="theme-top-actions">
@@ -4324,6 +5982,14 @@ const App: React.FC = () => {
                               <button
                                 type="button"
                                 className="secondary small-btn"
+                                onClick={() => addThemeViewToOutliner(theme)}
+                                title="Add this theme to Planning Outliner"
+                              >
+                                Plan
+                              </button>
+                              <button
+                                type="button"
+                                className="secondary small-btn"
                                 onClick={() => setNotesThemeId(theme.id)}
                               >
                                 Notes
@@ -4425,6 +6091,44 @@ const App: React.FC = () => {
 
                           const renderHabitItem = (habit: Habit, showGroupBadge: boolean) => {
                             const isExpanded = expandedHabits.has(habit.id);
+                            const habitWithTheme: HabitWithTheme = { ...habit, themeName: theme.name, themeId: theme.id };
+                            const activeIntention = getWeeklyIntentionForHabit(habit.id);
+                            const intentionChoices = Array.from(
+                              new Set([
+                                1,
+                                2,
+                                3,
+                                4,
+                                habit.frequency === "weekly" && habit.targetPerWeek > 4 ? habit.targetPerWeek : null,
+                              ].filter((value): value is number => typeof value === "number"))
+                            );
+                            const habitDone = getHabitDoneCount(habit.id, habit.frequency);
+                            const habitTarget = habit.targetPerWeek;
+                            const habitRemaining =
+                              habit.frequency !== "none"
+                                ? Math.max(0, habitTarget - habitDone)
+                                : 0;
+                            const habitProgressPct =
+                              habit.frequency !== "none" && habitTarget > 0
+                                ? Math.min(100, Math.round((habitDone / habitTarget) * 100))
+                                : 0;
+                            const habitProgressClass =
+                              habitDone >= habitTarget && habitTarget > 0
+                                ? habitDone > habitTarget
+                                  ? "over"
+                                  : "complete"
+                                : "";
+                            const scheduledHabitCount = blocks.filter(
+                              (block) => block.habitId === habit.id && block.location.type === "slot"
+                            ).length;
+                            const intentionPlacementCount = activeIntention?.placements.length ?? 0;
+                            const habitLastDoneLabel = habit.lastDoneAt ? formatTimeSince(habit.lastDoneAt) : "Not yet";
+                            const habitCareSummary =
+                              habit.frequency === "none"
+                                ? `${habitDone} total done`
+                                : habitRemaining === 0
+                                  ? "Target met"
+                                  : `${habitRemaining} left`;
                             return (
                               <div id={`habit-${habit.id}`} key={habit.id} className="habit-item">
                                 <button
@@ -4455,10 +6159,6 @@ const App: React.FC = () => {
                                 </button>
 
                                 {!isExpanded && (() => {
-                                  const done = getHabitDoneCount(habit.id, habit.frequency);
-                                  const target = habit.targetPerWeek;
-                                  const pct = habit.frequency !== "none" && target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
-                                  const barClass = done >= target && target > 0 ? (done > target ? "over" : "complete") : "";
                                   const creditedBySubtask = blocks.some(
                                     (b) => b.completed && b.creditedHabitIds?.includes(habit.id)
                                   );
@@ -4497,9 +6197,9 @@ const App: React.FC = () => {
                                       </div>
                                       {habit.frequency !== "none" && (
                                         <div className="habit-progress-row">
-                                          <span className="habit-progress-fraction">{done}/{target}</span>
+                                          <span className="habit-progress-fraction">{habitDone}/{habitTarget}</span>
                                           <div className="habit-progress-bar-track">
-                                            <div className={`habit-progress-bar-fill ${barClass}`} style={{ width: `${pct}%` }} />
+                                            <div className={`habit-progress-bar-fill ${habitProgressClass}`} style={{ width: `${habitProgressPct}%` }} />
                                           </div>
                                           {creditedBySubtask && (
                                             <span className="habit-credited-badge">+subtask</span>
@@ -4508,12 +6208,19 @@ const App: React.FC = () => {
                                       )}
                                       {habit.frequency === "none" && (
                                         <div className="habit-meta">
-                                          Done: {done}
+                                          Done: {habitDone}
                                           {creditedBySubtask && (
                                             <span className="habit-credited-badge" style={{ marginLeft: 6 }}>+subtask</span>
                                           )}
                                         </div>
                                       )}
+                                      <div className="habit-care-mini">
+                                        <span>{habitCareSummary}</span>
+                                        <span>Last: {habitLastDoneLabel}</span>
+                                        {intentionPlacementCount > 0 && (
+                                          <span>{intentionPlacementCount} dotted</span>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                   );
@@ -4647,7 +6354,7 @@ const App: React.FC = () => {
 
                                       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                                         <span className="pill">
-                                          Done: {getHabitDoneCount(habit.id, habit.frequency)}
+                                          Done: {habitDone}
                                           {habit.frequency !== "none" && ` / ${habit.targetPerWeek}`}
                                         </span>
                                         {habit.lastDoneAt && (
@@ -4673,6 +6380,35 @@ const App: React.FC = () => {
                                           </>
                                         )}
                                       </div>
+                                      <div className="habit-care-panel">
+                                        <div>
+                                          <span>Progress</span>
+                                          <strong>{habitCareSummary}</strong>
+                                        </div>
+                                        <div>
+                                          <span>Last done</span>
+                                          <strong>{habitLastDoneLabel}</strong>
+                                        </div>
+                                        <div>
+                                          <span>Scheduled</span>
+                                          <strong>{scheduledHabitCount}</strong>
+                                        </div>
+                                        <div>
+                                          <span>Dotted</span>
+                                          <strong>{intentionPlacementCount}</strong>
+                                        </div>
+                                        {activeIntention && activeIntention.placements.length > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setMobileDayIndex(activeIntention.placements[0].dayIndex);
+                                              setMobileHomeView("planner");
+                                            }}
+                                          >
+                                            View plans
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
 
                                     <div className="habit-actions">
@@ -4685,10 +6421,44 @@ const App: React.FC = () => {
                                       <button
                                         style={{ fontSize: 12 }}
                                         className="secondary"
+                                        onClick={() => addHabitToTodayFromCare(habit)}
+                                        title="Add this habit to today"
+                                      >
+                                        Today
+                                      </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
                                         onClick={() => addHabitViewToOutliner(habit, theme)}
                                         title="Add this habit to Planning Outliner"
                                       >
                                         Plan
+                                      </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
+                                        onClick={() => setNotesThemeId(theme.id)}
+                                        title="Open this theme's habit notes"
+                                      >
+                                        Notes
+                                      </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
+                                        onClick={() => {
+                                          const opening = planningIntentionHabitId !== habit.id;
+                                          setPlanningIntentionHabitId(opening ? habit.id : null);
+                                          setPlanningIntentionCount(
+                                            activeIntention?.desiredCount ??
+                                              (habit.frequency === "weekly" && habit.targetPerWeek > 0
+                                                ? habit.targetPerWeek
+                                                : 3)
+                                          );
+                                          setPlanningIntentionDayIndexes(activeIntention?.preferredDayIndexes ?? []);
+                                        }}
+                                        title="Set a weekly intention for this habit"
+                                      >
+                                        Intention
                                       </button>
                                       <button
                                         style={{ fontSize: 12 }}
@@ -4711,6 +6481,123 @@ const App: React.FC = () => {
                                         + Subtask
                                       </button>
                                     </div>
+
+                                    {planningIntentionHabitId === habit.id && (
+                                      <div className="habit-intention-panel">
+                                        <div className="habit-intention-copy">
+                                          <strong>Weekly intention</strong>
+                                          <span>
+                                            Choose how many times you want this on the calendar, then pick preferred days.
+                                          </span>
+                                        </div>
+                                        <div className="habit-intention-chips">
+                                          {intentionChoices.map((count) => (
+                                            <button
+                                              key={`${habit.id}-intention-${count}`}
+                                              type="button"
+                                              className={planningIntentionCount === count ? "active" : ""}
+                                              onClick={() => {
+                                                setPlanningIntentionCount(count);
+                                              }}
+                                            >
+                                              {count}x
+                                            </button>
+                                          ))}
+                                        </div>
+                                        <div className="habit-intention-controls">
+                                          <label>
+                                            Custom
+                                            <input
+                                              type="number"
+                                              min={1}
+                                              max={14}
+                                              value={planningIntentionCount}
+                                              onChange={(event) =>
+                                                setPlanningIntentionCount(parseInt(event.target.value || "1", 10))
+                                              }
+                                            />
+                                          </label>
+                                          <details className="habit-intention-days">
+                                            <summary>
+                                              Days:{" "}
+                                              {planningIntentionDayIndexes.length === 0
+                                                ? "Any"
+                                                : planningIntentionDayIndexes
+                                                    .slice()
+                                                    .sort((a, b) => a - b)
+                                                    .map((dayIndex) => days[dayIndex])
+                                                    .join(", ")}
+                                            </summary>
+                                            <div className="habit-intention-day-menu">
+                                              <button
+                                                type="button"
+                                                className={planningIntentionDayIndexes.length === 0 ? "active" : ""}
+                                                onClick={() => setPlanningIntentionDayIndexes([])}
+                                              >
+                                                Any day
+                                              </button>
+                                              {days.map((day, dayIndex) => {
+                                                const selected = planningIntentionDayIndexes.includes(dayIndex);
+                                                return (
+                                                  <button
+                                                    key={`${habit.id}-intention-day-${day}`}
+                                                    type="button"
+                                                    className={selected ? "active" : ""}
+                                                    onClick={() =>
+                                                      setPlanningIntentionDayIndexes((current) =>
+                                                        current.includes(dayIndex)
+                                                          ? current.filter((item) => item !== dayIndex)
+                                                          : [...current, dayIndex]
+                                                      )
+                                                    }
+                                                  >
+                                                    {day}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                          </details>
+                                          <button
+                                            type="button"
+                                            onClick={() => placeWeeklyHabitIntentions(habitWithTheme, planningIntentionCount)}
+                                          >
+                                            Set intention
+                                          </button>
+                                          {activeIntention && (
+                                            <button
+                                              type="button"
+                                              className="secondary"
+                                              onClick={() => {
+                                                persistWeeklyIntentions(
+                                                  weeklyIntentions.filter((intention) => intention.habitId !== habit.id)
+                                                );
+                                                setPlanningIntentionHabitId(null);
+                                                showToast("Intentions cleared", "info");
+                                              }}
+                                            >
+                                              Clear
+                                            </button>
+                                        )}
+                                      </div>
+                                      {activeIntention && (
+                                          <div className="habit-intention-status">
+                                            <span>
+                                              {activeIntention.desiredCount}x this week: {scheduledHabitCount} real, {activeIntention.placements.length} dotted.
+                                            </span>
+                                            <button
+                                              type="button"
+                                              className="secondary"
+                                              onClick={() => {
+                                                setMobileDayIndex(activeIntention.placements[0]?.dayIndex ?? mobileSelectedDayIndex);
+                                                setMobileHomeView("planner");
+                                              }}
+                                            >
+                                              View dotted
+                                            </button>
+                                          </div>
+                                      )}
+                                    </div>
+                                  )}
 
                                     {(() => {
                                       const themeId = themes.find((t) =>
@@ -5168,11 +7055,17 @@ const App: React.FC = () => {
                                     blockExercises={blockExercises[block.id] ?? []}
                                     exerciseHistory={exerciseHistory}
                                     workoutRoutines={workoutRoutines}
+                                    workoutRoutineHistory={workoutRoutineHistory}
+                                    linkedWorkoutRoutineId={workoutBlockRoutineLinks[block.id] ?? null}
                                     onAddExerciseToBlock={addExerciseToBlock}
                                     onUpdateBlockExercise={updateBlockExercise}
                                     onDeleteBlockExercise={deleteBlockExercise}
                                     onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
                                     onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                                    onSaveWorkoutRoutineAsNew={saveWorkoutRoutineAsNewFromBlock}
+                                    onUpdateWorkoutRoutineFromBlock={updateWorkoutRoutineFromBlock}
+                                    onAttachWorkoutRoutine={attachWorkoutRoutineToBlock}
+                                    onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
                                     convertingBlockId={convertingBlockId}
                                     convertFrequency={convertFrequency}
                                     convertTarget={convertTarget}
@@ -5189,6 +7082,8 @@ const App: React.FC = () => {
                                     scheduleDays={days}
                                     scheduleTimeSlots={slotLabels}
                                     defaultScheduleDayIndex={todayDayIndex >= 0 ? todayDayIndex : 0}
+                                    kindLabel={getBlockKindLabel(block)}
+                                    relationshipChips={getBlockRelationshipChips(block)}
                                     themeId={theme.id}
                                     themes={themes}
                                     mealPopoverBlockId={mealPopoverBlockId}
@@ -5302,34 +7197,51 @@ const App: React.FC = () => {
 
               <div className="block-list" style={{ marginTop: 8 }}>
                 {unscheduledBlocks.map((block) => (
-                  <BlockCard
-                    key={block.id}
-                    block={block}
-                    variant="unscheduled"
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onDelete={deleteBlockWithUndo}
-                    isStrengthTraining={isStrengthTrainingBlock}
-                    isWorkoutBlock={isWorkoutBlock}
-                    onUpdateWorkout={updateWorkoutData}
-                    onSubmitWorkout={submitWorkout}
-                    exerciseLibrary={exerciseLibrary}
-                    blockExercises={blockExercises[block.id] ?? []}
-                    exerciseHistory={exerciseHistory}
-                    workoutRoutines={workoutRoutines}
-                    onAddExerciseToBlock={addExerciseToBlock}
-                    onUpdateBlockExercise={updateBlockExercise}
-                    onDeleteBlockExercise={deleteBlockExercise}
-                    onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
-                    onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
-                    themes={themes}
-                    mealPopoverBlockId={mealPopoverBlockId}
-                    onSetMealPopover={setMealPopoverBlockId}
-                    onSaveBlockNote={saveBlockNote}
-                    onAddBlockTask={addBlockTask}
-                    onToggleBlockTask={toggleBlockTask}
-                    onDeleteBlockTask={deleteBlockTask}
-                  />
+                  <div key={block.id} className="waiting-item">
+                    <BlockCard
+                      block={block}
+                      variant="unscheduled"
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      onDelete={deleteBlockWithUndo}
+                      isStrengthTraining={isStrengthTrainingBlock}
+                      isWorkoutBlock={isWorkoutBlock}
+                      onUpdateWorkout={updateWorkoutData}
+                      onSubmitWorkout={submitWorkout}
+                      exerciseLibrary={exerciseLibrary}
+                      blockExercises={blockExercises[block.id] ?? []}
+                      exerciseHistory={exerciseHistory}
+                      workoutRoutines={workoutRoutines}
+                      workoutRoutineHistory={workoutRoutineHistory}
+                      linkedWorkoutRoutineId={workoutBlockRoutineLinks[block.id] ?? null}
+                      onAddExerciseToBlock={addExerciseToBlock}
+                      onUpdateBlockExercise={updateBlockExercise}
+                      onDeleteBlockExercise={deleteBlockExercise}
+                      onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                      onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                      onSaveWorkoutRoutineAsNew={saveWorkoutRoutineAsNewFromBlock}
+                      onUpdateWorkoutRoutineFromBlock={updateWorkoutRoutineFromBlock}
+                      onAttachWorkoutRoutine={attachWorkoutRoutineToBlock}
+                      onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
+                      kindLabel={getBlockKindLabel(block)}
+                      relationshipChips={getBlockRelationshipChips(block)}
+                      themes={themes}
+                      mealPopoverBlockId={mealPopoverBlockId}
+                      onSetMealPopover={setMealPopoverBlockId}
+                      onSaveBlockNote={saveBlockNote}
+                      onAddBlockTask={addBlockTask}
+                      onToggleBlockTask={toggleBlockTask}
+                      onDeleteBlockTask={deleteBlockTask}
+                    />
+                    <button
+                      type="button"
+                      className="waiting-outliner-btn"
+                      onClick={() => openWaitingOutlinerParentPicker(block)}
+                    >
+                      {outlinerLinkedBlockIdSet.has(block.id) ? "Open Outliner" : "Send to Outliner"}
+                    </button>
+                    {renderWaitingOutlinerParentPicker(block)}
+                  </div>
                 ))}
               </div>
             </div>
@@ -5362,45 +7274,164 @@ const App: React.FC = () => {
               </div>
               <div className="mobile-command-center">
                 <div className="mobile-command-primary">
-                  <span>Now</span>
-                  <strong>{mobileSelectedNowBlock ? mobileSelectedNowBlock.label : "Nothing scheduled"}</strong>
+                  <span>{isMobileSelectedDayToday ? "Now" : "First open block"}</span>
+                  <strong>{mobileSelectedNowBlock ? cleanBlockLabel(mobileSelectedNowBlock) : "Nothing scheduled"}</strong>
                   <em>
                     {mobileSelectedNowBlock
-                      ? `${mobileSelectedNextBlocks.length + mobileSelectedLaterCount} more open this day`
+                      ? `${mobileSelectedNextBlocks.length + mobileSelectedLaterCount} more open this day${
+                          mobileOpenTaskCount > 0
+                            ? `, ${mobileOpenTaskCount} open task${mobileOpenTaskCount === 1 ? "" : "s"}`
+                            : ""
+                        }`
                       : unscheduledBlocks.length > 0
                         ? `${unscheduledBlocks.length} waiting`
                         : "Clear for the moment"}
                   </em>
+                  {mobileSelectedNowBlock ? (
+                    <div className="mobile-now-actions">
+                      <button type="button" onClick={() => markBlockDone(mobileSelectedNowBlock.id)}>
+                        Done
+                      </button>
+                      <button type="button" onClick={() => moveMobileBlockLater(mobileSelectedNowBlock.id)}>
+                        Later
+                      </button>
+                      <button type="button" onClick={() => setMobileHomeView("planner")}>
+                        Open day
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="mobile-now-actions">
+                      <button type="button" onClick={scrollToMobileWaiting}>
+                        Pick waiting
+                      </button>
+                      <button type="button" onClick={() => setMobileHomeView("themes")}>
+                        Themes
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="mobile-command-stats">
                   <button type="button" onClick={() => setMobileHomeView("planner")}>
-                    <span>Next</span>
-                    <strong>{mobileSelectedNextBlocks.length + mobileSelectedLaterCount}</strong>
+                    <span>Scheduled</span>
+                    <strong>{mobileSelectedDoneCount}/{mobileSelectedScheduledBlocks.length}</strong>
                   </button>
-                  <button type="button" onClick={() => setMobileHomeView("planner")}>
+                  <button type="button" onClick={() => openOverlayPanel("outliner")}>
+                    <span>Due</span>
+                    <strong>{mobileDueReminderCount}</strong>
+                  </button>
+                  <button type="button" onClick={scrollToMobileWaiting}>
                     <span>Waiting</span>
                     <strong>{unscheduledBlocks.length}</strong>
                   </button>
-                  <button type="button" onClick={() => toggleOverlayPanel("outliner")}>
-                    <span>Inbox</span>
-                    <strong>{mobileInboxNoteCount + mobileInboxTaskCount}</strong>
-                  </button>
                 </div>
               </div>
+              {mobileDueReminder && (
+                <button
+                  type="button"
+                  className={`mobile-due-reminder ${mobileDueReminder.kind === "pesky" ? "mobile-due-reminder--pesky" : ""}`}
+                  onClick={() => openOverlayPanel("outliner")}
+                >
+                  <span>{mobileDueReminder.kind === "pesky" ? "Pesky reminder" : "Reminder due"}</span>
+                  <strong>{mobileDueReminder.text}</strong>
+                  {mobileDueReminder.path.length > 1 && (
+                    <em>{mobileDueReminder.path.slice(0, -1).join(" / ")}</em>
+                  )}
+                </button>
+              )}
+              {mobileSelectedNextBlocks.length > 0 && (
+                <div className="mobile-next-preview">
+                  <span>Up next</span>
+                  <div>
+                    {mobileSelectedNextBlocks.map((block) => (
+                      <button
+                        type="button"
+                        key={`mobile-next-preview-${block.id}`}
+                        onClick={() => {
+                          setMobileHomeView("planner");
+                          window.setTimeout(() => {
+                            document.getElementById(`block-${block.id}`)?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "center",
+                            });
+                          }, 80);
+                        }}
+                      >
+                        {cleanBlockLabel(block)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {mobileWeeklyIntentionPlacements.length > 0 && (
+                <div className="mobile-intention-preview">
+                  <div className="mobile-intention-preview-header">
+                    <span>Weekly intentions</span>
+                    <strong>{mobileWeeklyIntentionPlacements.length} dotted</strong>
+                  </div>
+                  <div className="mobile-intention-preview-list">
+                    {mobileWeeklyIntentionPlacements.slice(0, 3).map(({ intention, placement }) => {
+                      const visibleSlotIndex =
+                        viewMode === "buckets"
+                          ? getBucketForHourlyIndex(placement.timeIndex)
+                          : placement.timeIndex;
+                      const slotLabel = slotLabels[visibleSlotIndex] ?? "Open slot";
+                      return (
+                        <div key={`mobile-intention-preview-${intention.id}-${placement.id}`}>
+                          <button
+                            type="button"
+                            className="mobile-intention-preview-main"
+                            onClick={() => {
+                              setMobileDayIndex(placement.dayIndex);
+                              setMobileHomeView("planner");
+                            }}
+                          >
+                            <strong>{intention.habitName}</strong>
+                            <span>{days[placement.dayIndex]} · {slotLabel}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="mobile-intention-preview-accept"
+                            onClick={() => acceptWeeklyHabitIntention(intention.id, placement.id)}
+                          >
+                            Make real
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <form
-                className="mobile-quick-add"
+                className={`mobile-quick-add ${mobileQuickCapturePrimed ? "mobile-quick-add--primed" : ""}`}
                 onSubmit={(event) => {
                   event.preventDefault();
                   quickCapture();
                 }}
               >
+                {mobileQuickCapturePrimed && (
+                  <div className="mobile-quick-add-status mobile-quick-add-status--ready">
+                    Quick capture ready
+                  </div>
+                )}
+                {pendingQuickCaptures.length > 0 && (
+                  <button
+                    type="button"
+                    className="mobile-quick-add-status mobile-quick-add-status--pending"
+                    onClick={() => syncPendingQuickCaptures()}
+                  >
+                    {pendingQuickCaptures.length} saved on device
+                  </button>
+                )}
                 <div className="mobile-capture-modes" role="group" aria-label="Capture type">
                   {(["block", "note", "task"] as MobileCaptureMode[]).map((mode) => (
                     <button
                       key={mode}
                       type="button"
                       className={mobileCaptureMode === mode ? "active" : ""}
-                      onClick={() => setMobileCaptureMode(mode)}
+                      onClick={() => {
+                        triggerMobileTap();
+                        setMobileCaptureMode(mode);
+                      }}
                     >
                       {mode === "block" ? "Block" : mode === "note" ? "Note" : "Task"}
                     </button>
@@ -5409,24 +7440,64 @@ const App: React.FC = () => {
                 <div className="mobile-capture-destinations" role="group" aria-label="Capture destination">
                   {([
                     { id: "waiting" as MobileCaptureDestination, label: "Waiting" },
-                    { id: "outliner" as MobileCaptureDestination, label: "Outliner" },
-                    { id: "both" as MobileCaptureDestination, label: "Both" },
+                    { id: "today" as MobileCaptureDestination, label: isMobileSelectedDayToday ? "Today" : "This day" },
+                    { id: "theme-note" as MobileCaptureDestination, label: "Theme note" },
+                    { id: "habit-note" as MobileCaptureDestination, label: "Habit note" },
                   ]).map((destination) => (
                     <button
                       key={destination.id}
                       type="button"
                       className={mobileCaptureDestination === destination.id ? "active" : ""}
-                      onClick={() => setMobileCaptureDestination(destination.id)}
+                      onClick={() => {
+                        triggerMobileTap();
+                        setMobileCaptureDestination(destination.id);
+                      }}
                     >
                       {destination.label}
                     </button>
                   ))}
                 </div>
+                {mobileCaptureDestination === "theme-note" && (
+                  <select
+                    className="mobile-capture-theme-select"
+                    value={mobileCaptureThemeId}
+                    onChange={(event) => setMobileCaptureThemeId(event.target.value)}
+                    aria-label="Choose theme note"
+                  >
+                    {themes.map((theme) => (
+                      <option key={theme.id} value={theme.id}>
+                        {theme.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {mobileCaptureDestination === "habit-note" && (
+                  allHabits.length === 0 ? (
+                    <div className="mobile-capture-empty-target">No habits yet.</div>
+                  ) : (
+                    <select
+                      className="mobile-capture-theme-select"
+                      value={mobileCaptureHabitId}
+                      onChange={(event) => setMobileCaptureHabitId(event.target.value)}
+                      aria-label="Choose habit note"
+                    >
+                      {allHabits.map((habit) => (
+                        <option key={habit.id} value={habit.id}>
+                          {habit.themeName} / {habit.name}
+                        </option>
+                      ))}
+                    </select>
+                  )
+                )}
                 <input
+                  ref={mobileQuickCaptureInputRef}
                   type="text"
                   placeholder={`Quick ${mobileCaptureMode}...`}
                   value={blockLabel}
-                  onChange={(event) => setBlockLabel(event.target.value)}
+                  onChange={(event) => {
+                    setBlockLabel(event.target.value);
+                    setMobileQuickCapturePrimed(false);
+                  }}
                 />
                 <button type="submit" disabled={dataLoading}>
                   Add
@@ -5490,11 +7561,19 @@ const App: React.FC = () => {
                           blockExercises={blockExercises[block.id] ?? []}
                           exerciseHistory={exerciseHistory}
                           workoutRoutines={workoutRoutines}
+                          workoutRoutineHistory={workoutRoutineHistory}
+                          linkedWorkoutRoutineId={workoutBlockRoutineLinks[block.id] ?? null}
                           onAddExerciseToBlock={addExerciseToBlock}
                           onUpdateBlockExercise={updateBlockExercise}
                           onDeleteBlockExercise={deleteBlockExercise}
                           onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
                           onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                          onSaveWorkoutRoutineAsNew={saveWorkoutRoutineAsNewFromBlock}
+                          onUpdateWorkoutRoutineFromBlock={updateWorkoutRoutineFromBlock}
+                          onAttachWorkoutRoutine={attachWorkoutRoutineToBlock}
+                          onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
+                          kindLabel={getBlockKindLabel(block)}
+                          relationshipChips={getBlockRelationshipChips(block)}
                           onSaveBlockNote={saveBlockNote}
                           onAddBlockTask={addBlockTask}
                           onToggleBlockTask={toggleBlockTask}
@@ -5506,65 +7585,19 @@ const App: React.FC = () => {
                 </div>
               )}
             </section>
-
-            <section className={`mobile-section-card mobile-inbox-card ${mobileHomeView !== "today" ? "mobile-view-hidden" : ""}`}>
-              <div className="mobile-section-header">
-                <span>Inbox</span>
-                <strong>{mobileInboxNoteCount} notes / {mobileInboxTaskCount} tasks</strong>
-              </div>
-              {mobileInboxBlocks.length === 0 ? (
-                <div className="mobile-empty-state">No quick notes or tasks waiting.</div>
-              ) : (
-                <div className="mobile-inbox-list">
-                  {mobileInboxBlocks.map((block) => (
-                    <div key={`mobile-inbox-${block.id}`} className="mobile-inbox-item">
-                      <BlockCard
-                        block={block}
-                        variant="unscheduled"
-                        openDetailsOnClick
-                        mobileMode
-                        onMobileScheduleToday={addWaitingBlockToToday}
-                        onDragStart={handleDragStart}
-                        onDragEnd={handleDragEnd}
-                        onDelete={deleteBlockWithUndo}
-                        isStrengthTraining={isStrengthTrainingBlock}
-                        isWorkoutBlock={isWorkoutBlock}
-                        onUpdateWorkout={updateWorkoutData}
-                        onSubmitWorkout={submitWorkout}
-                        exerciseLibrary={exerciseLibrary}
-                        blockExercises={blockExercises[block.id] ?? []}
-                        exerciseHistory={exerciseHistory}
-                        workoutRoutines={workoutRoutines}
-                        onAddExerciseToBlock={addExerciseToBlock}
-                        onUpdateBlockExercise={updateBlockExercise}
-                        onDeleteBlockExercise={deleteBlockExercise}
-                        onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
-                        onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
-                        themes={themes}
-                        mealPopoverBlockId={mealPopoverBlockId}
-                        onSetMealPopover={setMealPopoverBlockId}
-                        onSaveBlockNote={saveBlockNote}
-                        onAddBlockTask={addBlockTask}
-                        onToggleBlockTask={toggleBlockTask}
-                        onDeleteBlockTask={deleteBlockTask}
-                      />
-                      <button
-                        type="button"
-                        className="mobile-inbox-outliner-btn"
-                        onClick={() => toggleOverlayPanel("outliner")}
-                      >
-                        Outliner
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
             <section className={`mobile-section-card mobile-day-planner-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}>
               <div className="mobile-section-header">
                 <span>Day planner</span>
-                <strong>{days[mobileSelectedDayIndex]}</strong>
+                <div className="mobile-section-header-actions">
+                  <button
+                    type="button"
+                    className="mobile-section-link-btn"
+                    onClick={() => setMobileHomeView("themes")}
+                  >
+                    Themes
+                  </button>
+                  <strong>{days[mobileSelectedDayIndex]}</strong>
+                </div>
               </div>
               <div className="mobile-day-stepper" aria-label="Move one day at a time">
                 <button type="button" onClick={() => moveMobilePlannerDay(-1)}>
@@ -5613,7 +7646,10 @@ const App: React.FC = () => {
                     className={`${index === mobileSelectedDayIndex ? "active" : ""} ${
                       index === todayDayIndex ? "today" : ""
                     }`}
-                    onClick={() => setMobileDayIndex(index)}
+                    onClick={(event) => {
+                      resetMobileTabViewport(event.currentTarget);
+                      setMobileDayIndex(index);
+                    }}
                   >
                     {day}
                   </button>
@@ -5622,6 +7658,14 @@ const App: React.FC = () => {
               <div className="mobile-day-slots">
                 {slotLabels.map((slotLabel, slotIndex) => {
                   const slotBlocks = getBlocksForSlot(mobileSelectedDayIndex, slotIndex);
+                  const slotIntentionBlocks = getWeeklyIntentionPlacementsForSlot(
+                    mobileSelectedDayIndex,
+                    getHourlyIndexForMobileSlot(slotIndex)
+                  );
+                  const slotRoutineIntentionBlocks = getWeeklyRoutineIntentionPlacementsForSlot(
+                    mobileSelectedDayIndex,
+                    getHourlyIndexForMobileSlot(slotIndex)
+                  );
                   const slotGhostBlocks = showGhostBlocks
                     ? ghostBlocks.filter(
                         (ghost) =>
@@ -5639,8 +7683,24 @@ const App: React.FC = () => {
                     >
                       <div className="mobile-slot-label">{slotLabel}</div>
                       <div className="mobile-slot-content">
-                        {slotBlocks.length === 0 && slotGhostBlocks.length === 0 && (
-                          <span className="mobile-slot-empty">Drop or add here</span>
+                        {slotBlocks.length === 0 &&
+                          slotGhostBlocks.length === 0 &&
+                          slotIntentionBlocks.length === 0 &&
+                          slotRoutineIntentionBlocks.length === 0 && (
+                          <button
+                            type="button"
+                            className="mobile-slot-add-btn"
+                            aria-label="Add from themes"
+                            title="Add from themes"
+                            onClick={() =>
+                              openMobileHabitPickerForSlot(
+                                mobileSelectedDayIndex,
+                                getHourlyIndexForMobileSlot(slotIndex)
+                              )
+                            }
+                          >
+                            +
+                          </button>
                         )}
                         {slotBlocks.map((block) => {
                           const priority = dailyPriorities.find((p) => p.block_id === block.id);
@@ -5682,11 +7742,19 @@ const App: React.FC = () => {
                               blockExercises={blockExercises[block.id] ?? []}
                               exerciseHistory={exerciseHistory}
                               workoutRoutines={workoutRoutines}
+                              workoutRoutineHistory={workoutRoutineHistory}
+                              linkedWorkoutRoutineId={workoutBlockRoutineLinks[block.id] ?? null}
                               onAddExerciseToBlock={addExerciseToBlock}
                               onUpdateBlockExercise={updateBlockExercise}
                               onDeleteBlockExercise={deleteBlockExercise}
                               onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
                               onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                              onSaveWorkoutRoutineAsNew={saveWorkoutRoutineAsNewFromBlock}
+                              onUpdateWorkoutRoutineFromBlock={updateWorkoutRoutineFromBlock}
+                              onAttachWorkoutRoutine={attachWorkoutRoutineToBlock}
+                              onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
+                              kindLabel={getBlockKindLabel(block)}
+                              relationshipChips={getBlockRelationshipChips(block)}
                               onSaveBlockNote={saveBlockNote}
                               onAddBlockTask={addBlockTask}
                               onToggleBlockTask={toggleBlockTask}
@@ -5694,6 +7762,45 @@ const App: React.FC = () => {
                             />
                           );
                         })}
+                        {(slotBlocks.length > 0 ||
+                          slotGhostBlocks.length > 0 ||
+                          slotIntentionBlocks.length > 0 ||
+                          slotRoutineIntentionBlocks.length > 0) && (
+                          <button
+                            type="button"
+                            className="mobile-slot-add-btn mobile-slot-add-btn--compact"
+                            aria-label="Add from themes"
+                            title="Add from themes"
+                            onClick={() =>
+                              openMobileHabitPickerForSlot(
+                                mobileSelectedDayIndex,
+                                getHourlyIndexForMobileSlot(slotIndex)
+                              )
+                            }
+                          >
+                            +
+                          </button>
+                        )}
+                        {slotIntentionBlocks.map(({ intention, placement }) => (
+                          <GhostBlock
+                            key={`mobile-intention-${intention.id}-${placement.id}`}
+                            label={`Habit: ${intention.habitName}`}
+                            badgeLabel="Plan"
+                            variant="intention"
+                            onAccept={() => acceptWeeklyHabitIntention(intention.id, placement.id)}
+                            onDismiss={() => dismissWeeklyHabitIntention(intention.id, placement.id)}
+                          />
+                        ))}
+                        {slotRoutineIntentionBlocks.map(({ intention, placement }) => (
+                          <GhostBlock
+                            key={`mobile-routine-intention-${intention.id}-${placement.id}`}
+                            label={`Routine: ${intention.routineName}`}
+                            badgeLabel="Plan"
+                            variant="intention"
+                            onAccept={() => acceptWeeklyRoutineIntention(intention.id, placement.id)}
+                            onDismiss={() => dismissWeeklyRoutineIntention(intention.id, placement.id)}
+                          />
+                        ))}
                         {slotGhostBlocks.map((ghost, index) => (
                           <GhostBlock
                             key={`mobile-ghost-${mobileSelectedDayIndex}-${slotIndex}-${index}`}
@@ -5710,47 +7817,67 @@ const App: React.FC = () => {
               </div>
             </section>
 
-            <section className={`mobile-section-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}>
+            <section
+              id="mobile-waiting-section"
+              className={`mobile-section-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}
+            >
               <div className="mobile-section-header">
                 <span>Waiting</span>
-                <strong>{unscheduledBlocks.length} unscheduled</strong>
+                <strong>{unscheduledBlocks.length} waiting</strong>
               </div>
               {unscheduledBlocks.length === 0 ? (
-                <div className="mobile-empty-state">No unscheduled blocks.</div>
+                <div className="mobile-empty-state">No waiting items.</div>
               ) : (
                 <div className="mobile-unscheduled-scroll">
                   {unscheduledBlocks.map((block) => (
-                    <BlockCard
-                      key={`mobile-unscheduled-${block.id}`}
-                      block={block}
-                      variant="unscheduled"
-                      openDetailsOnClick
-                      mobileMode
-                      onMobileScheduleToday={addWaitingBlockToToday}
-                      onDragStart={handleDragStart}
-                      onDragEnd={handleDragEnd}
-                      onDelete={deleteBlockWithUndo}
-                      isStrengthTraining={isStrengthTrainingBlock}
-                      isWorkoutBlock={isWorkoutBlock}
-                      onUpdateWorkout={updateWorkoutData}
-                      onSubmitWorkout={submitWorkout}
-                      exerciseLibrary={exerciseLibrary}
-                      blockExercises={blockExercises[block.id] ?? []}
-                      exerciseHistory={exerciseHistory}
-                      workoutRoutines={workoutRoutines}
-                      onAddExerciseToBlock={addExerciseToBlock}
-                      onUpdateBlockExercise={updateBlockExercise}
-                      onDeleteBlockExercise={deleteBlockExercise}
-                      onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
-                      onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
-                      themes={themes}
-                      mealPopoverBlockId={mealPopoverBlockId}
-                      onSetMealPopover={setMealPopoverBlockId}
-                      onSaveBlockNote={saveBlockNote}
-                      onAddBlockTask={addBlockTask}
-                      onToggleBlockTask={toggleBlockTask}
-                      onDeleteBlockTask={deleteBlockTask}
-                    />
+                    <div key={`mobile-waiting-${block.id}`} className="mobile-waiting-item">
+                      <BlockCard
+                        block={block}
+                        variant="unscheduled"
+                        openDetailsOnClick
+                        mobileMode
+                        onMobileScheduleToday={addWaitingBlockToToday}
+                        onDragStart={handleDragStart}
+                        onDragEnd={handleDragEnd}
+                        onDelete={deleteBlockWithUndo}
+                        isStrengthTraining={isStrengthTrainingBlock}
+                        isWorkoutBlock={isWorkoutBlock}
+                        onUpdateWorkout={updateWorkoutData}
+                        onSubmitWorkout={submitWorkout}
+                        exerciseLibrary={exerciseLibrary}
+                        blockExercises={blockExercises[block.id] ?? []}
+                        exerciseHistory={exerciseHistory}
+                        workoutRoutines={workoutRoutines}
+                        workoutRoutineHistory={workoutRoutineHistory}
+                        linkedWorkoutRoutineId={workoutBlockRoutineLinks[block.id] ?? null}
+                        onAddExerciseToBlock={addExerciseToBlock}
+                        onUpdateBlockExercise={updateBlockExercise}
+                        onDeleteBlockExercise={deleteBlockExercise}
+                        onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
+                        onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                        onSaveWorkoutRoutineAsNew={saveWorkoutRoutineAsNewFromBlock}
+                        onUpdateWorkoutRoutineFromBlock={updateWorkoutRoutineFromBlock}
+                        onAttachWorkoutRoutine={attachWorkoutRoutineToBlock}
+                        onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
+                        kindLabel={getBlockKindLabel(block)}
+                        relationshipChips={getBlockRelationshipChips(block)}
+                        themes={themes}
+                        mealPopoverBlockId={mealPopoverBlockId}
+                        onSetMealPopover={setMealPopoverBlockId}
+                        onSaveBlockNote={saveBlockNote}
+                        onAddBlockTask={addBlockTask}
+                        onToggleBlockTask={toggleBlockTask}
+                        onDeleteBlockTask={deleteBlockTask}
+                      />
+                      <button
+                        type="button"
+                        className="mobile-waiting-outliner-btn"
+                        onClick={() => openWaitingOutlinerParentPicker(block)}
+                      >
+                        {outlinerLinkedBlockIdSet.has(block.id) ? "Open Outliner" : "Send to Outliner"}
+                      </button>
+                      {renderWaitingOutlinerParentPicker(block)}
+                    </div>
                   ))}
                 </div>
               )}
@@ -5771,7 +7898,15 @@ const App: React.FC = () => {
                 className={mobileHomeView === "planner" ? "active" : ""}
                 onPointerDown={(event) => handleMobileHomeNav("planner", event)}
               >
-                <span>Planner</span>
+                <span>Plan</span>
+              </button>
+              <button
+                type="button"
+                data-overlay-toggle="true"
+                className={mobileHomeView === "themes" ? "active" : ""}
+                onPointerDown={(event) => handleMobileHomeNav("themes", event)}
+              >
+                <span>Themes</span>
               </button>
               <button
                 type="button"
@@ -5787,7 +7922,7 @@ const App: React.FC = () => {
                 className={showRoutineNotes ? "active" : ""}
                 onPointerDown={(event) => handleMobileOverlayNav("routines", event)}
               >
-                <span>Routines</span>
+                <span>Routine</span>
               </button>
               <button
                 type="button"
@@ -5803,7 +7938,7 @@ const App: React.FC = () => {
                 className={showPlanningOutliner ? "active" : ""}
                 onPointerDown={(event) => handleMobileOverlayNav("outliner", event)}
               >
-                <span>Outliner</span>
+                <span>Outline</span>
               </button>
             </nav>
           </div>
@@ -6103,6 +8238,14 @@ const App: React.FC = () => {
                     <th className="time-col">{slotLabel}</th>
                     {days.map((_, dayIndex) => {
                       const slotBlocks = getBlocksForSlot(dayIndex, slotIndex);
+                      const slotIntentionBlocks = getWeeklyIntentionPlacementsForSlot(
+                        dayIndex,
+                        getHourlyIndexForMobileSlot(slotIndex)
+                      );
+                      const slotRoutineIntentionBlocks = getWeeklyRoutineIntentionPlacementsForSlot(
+                        dayIndex,
+                        getHourlyIndexForMobileSlot(slotIndex)
+                      );
                       return (
                         <td
                           key={`${dayIndex}-${slotIndex}`}
@@ -6149,11 +8292,19 @@ const App: React.FC = () => {
                                   blockExercises={blockExercises[block.id] ?? []}
                                   exerciseHistory={exerciseHistory}
                                   workoutRoutines={workoutRoutines}
+                                  workoutRoutineHistory={workoutRoutineHistory}
+                                  linkedWorkoutRoutineId={workoutBlockRoutineLinks[block.id] ?? null}
                                   onAddExerciseToBlock={addExerciseToBlock}
                                   onUpdateBlockExercise={updateBlockExercise}
                                   onDeleteBlockExercise={deleteBlockExercise}
                                   onLoadWorkoutRoutine={loadWorkoutRoutineToBlock}
                                   onSaveWorkoutRoutine={saveWorkoutRoutineFromBlock}
+                                  onSaveWorkoutRoutineAsNew={saveWorkoutRoutineAsNewFromBlock}
+                                  onUpdateWorkoutRoutineFromBlock={updateWorkoutRoutineFromBlock}
+                                  onAttachWorkoutRoutine={attachWorkoutRoutineToBlock}
+                                  onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
+                                  kindLabel={getBlockKindLabel(block)}
+                                  relationshipChips={getBlockRelationshipChips(block)}
                                   onSaveBlockNote={saveBlockNote}
                                   onAddBlockTask={addBlockTask}
                                   onToggleBlockTask={toggleBlockTask}
@@ -6172,6 +8323,26 @@ const App: React.FC = () => {
                                   onDismiss={() => handleDismissGhostBlock(ghost)}
                                 />
                               ))}
+                            {slotIntentionBlocks.map(({ intention, placement }) => (
+                              <GhostBlock
+                                key={`intention-${intention.id}-${placement.id}`}
+                                label={`Habit: ${intention.habitName}`}
+                                badgeLabel="Plan"
+                                variant="intention"
+                                onAccept={() => acceptWeeklyHabitIntention(intention.id, placement.id)}
+                                onDismiss={() => dismissWeeklyHabitIntention(intention.id, placement.id)}
+                              />
+                            ))}
+                            {slotRoutineIntentionBlocks.map(({ intention, placement }) => (
+                              <GhostBlock
+                                key={`routine-intention-${intention.id}-${placement.id}`}
+                                label={`Routine: ${intention.routineName}`}
+                                badgeLabel="Plan"
+                                variant="intention"
+                                onAccept={() => acceptWeeklyRoutineIntention(intention.id, placement.id)}
+                                onDismiss={() => dismissWeeklyRoutineIntention(intention.id, placement.id)}
+                              />
+                            ))}
                           </div>
                         </td>
                       );
@@ -6306,6 +8477,139 @@ const App: React.FC = () => {
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
+      {mobileHabitPickerSlot && (() => {
+        const habitThemes = themes.filter((theme) => theme.themeType === "habit");
+        const pickerQuery = mobileHabitPickerQuery.trim().toLowerCase();
+        const allPickerHabits = habitThemes.flatMap((theme) => flattenHabits(theme.habits, theme.name, theme.id));
+        const doesHabitMatch = (habit: HabitWithTheme) =>
+          !pickerQuery ||
+          habit.name.toLowerCase().includes(pickerQuery) ||
+          habit.themeName.toLowerCase().includes(pickerQuery);
+        const suggestedPickerHabits = allPickerHabits
+          .filter(
+            (habit) =>
+              habit.frequency !== "none" &&
+              habit.targetPerWeek > 0 &&
+              getHabitDoneCount(habit.id, habit.frequency) < habit.targetPerWeek
+          )
+          .sort((a, b) => {
+            const aLast = a.lastDoneAt ? new Date(a.lastDoneAt).getTime() : 0;
+            const bLast = b.lastDoneAt ? new Date(b.lastDoneAt).getTime() : 0;
+            return aLast - bLast;
+          })
+          .slice(0, 6);
+        const filteredPickerThemes = habitThemes
+          .map((theme) => ({
+            theme,
+            habits: flattenHabits(theme.habits, theme.name, theme.id).filter(doesHabitMatch),
+          }))
+          .filter(({ habits }) => !pickerQuery || habits.length > 0);
+        const hasPickerMatches = allPickerHabits.some(doesHabitMatch);
+        const visibleSlotIndex =
+          viewMode === "buckets"
+            ? getBucketForHourlyIndex(mobileHabitPickerSlot.timeIndex)
+            : mobileHabitPickerSlot.timeIndex;
+        const slotLabel = slotLabels[visibleSlotIndex] ?? "This slot";
+        const renderPickerHabitButton = (habit: HabitWithTheme, keyPrefix = "habit") => {
+          const done = getHabitDoneCount(habit.id, habit.frequency);
+          const progressLabel =
+            habit.frequency === "none"
+              ? "No target"
+              : `${done}/${habit.targetPerWeek} ${habit.frequency}`;
+          const lastDoneLabel = habit.lastDoneAt ? `Last ${formatTimeSince(habit.lastDoneAt)}` : "Not done yet";
+
+          return (
+            <button
+              key={`${keyPrefix}-${habit.id}`}
+              type="button"
+              onClick={() => addHabitToMobileSlot(habit.id)}
+            >
+              <span className="mobile-habit-picker-name">
+                <strong>{habit.name}</strong>
+                <small>{habit.themeName}</small>
+              </span>
+              <span className="mobile-habit-picker-meta">
+                <em>{progressLabel}</em>
+                <small>{lastDoneLabel}</small>
+              </span>
+            </button>
+          );
+        };
+
+        return (
+          <div
+            className="modal-overlay mobile-habit-picker-overlay"
+            onClick={() => setMobileHabitPickerSlot(null)}
+          >
+            <div className="mobile-habit-picker-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="mobile-habit-picker-header">
+                <div>
+                  <span>Add from themes</span>
+                  <strong>{days[mobileHabitPickerSlot.dayIndex]} · {slotLabel}</strong>
+                </div>
+                <button
+                  type="button"
+                  className="modal-close"
+                  onClick={() => setMobileHabitPickerSlot(null)}
+                  aria-label="Close habit picker"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="mobile-habit-picker-body">
+                <div className="mobile-habit-picker-search">
+                  <input
+                    type="text"
+                    value={mobileHabitPickerQuery}
+                    onChange={(event) => setMobileHabitPickerQuery(event.target.value)}
+                    placeholder="Search habits or themes"
+                    autoFocus
+                  />
+                </div>
+                {habitThemes.length === 0 ? (
+                  <div className="mobile-habit-picker-empty">
+                    No habit themes yet.
+                  </div>
+                ) : pickerQuery && !hasPickerMatches ? (
+                  <div className="mobile-habit-picker-empty">
+                    No matching habits.
+                  </div>
+                ) : (
+                  <>
+                    {!pickerQuery && suggestedPickerHabits.length > 0 && (
+                      <section className="mobile-habit-picker-theme mobile-habit-picker-suggested">
+                        <div className="mobile-habit-picker-theme-header">
+                          <strong>Suggested</strong>
+                          <span>Still open this week</span>
+                        </div>
+                        <div className="mobile-habit-picker-list">
+                          {suggestedPickerHabits.map((habit) => renderPickerHabitButton(habit, "suggested"))}
+                        </div>
+                      </section>
+                    )}
+                    {filteredPickerThemes.map(({ theme, habits }) => (
+                      <section key={theme.id} className="mobile-habit-picker-theme">
+                        <div className="mobile-habit-picker-theme-header">
+                          <strong>{theme.name}</strong>
+                          <span>{habits.length} habit{habits.length === 1 ? "" : "s"}</span>
+                        </div>
+                        {habits.length === 0 ? (
+                          <div className="mobile-habit-picker-empty">No habits in this theme yet.</div>
+                        ) : (
+                          <div className="mobile-habit-picker-list">
+                            {habits.map((habit) => renderPickerHabitButton(habit, theme.id))}
+                          </div>
+                        )}
+                      </section>
+                    ))}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {notesThemeId && (() => {
         const theme = themes.find((t) => t.id === notesThemeId);
         if (!theme || !user) return null;
@@ -6385,13 +8689,11 @@ const App: React.FC = () => {
           nextTask={ambientNextTask}
           waitingCount={unscheduledBlocks.length}
           quickNote={ambientQuickNote}
-          quickNoteDestination={ambientQuickNoteDestination}
           wakeLockSupported={ambientWakeLockSupported}
           wakeLockActive={ambientWakeLockActive}
           wakeLockError={ambientWakeLockError}
           onSettingsChange={updateAmbientSettings}
           onQuickNoteChange={setAmbientQuickNote}
-          onQuickNoteDestinationChange={setAmbientQuickNoteDestination}
           onQuickNoteSubmit={captureAmbientQuickNote}
           onToggleRoutineItem={toggleAmbientRoutineItem}
           onCompleteRoutine={completeAmbientRoutine}
@@ -6419,10 +8721,6 @@ const App: React.FC = () => {
           userId={user.id}
           todayDate={todayDate}
           onClose={() => setShowRoutineNotes(false)}
-          onCreateBlock={async (label) => {
-            const id = await createBlock(label);
-            if (id) showToast("Routine item added to unscheduled", "success");
-          }}
           onCreateRoutineBlock={createRoutineBlockFromRoutine}
           workoutRoutines={workoutRoutines}
           onCreateWorkoutFromRoutine={createWorkoutBlockFromRoutine}
@@ -6434,12 +8732,17 @@ const App: React.FC = () => {
           exerciseLibrary={exerciseLibrary}
           exerciseHistory={exerciseHistory}
           workoutRoutines={workoutRoutines}
+          workoutRoutineHistory={workoutRoutineHistory}
+          routineIntentions={weeklyRoutineIntentions}
+          days={days}
           onClose={() => setShowWorkoutLibrary(false)}
           onCreateWorkout={createWorkoutBlockFromExercises}
           onCreateWorkoutFromRoutine={createWorkoutBlockFromRoutine}
           onSaveRoutine={saveWorkoutRoutineFromExerciseIds}
           onDeleteRoutine={deleteWorkoutRoutine}
           onAddExercise={addCustomExercise}
+          onPlanRoutineIntention={placeWeeklyRoutineIntentions}
+          onClearRoutineIntention={clearWeeklyRoutineIntention}
         />
       )}
 
@@ -6447,6 +8750,8 @@ const App: React.FC = () => {
         <PlanningOutlinerPanel
           userId={user.id}
           externalVersion={outlinerRefreshKey}
+          focusNodeIdRequest={outlinerFocusNodeId}
+          focusRequestKey={outlinerFocusRequestKey}
           themes={themes
             .filter((theme) => theme.themeType === "habit")
             .map((theme) => ({
@@ -6461,10 +8766,7 @@ const App: React.FC = () => {
             .map((block) => block.habitId)
             .filter((habitId): habitId is string => !!habitId)}
           onClose={() => setShowPlanningOutliner(false)}
-          onCreateBlock={async (label) => {
-            const id = await createBlock(label);
-            if (id) showToast("Outliner row added to unscheduled", "success");
-          }}
+          onCreateBlock={createOutlinerBlock}
           onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
             return createOrLinkOutlinerHabit(themeId, name, targetPerWeek, frequency);
           }}
@@ -6481,11 +8783,13 @@ const App: React.FC = () => {
           onCreateThemeFromRow={async (name, habits) => {
             return createThemeFromOutliner(name, habits);
           }}
+          onCreateRoutineFromRow={createRoutineFromOutliner}
           onAddBoardForLinkedHabit={addLinkedHabitToBoard}
           onOpenLinked={openLinkedOutlinerItem}
           onRenameLinked={renameLinkedOutlinerItem}
           onLoadLinkedNote={loadLinkedOutlinerNote}
           onSaveLinkedNote={saveLinkedOutlinerNote}
+          onNodesChange={setOutlinerNodes}
         />
       )}
 

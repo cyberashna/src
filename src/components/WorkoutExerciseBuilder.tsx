@@ -4,6 +4,7 @@ import type {
   WorkoutBlockExercise,
   WorkoutExerciseHistoryEntry,
   WorkoutRoutine,
+  WorkoutRoutineHistoryEntry,
 } from "../App";
 import {
   bodyAreaLabels,
@@ -23,6 +24,8 @@ type WorkoutExerciseBuilderProps = {
   blockExercises: WorkoutBlockExercise[];
   exerciseHistory?: Record<string, WorkoutExerciseHistoryEntry[]>;
   workoutRoutines?: WorkoutRoutine[];
+  workoutRoutineHistory?: WorkoutRoutineHistoryEntry[];
+  linkedWorkoutRoutineId?: string | null;
   workoutSubmitted?: boolean;
   onAddExercise: (blockId: string, exerciseName: string) => void;
   onUpdateExercise: (
@@ -33,6 +36,14 @@ type WorkoutExerciseBuilderProps = {
   onDeleteExercise: (blockId: string, rowId: string) => void;
   onLoadRoutine?: (blockId: string, routineId: string) => void;
   onSaveRoutine?: (blockId: string, name: string) => void;
+  onSaveRoutineAsNew?: (blockId: string, name: string) => void;
+  onUpdateRoutine?: (blockId: string, routineId: string) => void;
+  onAttachRoutine?: (
+    blockId: string,
+    routineId: string,
+    options?: { loadExercises?: boolean }
+  ) => void;
+  onDetachRoutine?: (blockId: string) => void;
   onSubmitWorkout?: (blockId: string) => void;
 };
 
@@ -51,6 +62,14 @@ const focusLabels: Record<WorkoutFocus, string> = {
   core: "Core",
   mobility: "Mobility",
   cardio: "Cardio",
+};
+
+const formatRoutineHistoryDate = (value: string) => {
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value));
+  } catch {
+    return "recently";
+  }
 };
 
 const getWorkoutFocus = (blockLabel: string): WorkoutFocus => {
@@ -150,12 +169,18 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
   blockExercises,
   exerciseHistory = {},
   workoutRoutines = [],
+  workoutRoutineHistory = [],
+  linkedWorkoutRoutineId,
   workoutSubmitted = false,
   onAddExercise,
   onUpdateExercise,
   onDeleteExercise,
   onLoadRoutine,
   onSaveRoutine,
+  onSaveRoutineAsNew,
+  onUpdateRoutine,
+  onAttachRoutine,
+  onDetachRoutine,
   onSubmitWorkout,
 }) => {
   const [exerciseName, setExerciseName] = useState("");
@@ -168,6 +193,24 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
   const selectedExercises = blockExercises
     .map((row) => exerciseById.get(row.exerciseId))
     .filter((exercise): exercise is ExerciseLibraryItem => !!exercise);
+  const linkedRoutine = workoutRoutines.find((routine) => routine.id === linkedWorkoutRoutineId) ?? null;
+  const linkedRoutineLastHistory = linkedRoutine
+    ? workoutRoutineHistory
+        .filter((entry) => entry.routineId === linkedRoutine.id)
+        .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())[0]
+    : null;
+  const selectedRoutineForAction = selectedRoutineId || linkedRoutine?.id || workoutRoutines[0]?.id || "";
+  const getRoutineMeta = (routine: WorkoutRoutine) => {
+    const routineExercises = routine.exercises
+      .map((row) => exerciseById.get(row.exerciseId))
+      .filter((exercise): exercise is ExerciseLibraryItem => !!exercise);
+    const tags = Array.from(new Set(routineExercises.flatMap(getExerciseTags))).slice(0, 4);
+
+    return {
+      names: routineExercises.map((exercise) => exercise.name).slice(0, 4),
+      tags,
+    };
+  };
 
   const sortedLibrary = useMemo(
     () =>
@@ -194,9 +237,14 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
   };
 
   const loadRoutine = () => {
-    const routineId = selectedRoutineId || workoutRoutines[0]?.id;
+    const routineId = selectedRoutineForAction;
     if (!routineId) return;
     onLoadRoutine?.(blockId, routineId);
+  };
+
+  const attachRoutine = (loadExercises = false) => {
+    if (!selectedRoutineForAction) return;
+    onAttachRoutine?.(blockId, selectedRoutineForAction, { loadExercises });
   };
 
   const saveRoutine = () => {
@@ -205,8 +253,93 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
     setRoutineName("");
   };
 
+  const updateRoutine = () => {
+    if (!linkedRoutine) return;
+    onUpdateRoutine?.(blockId, linkedRoutine.id);
+  };
+
+  const saveRoutineAsNew = () => {
+    const fallback = linkedRoutine
+      ? `${linkedRoutine.name} variation`
+      : blockLabel.replace(/^Habit:\s*/i, "");
+    onSaveRoutineAsNew?.(blockId, routineName.trim() || fallback);
+    setRoutineName("");
+  };
+
   return (
     <div className="workout-exercise-builder">
+      {workoutRoutines.length > 0 && (
+        <div className={`workout-routine-association ${linkedRoutine ? "linked" : ""}`}>
+          <div className="workout-routine-association-header">
+            <span>Associated routine</span>
+            <em>{linkedRoutine ? linkedRoutine.name : "None yet"}</em>
+          </div>
+          {linkedRoutineLastHistory && (
+            <div className="workout-routine-last">
+              <span>Last completed {formatRoutineHistoryDate(linkedRoutineLastHistory.completedAt)}</span>
+              {linkedRoutineLastHistory.bestEffort && <em>{linkedRoutineLastHistory.bestEffort}</em>}
+              {linkedRoutineLastHistory.notes && <small>{linkedRoutineLastHistory.notes}</small>}
+            </div>
+          )}
+          <div className="workout-routine-association-controls">
+            <select
+              value={selectedRoutineForAction}
+              onChange={(event) => setSelectedRoutineId(event.target.value)}
+              aria-label="Choose saved workout routine"
+            >
+              {workoutRoutines.map((routine) => (
+                <option key={routine.id} value={routine.id}>
+                  {routine.name}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => attachRoutine(false)} disabled={!onAttachRoutine}>
+              Attach
+            </button>
+            <button type="button" onClick={() => attachRoutine(true)} disabled={!onAttachRoutine}>
+              Attach + load
+            </button>
+            {linkedRoutine && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => onDetachRoutine?.(blockId)}
+                disabled={!onDetachRoutine}
+              >
+                Detach
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {workoutRoutines.length > 0 && (
+        <div className="workout-routine-starter">
+          <div className="workout-routine-starter-header">
+            <span>Start from routine</span>
+            <em>{workoutRoutines.length} saved</em>
+          </div>
+          <div className="workout-routine-choice-grid">
+            {workoutRoutines.slice(0, 4).map((routine) => {
+              const routineMeta = getRoutineMeta(routine);
+              return (
+                <button
+                  key={routine.id}
+                  type="button"
+                  className="workout-routine-choice"
+                  onClick={() => onLoadRoutine?.(blockId, routine.id)}
+                >
+                  <strong>{routine.name}</strong>
+                  <span>{routine.exercises.length} exercise{routine.exercises.length === 1 ? "" : "s"}</span>
+                  {routineMeta.tags.length > 0 && <em>{routineMeta.tags.join(" / ")}</em>}
+                  {routineMeta.names.length > 0 && <small>{routineMeta.names.join(", ")}</small>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className={`workout-coverage-panel ${isCoverageComplete ? "complete" : ""}`}>
         <div className="workout-coverage-header">
           <span>{focusLabels[workoutFocus]} coverage</span>
@@ -243,7 +376,7 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
               </button>
             </div>
           )}
-          {blockExercises.length > 0 && (
+          {blockExercises.length > 0 && !linkedRoutine && (
             <div className="workout-routine-save">
               <input
                 type="text"
@@ -256,6 +389,37 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {blockExercises.length > 0 && linkedRoutine && (
+        <div className="workout-routine-saveback">
+          <div className="workout-routine-saveback-copy">
+            <span>Save today back</span>
+            <em>{linkedRoutine.name}</em>
+          </div>
+          <button type="button" onClick={updateRoutine} disabled={!onUpdateRoutine}>
+            Update routine
+          </button>
+          <div className="workout-routine-saveback-new">
+            <input
+              type="text"
+              value={routineName}
+              onChange={(event) => setRoutineName(event.target.value)}
+              placeholder={`${linkedRoutine.name} variation`}
+            />
+            <button type="button" onClick={saveRoutineAsNew} disabled={!onSaveRoutineAsNew}>
+              Save as new
+            </button>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onDetachRoutine?.(blockId)}
+            disabled={!onDetachRoutine}
+          >
+            Keep today only
+          </button>
         </div>
       )}
 
@@ -407,6 +571,9 @@ export const WorkoutExerciseBuilder: React.FC<WorkoutExerciseBuilderProps> = ({
             );
           })}
         </div>
+      )}
+      {blockExercises.length === 0 && (
+        <div className="workout-exercise-empty">No exercises added yet.</div>
       )}
 
       <div className="workout-exercise-add-row">

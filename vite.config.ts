@@ -9,34 +9,70 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
       manifest: {
-        name: 'Habit Planner',
-        short_name: 'HabitPlan',
-        description: 'Weekly habit and priority planner',
-        theme_color: '#2563eb',
-        background_color: '#f4f4f8',
+        name: 'Habit Care Planner',
+        short_name: 'Planner',
+        description: 'A calm habit, routine, workout, and weekly planning app',
+        theme_color: '#0f766e',
+        background_color: '#f8fafc',
         display: 'standalone',
+        display_override: ['standalone', 'minimal-ui'],
         orientation: 'portrait-primary',
         start_url: '/',
         scope: '/',
+        categories: ['productivity', 'health', 'lifestyle'],
         icons: [
           {
-            src: 'icons/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
+            src: 'icons/app-icon.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
           },
           {
-            src: 'icons/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-          },
-          {
-            src: 'icons/icon-maskable-512.png',
-            sizes: '512x512',
-            type: 'image/png',
+            src: 'icons/app-icon-maskable.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
             purpose: 'maskable',
           },
         ],
         shortcuts: [
+          {
+            name: 'Quick Note',
+            short_name: 'Note',
+            description: 'Capture a quick note to Waiting',
+            url: '/?capture=note&destination=waiting&surface=shortcut',
+            icons: [
+              {
+                src: 'icons/shortcut-note.svg',
+                sizes: 'any',
+                type: 'image/svg+xml',
+              },
+            ],
+          },
+          {
+            name: 'Waiting',
+            short_name: 'Waiting',
+            description: 'Open the Waiting shelf',
+            url: '/?view=planner&section=waiting',
+            icons: [
+              {
+                src: 'icons/shortcut-waiting.svg',
+                sizes: 'any',
+                type: 'image/svg+xml',
+              },
+            ],
+          },
+          {
+            name: 'Workout',
+            short_name: 'Workout',
+            description: 'Open workout routines and exercise options',
+            url: '/?panel=workout',
+            icons: [
+              {
+                src: 'icons/shortcut-workout.svg',
+                sizes: 'any',
+                type: 'image/svg+xml',
+              },
+            ],
+          },
           {
             name: 'Ambient Mode',
             short_name: 'Ambient',
@@ -44,22 +80,9 @@ export default defineConfig({
             url: '/?mode=ambient',
             icons: [
               {
-                src: 'icons/icon-192.png',
-                sizes: '192x192',
-                type: 'image/png',
-              },
-            ],
-          },
-          {
-            name: 'Quick Note',
-            short_name: 'Note',
-            description: 'Capture a quick note',
-            url: '/?capture=note',
-            icons: [
-              {
-                src: 'icons/icon-192.png',
-                sizes: '192x192',
-                type: 'image/png',
+                src: 'icons/shortcut-ambient.svg',
+                sizes: 'any',
+                type: 'image/svg+xml',
               },
             ],
           },
@@ -70,9 +93,9 @@ export default defineConfig({
             url: '/?view=today',
             icons: [
               {
-                src: 'icons/icon-192.png',
-                sizes: '192x192',
-                type: 'image/png',
+                src: 'icons/shortcut-today.svg',
+                sizes: 'any',
+                type: 'image/svg+xml',
               },
             ],
           },

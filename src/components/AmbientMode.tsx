@@ -23,8 +23,6 @@ export type AmbientTask = {
   taskId?: string;
 };
 
-type QuickNoteDestination = "waiting" | "outliner" | "both";
-
 type Props = {
   settings: AmbientSettings;
   routines: RoutineTab[];
@@ -36,13 +34,11 @@ type Props = {
   nextTask: AmbientTask | null;
   waitingCount: number;
   quickNote: string;
-  quickNoteDestination: QuickNoteDestination;
   wakeLockSupported: boolean;
   wakeLockActive: boolean;
   wakeLockError: string;
   onSettingsChange: (updates: Partial<AmbientSettings>) => void;
   onQuickNoteChange: (value: string) => void;
-  onQuickNoteDestinationChange: (destination: QuickNoteDestination) => void;
   onQuickNoteSubmit: () => void;
   onToggleRoutineItem: (routineId: string, itemId: string) => void;
   onCompleteRoutine: (routineId: string) => void;
@@ -73,13 +69,11 @@ export default function AmbientMode({
   nextTask,
   waitingCount,
   quickNote,
-  quickNoteDestination,
   wakeLockSupported,
   wakeLockActive,
   wakeLockError,
   onSettingsChange,
   onQuickNoteChange,
-  onQuickNoteDestinationChange,
   onQuickNoteSubmit,
   onToggleRoutineItem,
   onCompleteRoutine,
@@ -254,15 +248,7 @@ export default function AmbientMode({
                   rows={4}
                 />
                 <div className="ambient-note-controls">
-                  <select
-                    value={quickNoteDestination}
-                    onChange={(event) => onQuickNoteDestinationChange(event.target.value as QuickNoteDestination)}
-                    aria-label="Quick note destination"
-                  >
-                    <option value="both">Waiting + Outliner</option>
-                    <option value="waiting">Waiting</option>
-                    <option value="outliner">Outliner</option>
-                  </select>
+                  <span>Saved to Waiting</span>
                   <button type="submit" disabled={!quickNote.trim()}>
                     Save note
                   </button>
