@@ -9,7 +9,7 @@ interface Props {
   themes: Theme[];
   onClose: () => void;
   onCreateHabit: (
-    themeId: string,
+    themeId: string | null,
     name: string,
     targetPerWeek: number,
     frequency: 'daily' | 'weekly' | 'monthly' | 'none'
@@ -19,7 +19,7 @@ interface Props {
 export default function QuickHabitForm({ themes, onClose, onCreateHabit }: Props) {
   const habitThemes = themes.filter(t => t.name !== 'Meals' && t.name !== 'meals');
   const [name, setName] = useState('');
-  const [themeId, setThemeId] = useState(habitThemes[0]?.id ?? '');
+  const [themeId, setThemeId] = useState('');
   const [frequency, setFrequency] = useState<'daily' | 'weekly' | 'monthly' | 'none'>('weekly');
   const [target, setTarget] = useState(3);
   const [saving, setSaving] = useState(false);
@@ -41,10 +41,10 @@ export default function QuickHabitForm({ themes, onClose, onCreateHabit }: Props
   }, [onClose]);
 
   async function handleSave() {
-    if (!name.trim() || !themeId) return;
+    if (!name.trim()) return;
     setSaving(true);
     try {
-      await onCreateHabit(themeId, name.trim(), frequency === 'none' ? 1 : target, frequency);
+      await onCreateHabit(themeId || null, name.trim(), frequency === 'none' ? 1 : target, frequency);
       setName('');
       nameRef.current?.focus();
     } finally {
@@ -85,8 +85,9 @@ export default function QuickHabitForm({ themes, onClose, onCreateHabit }: Props
             value={themeId}
             onChange={e => setThemeId(e.target.value)}
           >
+            <option value="">Not sorted</option>
             {habitThemes.length === 0 && (
-              <option value="">No themes yet</option>
+              <option value="" disabled>No themes yet</option>
             )}
             {habitThemes.map(t => (
               <option key={t.id} value={t.id}>{t.name}</option>
@@ -130,7 +131,7 @@ export default function QuickHabitForm({ themes, onClose, onCreateHabit }: Props
         <button
           className="quick-habit-save"
           onClick={handleSave}
-          disabled={saving || !name.trim() || !themeId}
+          disabled={saving || !name.trim()}
         >
           {saving ? 'Saving...' : '+ Add Habit'}
         </button>

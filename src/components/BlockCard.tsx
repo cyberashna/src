@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type {
   Block,
   ExerciseLibraryItem,
+  HabitCardOutlineItem,
   WorkoutBlockExercise,
   WorkoutData,
   WorkoutExerciseHistoryEntry,
@@ -26,6 +28,10 @@ type Theme = {
 };
 
 type DetailTab = "workout" | "tasks" | "notes";
+
+type MobileBlockDropTarget =
+  | { type: "slot"; dayIndex: number; timeIndex: number }
+  | { type: "waiting" };
 
 type BlockCardProps = {
   block: Block;
@@ -89,10 +95,15 @@ type BlockCardProps = {
   onDeleteBlockTask?: (blockId: string, taskId: string) => void;
   openDetailsOnClick?: boolean;
   mobileMode?: boolean;
+  outlineItems?: HabitCardOutlineItem[];
+  onToggleOutlineTask?: (nodeId: string) => void;
   onMobileMoveLater?: (blockId: string) => void;
   onMobileMoveTomorrow?: (blockId: string) => void;
   onMobileMoveUnscheduled?: (blockId: string) => void;
+  onMobileDrop?: (blockId: string, target: MobileBlockDropTarget) => void | Promise<void>;
   onMobileScheduleToday?: (blockId: string) => void;
+  onMobileOpenOutliner?: (blockId: string) => void;
+  mobileOutlinerActionLabel?: string;
   kindLabel?: string;
   relationshipChips?: string[];
 
@@ -164,10 +175,15 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onDeleteBlockTask,
   openDetailsOnClick,
   mobileMode,
+  outlineItems = [],
+  onToggleOutlineTask,
   onMobileMoveLater,
   onMobileMoveTomorrow,
   onMobileMoveUnscheduled,
+  onMobileDrop,
   onMobileScheduleToday,
+  onMobileOpenOutliner,
+  mobileOutlinerActionLabel,
   kindLabel,
   relationshipChips = [],
   convertingBlockId,
@@ -200,7 +216,32 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleDayIndex, setScheduleDayIndex] = useState(defaultScheduleDayIndex);
   const [scheduleTimeIndex, setScheduleTimeIndex] = useState(0);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [isTouchDragging, setIsTouchDragging] = useState(false);
+  const [touchDragPreview, setTouchDragPreview] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const blockElementRef = useRef<HTMLDivElement | null>(null);
   const noteSaveTimer = useRef<number | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  const swipeStartRef = useRef<{
+    x: number;
+    y: number;
+    mode: "pending" | "swiping" | "dragging";
+  } | null>(null);
+  const swipeOffsetRef = useRef(0);
+  const dragPreviewMetricsRef = useRef<{
+    grabX: number;
+    grabY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const mobileDropElementRef = useRef<HTMLElement | null>(null);
+  const suppressClickRef = useRef(false);
 
   // Keep noteValue in sync if block.blockNote changes externally
   useEffect(() => {
@@ -216,8 +257,26 @@ export const BlockCard: React.FC<BlockCardProps> = ({
       if (noteSaveTimer.current) {
         clearTimeout(noteSaveTimer.current);
       }
+      if (longPressTimer.current) {
+        clearTimeout(longPressTimer.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    const blockElement = blockElementRef.current;
+    if (!mobileMode || !blockElement) return;
+
+    const preventManagedTouchMove = (event: TouchEvent) => {
+      const mode = swipeStartRef.current?.mode;
+      if ((mode === "swiping" || mode === "dragging") && event.cancelable) {
+        event.preventDefault();
+      }
+    };
+
+    blockElement.addEventListener("touchmove", preventManagedTouchMove, { passive: false });
+    return () => blockElement.removeEventListener("touchmove", preventManagedTouchMove);
+  }, [mobileMode]);
 
   const handleNoteChange = (val: string) => {
     setNoteValue(val);
@@ -235,6 +294,8 @@ export const BlockCard: React.FC<BlockCardProps> = ({
 
   const tasks: BlockTask[] = block.blockTasks ?? [];
   const completedTaskCount = tasks.filter((t) => t.completed).length;
+  const completedOutlineTaskCount = outlineItems.filter((item) => item.tag === "task" && item.taskDone).length;
+  const outlineTaskCount = outlineItems.filter((item) => item.tag === "task").length;
   const hasNoteContent = (block.blockNote ?? "").trim().length > 0;
   const isWorkoutLike = isWorkoutBlock?.(block) ?? isStrengthTraining(block);
   const canBuildWorkout = isWorkoutLike && !!onAddExerciseToBlock && !!onUpdateBlockExercise && !!onDeleteBlockExercise;
@@ -293,6 +354,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
     block.hashtag ? `#${block.hashtag}` : null,
     block.completed ? "Completed" : null,
     tasks.length > 0 ? `${completedTaskCount}/${tasks.length} tasks done` : null,
+    outlineItems.length > 0 ? `${outlineItems.length} outline item${outlineItems.length === 1 ? "" : "s"}` : null,
     hasNoteContent ? block.blockNote : null,
   ]
     .filter(Boolean)
@@ -301,6 +363,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const blockClass = [
     "block",
     mobileMode ? "block-mobile-safe" : "",
+    kindClass ? `block-kind-${kindClass}` : "",
     block.isHabitBlock ? "habit-block" : "",
     block.isLinkedGroup ? "linked-group" : "",
     block.completed ? "block-done" : "",
@@ -316,10 +379,185 @@ export const BlockCard: React.FC<BlockCardProps> = ({
       : null;
 
   const handleBlockClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
     if (!openDetailsOnClick || detailTabs.length === 0) return;
     const target = event.target as HTMLElement;
     if (target.closest("button,input,select,textarea,label,a")) return;
     openBlockDetails();
+  };
+
+  const canSwipeRight =
+    !!mobileMode &&
+    ((variant === "slot" && !!onToggleCompletion) ||
+      (variant === "unscheduled" && !!onMobileScheduleToday));
+  const canSwipeLeft =
+    !!mobileMode &&
+    ((variant === "slot" && !!onMobileMoveLater) ||
+      (variant === "unscheduled" && !!onMobileOpenOutliner));
+  const canUseSwipeActions = canSwipeRight || canSwipeLeft;
+  const canLongPressDrag = !!mobileMode && variant === "slot" && !!onMobileDrop;
+  const rightSwipeLabel =
+    variant === "slot" ? (block.completed ? "Undo" : "Done") : "Today";
+  const leftSwipeLabel =
+    variant === "slot" ? "Later" : mobileOutlinerActionLabel ?? "Outline";
+  const swipeState =
+    swipeOffset > 12 ? "positive" : swipeOffset < -12 ? "organize" : "idle";
+
+  const isInteractiveSwipeTarget = (target: EventTarget) =>
+    target instanceof HTMLElement &&
+    !!target.closest("button,input,select,textarea,a,.block-detail-modal");
+
+  const resetSwipe = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+    mobileDropElementRef.current = null;
+    dragPreviewMetricsRef.current = null;
+    swipeOffsetRef.current = 0;
+    setSwipeOffset(0);
+    setIsSwiping(false);
+    setIsTouchDragging(false);
+    setTouchDragPreview(null);
+    swipeStartRef.current = null;
+    if (suppressClickRef.current) {
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 350);
+    }
+  };
+
+  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (!canUseSwipeActions || isInteractiveSwipeTarget(event.target)) return;
+    const touch = event.touches[0];
+    swipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      mode: "pending",
+    };
+
+    if (canLongPressDrag) {
+      longPressTimer.current = window.setTimeout(() => {
+        const gesture = swipeStartRef.current;
+        if (!gesture || gesture.mode !== "pending") return;
+        const blockElement = blockElementRef.current;
+        if (!blockElement) return;
+        const rect = blockElement.getBoundingClientRect();
+        gesture.mode = "dragging";
+        dragPreviewMetricsRef.current = {
+          grabX: gesture.x - rect.left,
+          grabY: gesture.y - rect.top,
+          width: rect.width,
+          height: rect.height,
+        };
+        suppressClickRef.current = true;
+        setIsTouchDragging(true);
+        setTouchDragPreview({
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+        });
+        navigator.vibrate?.(12);
+      }, 320);
+    }
+  };
+
+  const handleTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = swipeStartRef.current;
+    if (!start) return;
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+
+    if (start.mode === "dragging") {
+      event.preventDefault();
+      suppressClickRef.current = true;
+      const previewMetrics = dragPreviewMetricsRef.current;
+      if (previewMetrics) {
+        setTouchDragPreview({
+          left: touch.clientX - previewMetrics.grabX,
+          top: touch.clientY - previewMetrics.grabY,
+          width: previewMetrics.width,
+          height: previewMetrics.height,
+        });
+      }
+
+      const scrollContainer = blockElementRef.current?.closest<HTMLElement>(".mobile-use-view");
+      if (scrollContainer) {
+        const bounds = scrollContainer.getBoundingClientRect();
+        const edgeSize = 72;
+        if (touch.clientY < bounds.top + edgeSize) {
+          scrollContainer.scrollBy({ top: -14 });
+        } else if (touch.clientY > bounds.bottom - edgeSize) {
+          scrollContainer.scrollBy({ top: 14 });
+        }
+      }
+
+      const elementAtTouch = document.elementFromPoint(touch.clientX, touch.clientY);
+      const dropElement = elementAtTouch?.closest<HTMLElement>(
+        "[data-mobile-drop-day-index][data-mobile-drop-time-index], [data-mobile-drop-waiting]"
+      ) ?? null;
+
+      mobileDropElementRef.current = dropElement;
+      return;
+    }
+
+    if (start.mode === "pending") {
+      if (Math.abs(deltaY) > 12 && Math.abs(deltaY) > Math.abs(deltaX)) {
+        resetSwipe();
+        return;
+      }
+      if (Math.abs(deltaX) < 14 || Math.abs(deltaX) < Math.abs(deltaY) + 6) return;
+      if (longPressTimer.current) {
+        clearTimeout(longPressTimer.current);
+        longPressTimer.current = null;
+      }
+      start.mode = "swiping";
+      setIsSwiping(true);
+    }
+
+    event.preventDefault();
+    suppressClickRef.current = true;
+    const clampedOffset = Math.max(-96, Math.min(96, deltaX));
+    swipeOffsetRef.current = clampedOffset;
+    setSwipeOffset(clampedOffset);
+  };
+
+  const handleTouchEnd = () => {
+    const gestureMode = swipeStartRef.current?.mode;
+    const dropElement = mobileDropElementRef.current;
+
+    if (gestureMode === "dragging" && dropElement && onMobileDrop) {
+      const dayIndex = Number(dropElement.dataset.mobileDropDayIndex);
+      const timeIndex = Number(dropElement.dataset.mobileDropTimeIndex);
+      const target: MobileBlockDropTarget | null = dropElement.hasAttribute("data-mobile-drop-waiting")
+        ? { type: "waiting" }
+        : Number.isInteger(dayIndex) && Number.isInteger(timeIndex)
+          ? { type: "slot", dayIndex, timeIndex }
+          : null;
+
+      if (target) {
+        void Promise.resolve(onMobileDrop(block.id, target)).finally(resetSwipe);
+        return;
+      }
+    }
+
+    const threshold = 70;
+    const finalOffset = swipeOffsetRef.current;
+    if (gestureMode === "swiping" && finalOffset > threshold && canSwipeRight) {
+      suppressClickRef.current = true;
+      if (variant === "slot") onToggleCompletion?.(block.id);
+      else onMobileScheduleToday?.(block.id);
+    } else if (gestureMode === "swiping" && finalOffset < -threshold && canSwipeLeft) {
+      suppressClickRef.current = true;
+      if (variant === "slot") onMobileMoveLater?.(block.id);
+      else onMobileOpenOutliner?.(block.id);
+    }
+    resetSwipe();
   };
 
   const handleMobileDelete = () => {
@@ -333,19 +571,48 @@ export const BlockCard: React.FC<BlockCardProps> = ({
     onDelete(block.id);
   };
 
+  const wrapperClass = [
+    variant === "themed" ? "themed-block-wrapper" : "",
+    canUseSwipeActions ? "mobile-swipe-card-wrap" : "",
+    isSwiping ? "is-swiping" : "",
+    isTouchDragging ? "is-touch-dragging" : "",
+    swipeState !== "idle" ? `mobile-swipe-${swipeState}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className={variant === "themed" ? "themed-block-wrapper" : undefined}>
+    <>
+    <div className={wrapperClass || undefined}>
+      {canUseSwipeActions && (
+        <div className="mobile-swipe-action-bg" aria-hidden="true">
+          <span className="mobile-swipe-action mobile-swipe-action--right">{rightSwipeLabel}</span>
+          <span className="mobile-swipe-action mobile-swipe-action--left">{leftSwipeLabel}</span>
+        </div>
+      )}
       <div
+        ref={blockElementRef}
         id={`block-${block.id}`}
         className={blockClass}
-        draggable
-        onDragStart={(e) => onDragStart(block.id, e)}
-        onDragEnd={onDragEnd}
+        draggable={!mobileMode}
+        onDragStart={mobileMode ? undefined : (e) => onDragStart(block.id, e)}
+        onDragEnd={mobileMode ? undefined : onDragEnd}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={resetSwipe}
+        onContextMenu={mobileMode ? (event) => event.preventDefault() : undefined}
         onClick={handleBlockClick}
         onDoubleClick={onDoubleClick && !mobileMode ? () => onDoubleClick(block.id) : undefined}
         title={hoverInfo}
         data-tooltip={hoverInfo}
-        style={{ position: "relative" }}
+        style={{
+          position: "relative",
+          transform: canUseSwipeActions
+              ? `translateX(${swipeOffset}px)`
+              : undefined,
+          transition: isSwiping ? "none" : undefined,
+        }}
       >
         {priorityRank && <PriorityBadge rank={priorityRank} />}
 
@@ -435,7 +702,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
               {inferredKindLabel}
             </span>
           )}
-          {variant === "slot" && block.isHabitBlock ? (
+          {variant === "slot" && onToggleCompletion ? (
             <label
               className="block-label-with-check"
               onClick={(e) => e.stopPropagation()}
@@ -443,7 +710,8 @@ export const BlockCard: React.FC<BlockCardProps> = ({
               <input
                 type="checkbox"
                 checked={!!block.completed}
-                onChange={() => onToggleCompletion?.(block.id)}
+                onTouchStart={(event) => event.stopPropagation()}
+                onChange={() => onToggleCompletion(block.id)}
               />
               <span>
                 {block.label}
@@ -542,6 +810,39 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           )}
         </div>
 
+        {outlineItems.length > 0 && (
+          <div className="block-outline-preview" onClick={(e) => e.stopPropagation()}>
+            <div className="block-outline-preview-header">
+              <span>Outline</span>
+              {outlineTaskCount > 0 && <em>{completedOutlineTaskCount}/{outlineTaskCount}</em>}
+            </div>
+            <div className="block-outline-preview-list">
+              {outlineItems.map((item) =>
+                item.tag === "task" ? (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`block-outline-preview-item block-outline-preview-item--task ${item.taskDone ? "is-done" : ""}`}
+                    onClick={() => onToggleOutlineTask?.(item.id)}
+                  >
+                    <span>{item.taskDone ? "✓" : ""}</span>
+                    <strong>{item.text}</strong>
+                  </button>
+                ) : (
+                  <div
+                    key={item.id}
+                    className={`block-outline-preview-item block-outline-preview-item--habit ${item.onBoard ? "is-on-board" : ""}`}
+                  >
+                    <span>H</span>
+                    <strong>{item.text}</strong>
+                    {item.onBoard && <em>On board</em>}
+                  </div>
+                )
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Tasks progress indicator (collapsed) */}
         {tasks.length > 0 && !detailOpen && (
           <div
@@ -564,62 +865,19 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           </div>
         )}
 
-        {mobileMode && variant === "slot" && (
-          <div className="mobile-block-actions">
-            {onToggleCompletion && (
-              <button
-                type="button"
-                className={`mobile-block-done-btn ${block.completed ? "is-done" : ""}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleCompletion(block.id);
-                }}
-              >
-                {block.completed ? "Undo" : "Done"}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onMobileMoveLater?.(block.id);
-              }}
-            >
-              Later
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onMobileMoveTomorrow?.(block.id);
-              }}
-            >
-              Tomorrow
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onMobileMoveUnscheduled?.(block.id);
-              }}
-            >
-              Waiting
-            </button>
+        {mobileMode && variant === "slot" && canUseSwipeActions && (
+          <div className="mobile-gesture-hint" aria-hidden="true">
+            <span>Later</span>
+            <em />
+            <span>{block.completed ? "Undo" : "Done"}</span>
           </div>
         )}
 
-        {mobileMode && variant === "unscheduled" && onMobileScheduleToday && (
-          <div className="mobile-block-actions mobile-block-actions--waiting">
-            <button
-              type="button"
-              className="mobile-block-done-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onMobileScheduleToday(block.id);
-              }}
-            >
-              Today
-            </button>
+        {mobileMode && variant === "unscheduled" && canUseSwipeActions && (
+          <div className="mobile-gesture-hint" aria-hidden="true">
+            <span>Outline</span>
+            <em />
+            <span>Today</span>
           </div>
         )}
 
@@ -668,13 +926,14 @@ export const BlockCard: React.FC<BlockCardProps> = ({
 
         {variant !== "themed" && (
           <button
-            className="block-delete-btn"
+            type="button"
+            className={`block-delete-btn ${mobileMode && variant === "slot" ? "block-remove-board-btn" : ""}`}
             onClick={(e) => {
               e.stopPropagation();
               onDelete(block.id);
             }}
-            title="Delete block"
-            aria-label="Delete block"
+            title={mobileMode && variant === "slot" ? "Remove from board" : "Delete block"}
+            aria-label={mobileMode && variant === "slot" ? "Remove from board" : "Delete block"}
           >
             ×
           </button>
@@ -743,7 +1002,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         </div>
       )}
 
-      {detailOpen && (
+      {detailOpen && createPortal(
         <div className="block-detail-backdrop" onClick={() => setDetailOpen(false)}>
           <div className="block-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="block-detail-modal-header">
@@ -783,6 +1042,84 @@ export const BlockCard: React.FC<BlockCardProps> = ({
                     <em key={chip}>{chip}</em>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {mobileMode && variant === "unscheduled" && (onMobileScheduleToday || onMobileOpenOutliner) && (
+              <div className="block-detail-mobile-actions">
+                {onMobileScheduleToday && (
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => {
+                      onMobileScheduleToday(block.id);
+                      setDetailOpen(false);
+                    }}
+                  >
+                    Today
+                  </button>
+                )}
+                {onMobileOpenOutliner && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onMobileOpenOutliner(block.id);
+                      setDetailOpen(false);
+                    }}
+                  >
+                    {mobileOutlinerActionLabel ?? "Add to Outline"}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {mobileMode && variant === "slot" && (onToggleCompletion || onMobileMoveLater || onMobileMoveTomorrow || onMobileMoveUnscheduled) && (
+              <div className="block-detail-mobile-actions block-detail-mobile-actions--planned">
+                {onToggleCompletion && (
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => {
+                      onToggleCompletion(block.id);
+                      setDetailOpen(false);
+                    }}
+                  >
+                    {block.completed ? "Undo" : "Done"}
+                  </button>
+                )}
+                {onMobileMoveLater && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onMobileMoveLater(block.id);
+                      setDetailOpen(false);
+                    }}
+                  >
+                    Later
+                  </button>
+                )}
+                {onMobileMoveTomorrow && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onMobileMoveTomorrow(block.id);
+                      setDetailOpen(false);
+                    }}
+                  >
+                    Tomorrow
+                  </button>
+                )}
+                {onMobileMoveUnscheduled && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onMobileMoveUnscheduled(block.id);
+                      setDetailOpen(false);
+                    }}
+                  >
+                    Waiting
+                  </button>
+                )}
               </div>
             )}
 
@@ -903,7 +1240,8 @@ export const BlockCard: React.FC<BlockCardProps> = ({
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {variant === "themed" && convertingBlockId === block.id && (
@@ -970,6 +1308,29 @@ export const BlockCard: React.FC<BlockCardProps> = ({
         </div>
       )}
     </div>
+    {isTouchDragging && touchDragPreview && createPortal(
+      <div
+        className={`${blockClass} mobile-drag-preview`}
+        aria-hidden="true"
+        style={{
+          left: touchDragPreview.left,
+          top: touchDragPreview.top,
+          width: touchDragPreview.width,
+          minHeight: touchDragPreview.height,
+        }}
+      >
+        <div className="block-main-line">
+          {inferredKindLabel && (
+            <span className={`block-kind-chip block-kind-chip--${kindClass}`}>
+              {inferredKindLabel}
+            </span>
+          )}
+          <strong>{block.label}</strong>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   );
 };
 

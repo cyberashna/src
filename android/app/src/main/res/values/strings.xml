@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Habit Care Planner</string>
+    <string name="title_activity_main">Habit Care Planner</string>
+    <string name="package_name">com.cyberashna.habitplanner</string>
+    <string name="custom_url_scheme">com.cyberashna.habitplanner</string>
+    <string name="widget_name">Planner Today</string>
+    <string name="widget_description">See your planner at a glance and open today quickly.</string>
+    <string name="widget_label">Habit Care</string>
+    <string name="widget_title">Today</string>
+    <string name="widget_status_placeholder">Open the planner to sync today and the next block.</string>
+    <string name="widget_waiting_placeholder">Waiting shelf ready</string>
+    <string name="widget_open_today">Open Today</string>
+    <string name="widget_quick_note">Quick Note</string>
+</resources>

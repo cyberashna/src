@@ -32,7 +32,7 @@ export type Theme = {
   id: string;
   user_id: string;
   name: string;
-  theme_type: "habit" | "meals";
+  theme_type: "habit" | "meals" | "household";
   created_at: string;
   updated_at: string;
 };
@@ -299,7 +299,7 @@ export const database = {
       return data as Theme[];
     },
 
-    async create(userId: string, name: string, themeType: "habit" | "meals" = "habit") {
+    async create(userId: string, name: string, themeType: "habit" | "meals" | "household" = "habit") {
       const { data, error } = await supabase
         .from("themes")
         .insert({ user_id: userId, name, theme_type: themeType })

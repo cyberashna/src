@@ -57,6 +57,29 @@ export type AddHabitToOutlinerResult = {
   nodes: OutlineNode[];
 };
 
+export type SyncHabitToOutlinerInput = AddHabitToOutlinerInput & {
+  subtasks?: SyncHabitToOutlinerInput[];
+};
+
+export type SyncBlockToOutlinerInput = {
+  blockId: string;
+  label: string;
+  tag: OutlineTag;
+  draftNote?: string;
+};
+
+export type SyncThemeToOutlinerInput = AddThemeToOutlinerInput & {
+  habits: SyncHabitToOutlinerInput[];
+  blocks?: SyncBlockToOutlinerInput[];
+};
+
+export type SyncThemesToOutlinerResult = {
+  createdThemes: number;
+  createdHabits: number;
+  createdBlocks: number;
+  nodes: OutlineNode[];
+};
+
 export type AddThemeToOutlinerInput = {
   themeId: string;
   themeName: string;
@@ -328,6 +351,100 @@ export const addHabitToPlanningOutliner = async (
 
   await savePlanningOutliner(userId, nextNodes);
   return { added: true, existing: false, nodeId: habitNode.id, nodes: nextNodes };
+};
+
+export const syncThemesToPlanningOutliner = async (
+  userId: string,
+  themes: SyncThemeToOutlinerInput[]
+): Promise<SyncThemesToOutlinerResult> => {
+  let nextNodes = await loadPlanningOutliner(userId, false);
+  let createdThemes = 0;
+  let createdHabits = 0;
+  let createdBlocks = 0;
+
+  const makeHabitNode = (habit: SyncHabitToOutlinerInput): OutlineNode => ({
+    ...createOutlineNode(habit.habitName),
+    tag: "habit",
+    frequency: habit.frequency,
+    target: Math.max(1, habit.target || 1),
+    linked: {
+      habitId: habit.habitId,
+      themeId: habit.themeId,
+      label: habit.habitName,
+      renameDeclinedFor: null,
+    },
+  });
+
+  const syncHabitTree = (
+    habits: SyncHabitToOutlinerInput[],
+    themeId: string,
+    parentNodeId: string
+  ) => {
+    for (const habit of habits) {
+      const existingHabitNode = findNodeByLinkedHabit(nextNodes, habit.habitId);
+      let habitNodeId = existingHabitNode?.id ?? null;
+
+      if (!habitNodeId) {
+        const habitNode = makeHabitNode(habit);
+        nextNodes = appendChildToNode(nextNodes, parentNodeId, habitNode);
+        createdHabits += 1;
+        habitNodeId = habitNode.id;
+      }
+
+      if (habit.subtasks?.length) {
+        syncHabitTree(
+          habit.subtasks.map((subtask) => ({ ...subtask, themeId })),
+          themeId,
+          habitNodeId
+        );
+      }
+    }
+  };
+
+  for (const theme of themes) {
+    let themeNode = findNodeByLinkedTheme(nextNodes, theme.themeId);
+
+    if (!themeNode) {
+      const themeOutlineNode: OutlineNode = {
+        ...createOutlineNode(theme.themeName),
+        linked: {
+          themeId: theme.themeId,
+          label: theme.themeName,
+          renameDeclinedFor: null,
+        },
+      };
+      nextNodes = [...nextNodes, themeOutlineNode];
+      createdThemes += 1;
+      themeNode = themeOutlineNode;
+    }
+
+    syncHabitTree(theme.habits, theme.themeId, themeNode.id);
+
+    for (const block of theme.blocks ?? []) {
+      if (findNodeByLinkedBlock(nextNodes, block.blockId)) continue;
+
+      const blockNode: OutlineNode = {
+        ...createOutlineNode(block.label),
+        tag: block.tag,
+        draftNote: block.draftNote ?? "",
+        draftNoteUpdatedAt: block.draftNote ? new Date().toISOString() : null,
+        linked: {
+          blockId: block.blockId,
+          themeId: theme.themeId,
+          label: block.label,
+          renameDeclinedFor: null,
+        },
+      };
+      nextNodes = appendChildToNode(nextNodes, themeNode.id, blockNode);
+      createdBlocks += 1;
+    }
+  }
+
+  if (createdThemes > 0 || createdHabits > 0 || createdBlocks > 0) {
+    await savePlanningOutliner(userId, nextNodes);
+  }
+
+  return { createdThemes, createdHabits, createdBlocks, nodes: nextNodes };
 };
 
 export function updateOutlineNode(

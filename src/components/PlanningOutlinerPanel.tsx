@@ -67,16 +67,17 @@ const OUTLINER_TOP_LEVEL_PARENT = "__top-level__";
 type Props = {
   userId: string;
   onClose: () => void;
+  presentation?: "floating" | "bench";
   themes: ThemeOption[];
   onCreateBlock: (label: string, options?: OutlinerBlockOptions) => Promise<string | null>;
   onCreateHabit: (
-    themeId: string,
+    themeId: string | null,
     name: string,
     targetPerWeek: number,
     frequency: OutlineFrequency
   ) => Promise<HabitLinkResult | null>;
   onCreateHabitBlock: (
-    themeId: string,
+    themeId: string | null,
     name: string,
     targetPerWeek: number,
     frequency: OutlineFrequency
@@ -406,6 +407,7 @@ const peskyIntervalOptions = [
 export default function PlanningOutlinerPanel({
   userId,
   onClose,
+  presentation = "floating",
   themes,
   onCreateBlock,
   onCreateHabit,
@@ -427,7 +429,6 @@ export default function PlanningOutlinerPanel({
   const [nodesLoaded, setNodesLoaded] = useState(false);
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [pendingFocusNodeId, setPendingFocusNodeId] = useState<string | null>(null);
-  const [habitConvertNodeId, setHabitConvertNodeId] = useState<string | null>(null);
   const [reminderNodeId, setReminderNodeId] = useState<string | null>(null);
   const [reminderValue, setReminderValue] = useState("");
   const [reminderKind, setReminderKind] = useState<OutlineReminderKind>("regular");
@@ -449,7 +450,8 @@ export default function PlanningOutlinerPanel({
   const [searchQuery, setSearchQuery] = useState("");
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
   const [panelStatus, setPanelStatus] = useState("");
-  const [selectedThemeId, setSelectedThemeId] = useState("");
+  const [habitThemeSelections, setHabitThemeSelections] = useState<Record<string, string>>({});
+  const [habitTargetDrafts, setHabitTargetDrafts] = useState<Record<string, string>>({});
   const noteSaveTimers = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -526,7 +528,6 @@ export default function PlanningOutlinerPanel({
   }, [nodes]);
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const todayDate = toDateInputValue(new Date());
-  const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? themes[0];
   const boardHabitIdSet = useMemo(() => new Set(boardHabitIds), [boardHabitIds]);
   const attachTargets = useMemo<AttachTarget[]>(
     () =>
@@ -599,7 +600,7 @@ export default function PlanningOutlinerPanel({
         return Boolean(
           !isNodeComplete(node) &&
             !node.linked?.blockId &&
-            (node.planDate || node.tag === "task" || node.tag === "habit")
+            (node.planDate || node.tag === "habit")
         );
       }
       if (reviewFilter === "today") {
@@ -838,20 +839,32 @@ export default function PlanningOutlinerPanel({
     });
   };
 
-  const convertToHabit = async (node: OutlineNode) => {
+  const convertToHabit = async (node: OutlineNode, themeId: string) => {
     const label = node.text.trim();
-    if (!label || !selectedTheme) return;
-    const result = await onCreateHabit(selectedTheme.id, label, node.target, node.frequency);
+    if (!label) return;
+    const result = await onCreateHabit(themeId || null, label, node.target, node.frequency);
     if (result) applyHabitLink(node, result);
-    setHabitConvertNodeId(null);
+    if (result) {
+      setHabitThemeSelections((current) => {
+        const next = { ...current };
+        delete next[node.id];
+        return next;
+      });
+    }
   };
 
-  const convertToHabitBlock = async (node: OutlineNode) => {
+  const convertToHabitBlock = async (node: OutlineNode, themeId: string) => {
     const label = node.text.trim();
-    if (!label || !selectedTheme) return;
-    const result = await onCreateHabitBlock(selectedTheme.id, label, node.target, node.frequency);
+    if (!label) return;
+    const result = await onCreateHabitBlock(themeId || null, label, node.target, node.frequency);
     if (result) applyHabitLink(node, result);
-    setHabitConvertNodeId(null);
+    if (result) {
+      setHabitThemeSelections((current) => {
+        const next = { ...current };
+        delete next[node.id];
+        return next;
+      });
+    }
   };
 
   const convertToTheme = async (node: OutlineNode) => {
@@ -902,7 +915,6 @@ export default function PlanningOutlinerPanel({
   const openHabitLinkPanel = (node: OutlineNode) => {
     const nextOpen = habitLinkNodeId !== node.id;
     setHabitLinkNodeId(nextOpen ? node.id : null);
-    setHabitConvertNodeId(null);
     if (!nextOpen) return;
     const currentValue = node.linked?.habitId
       ? habitLinkTargets.find((target) => target.link.habitId === node.linked?.habitId)?.value
@@ -1155,11 +1167,18 @@ export default function PlanningOutlinerPanel({
     setActionMenuNodeId(null);
   };
 
-  const renderRows = (items: OutlineNode[], depth = 0, forceExpanded = false): JSX.Element[] =>
+  const renderRows = (
+    items: OutlineNode[],
+    depth = 0,
+    forceExpanded = false,
+    nearestThemeId: string | null = null
+  ): JSX.Element[] =>
     items.map((node, index) => {
       const hasChildren = node.children.length > 0;
       const isHabitLinked = !!node.linked?.habitId;
       const isThemeLinked = !!node.linked?.themeId && !node.linked?.habitId;
+      const rowThemeId = isThemeLinked ? node.linked!.themeId! : nearestThemeId;
+      const habitThemeId = habitThemeSelections[node.id] ?? rowThemeId ?? themes[0]?.id ?? "";
       const isBlockLinked = !!node.linked?.blockId;
       const isRoutineLinked = !!node.linked?.routineId;
       const isOnBoard = !!node.linked?.habitId && boardHabitIdSet.has(node.linked.habitId);
@@ -1186,7 +1205,13 @@ export default function PlanningOutlinerPanel({
       return (
         <div key={node.id} className="outliner-row-wrap">
           <div
-            className={`outliner-row ${isDragTarget ? "outliner-row--drag-over" : ""}`}
+            className={[
+              "outliner-row",
+              isDragTarget ? "outliner-row--drag-over" : "",
+              focusNodeId === node.id ? "outliner-row--focused" : "",
+              isDoneRow ? "outliner-row--done" : "",
+              node.linked ? "outliner-row--linked" : "",
+            ].filter(Boolean).join(" ")}
             style={{ paddingLeft: `${depth * 18 + 8}px` }}
             onDragOver={(event) => {
               if (!draggingNodeId || draggingNodeId === node.id) return;
@@ -1263,19 +1288,32 @@ export default function PlanningOutlinerPanel({
               onChange={(event) => updateRow(node.id, { text: event.target.value })}
               onBlur={() => maybeSyncLinkedRename(node)}
               onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                if (event.shiftKey) addChildWithFocus(node.id);
-                else addSiblingWithFocus(node.id);
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (event.shiftKey) addChildWithFocus(node.id);
+                  else addSiblingWithFocus(node.id);
+                  return;
+                }
+                if (event.key === "Tab" && !event.shiftKey && !normalizedSearch && index > 0) {
+                  event.preventDefault();
+                  indentRowUnderPrevious(node.id);
+                }
               }}
               placeholder="Planning row..."
             />
             <select
               className={`outliner-tag-select outliner-tag-select--${node.tag}`}
               value={node.tag}
-              onChange={(event) =>
-                updateRow(node.id, { tag: event.target.value as OutlineNode["tag"] })
-              }
+              onChange={(event) => {
+                const nextTag = event.target.value as OutlineNode["tag"];
+                updateRow(node.id, { tag: nextTag });
+                if (nextTag === "habit") {
+                  setHabitThemeSelections((current) => ({
+                    ...current,
+                    [node.id]: current[node.id] ?? rowThemeId ?? themes[0]?.id ?? "",
+                  }));
+                }
+              }}
               title="Tag this row"
             >
               <option value="note">Row</option>
@@ -1296,103 +1334,20 @@ export default function PlanningOutlinerPanel({
             <div className="outliner-row-actions">
               <button
                 type="button"
-                onClick={() => openRowNote(node)}
-                title={node.linked ? "Open the note attached to this row" : "Write a row note and attach it later"}
-              >
-                Row note
-              </button>
-              {!node.linked && habitLinkTargets.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => openHabitLinkPanel(node)}
-                  title="Link this row to an existing habit"
-                >
-                  Link habit
-                </button>
-              )}
-              {isHabitLinked && !isOnBoard && (
-                <button
-                  type="button"
-                  onClick={() => addBoardForLinkedHabit(node)}
-                  title="Add this linked habit to the board as an unscheduled habit block"
-                >
-                  Add board
-                </button>
-              )}
-              {node.tag !== "habit" && (
-                <button
-                  type="button"
-                  onClick={() => convertToBlock(node, null)}
-                  title="Send this row back to Waiting as an unscheduled block"
-                >
-                  To waiting
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => updateRow(node.id, { planDate: todayDate })}
-                title="Mark this row as part of today"
-              >
-                Today
-              </button>
-              {node.planDate && !isBlockLinked && (
-                <button
-                  type="button"
-                  onClick={() => convertToBlock(node, node.planDate)}
-                  title="Create a linked planner block for this planned row"
-                >
-                  Schedule
-                </button>
-              )}
-              {node.tag === "habit" && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setHabitConvertNodeId((current) => current === node.id ? null : node.id);
-                      setSelectedThemeId((current) => current || themes[0]?.id || "");
-                    }}
-                    title="Turn this habit row into a real habit or habit block"
-                  >
-                    Make real
-                  </button>
-                </>
-              )}
-              {canMakeTheme && (
-                <button
-                  type="button"
-                  onClick={() => convertToTheme(node)}
-                  title="Create or link a theme from this row. Direct habit children come along."
-                >
-                  Make theme
-                </button>
-              )}
-              <button type="button" onClick={() => openReminderPanel(node)}>
-                Remind
-              </button>
-              <button
-                type="button"
+                className="outliner-quick-action"
                 onClick={() => addChildWithFocus(node.id)}
                 title="Add detail under this row"
               >
-                + Detail
+                +
               </button>
               <button
                 type="button"
+                className="outliner-quick-action"
                 onClick={() => addSiblingWithFocus(node.id)}
                 title="Add row at the same level"
               >
-                + Next
+                ↵
               </button>
-              {!normalizedSearch && index > 0 && (
-                <button
-                  type="button"
-                  onClick={() => indentRowUnderPrevious(node.id)}
-                  title="Move this row under the row above"
-                >
-                  Indent
-                </button>
-              )}
               <div className="outliner-more-wrap">
                 <button
                   type="button"
@@ -1405,6 +1360,15 @@ export default function PlanningOutlinerPanel({
                 </button>
                 {actionMenuNodeId === node.id && (
                   <div className="outliner-action-menu">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openRowNote(node);
+                        setActionMenuNodeId(null);
+                      }}
+                    >
+                      Row note
+                    </button>
                     <button
                       type="button"
                       onClick={() => focusRow(node)}
@@ -1434,7 +1398,7 @@ export default function PlanningOutlinerPanel({
                         Open linked
                       </button>
                     )}
-                    {!node.linked && habitLinkTargets.length > 0 && (
+                    {!node.linked && node.tag !== "habit" && habitLinkTargets.length > 0 && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1515,18 +1479,6 @@ export default function PlanningOutlinerPanel({
                         }}
                       >
                         Make routine
-                      </button>
-                    )}
-                    {node.tag === "habit" && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setHabitConvertNodeId((current) => (current === node.id ? null : node.id));
-                          setSelectedThemeId((current) => current || themes[0]?.id || "");
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Make real habit
                       </button>
                     )}
                     {canMakeTheme && (
@@ -1800,7 +1752,24 @@ export default function PlanningOutlinerPanel({
             </div>
           )}
           {node.tag === "habit" && !isHabitLinked && (
-            <div className="outliner-habit-settings" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+            <div className="outliner-habit-settings outliner-habit-setup" style={{ marginLeft: `${depth * 18 + 44}px` }}>
+              <span>Theme</span>
+              <select
+                value={habitThemeId}
+                onChange={(event) =>
+                  setHabitThemeSelections((current) => ({
+                    ...current,
+                    [node.id]: event.target.value,
+                  }))
+                }
+              >
+                <option value="">Not sorted</option>
+                {themes.map((theme) => (
+                  <option key={theme.id} value={theme.id}>
+                    {theme.name}
+                  </option>
+                ))}
+              </select>
               <span>Frequency</span>
               <select
                 value={node.frequency}
@@ -1817,43 +1786,42 @@ export default function PlanningOutlinerPanel({
                 <input
                   type="number"
                   min={1}
-                  value={node.target}
-                  onChange={(event) =>
-                    updateRow(node.id, { target: Number(event.target.value) || 1 })
+                  value={habitTargetDrafts[node.id] ?? String(node.target)}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    setHabitTargetDrafts((current) => ({
+                      ...current,
+                      [node.id]: nextValue,
+                    }));
+                    const parsedTarget = Number(nextValue);
+                    if (nextValue !== "" && Number.isFinite(parsedTarget) && parsedTarget >= 1) {
+                      updateRow(node.id, { target: parsedTarget });
+                    }
+                  }}
+                  onBlur={() =>
+                    setHabitTargetDrafts((current) => {
+                      const next = { ...current };
+                      delete next[node.id];
+                      return next;
+                    })
                   }
                   aria-label="Target count"
                 />
               )}
-            </div>
-          )}
-          {habitConvertNodeId === node.id && (
-            <div className="outliner-convert-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
-              {themes.length === 0 ? (
-                <span>Create a theme first, then this can become a habit.</span>
-              ) : (
-                <>
-                  <span>Theme</span>
-                  <select
-                    value={selectedTheme?.id ?? ""}
-                    onChange={(event) => setSelectedThemeId(event.target.value)}
-                  >
-                    {themes.map((theme) => (
-                      <option key={theme.id} value={theme.id}>
-                        {theme.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" onClick={() => convertToHabit(node)}>
-                    Create habit
-                  </button>
-                  <button type="button" onClick={() => convertToHabitBlock(node)}>
-                    Habit + board
-                  </button>
-                </>
+              <button type="button" onClick={() => convertToHabit(node, habitThemeId)}>
+                Save habit
+              </button>
+              <button type="button" onClick={() => convertToHabitBlock(node, habitThemeId)}>
+                Save + board
+              </button>
+              {habitLinkTargets.length > 0 && (
+                <button type="button" className="secondary" onClick={() => openHabitLinkPanel(node)}>
+                  Link existing
+                </button>
               )}
             </div>
           )}
-          {hasChildren && (forceExpanded || !node.collapsed) && renderRows(node.children, depth + 1, forceExpanded)}
+          {hasChildren && (forceExpanded || !node.collapsed) && renderRows(node.children, depth + 1, forceExpanded, rowThemeId)}
         </div>
 	      );
 	    });
@@ -1892,7 +1860,7 @@ export default function PlanningOutlinerPanel({
       : "in view";
 
   return (
-    <div className="outliner-panel" ref={panelRef}>
+    <div className={`outliner-panel outliner-panel--${presentation}`} ref={panelRef}>
       <div className="outliner-header">
         <div>
           <span className="outliner-title">Planning Outliner</span>
