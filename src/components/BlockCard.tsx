@@ -1,4 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
+import { MoreHorizontal, StickyNote } from "lucide-react";
+import { TileTimerButton } from "./TileTimers";
+import { useItemLongPress } from "./useItemLongPress";
 import { createPortal } from "react-dom";
 import type {
   Block,
@@ -11,6 +14,8 @@ import type {
   WorkoutRoutineHistoryEntry,
 } from "../App";
 import type { BlockTask } from "../services/database";
+import { ReadingLinkCard } from './ReadingLink';
+import type { ReadingLink } from '../services/readingLinks';
 import PriorityBadge from "./PriorityBadge";
 import BlockCreditPopover from "./BlockCreditPopover";
 import { WorkoutInputs } from "./WorkoutInputs";
@@ -55,6 +60,9 @@ type BlockCardProps = {
   onSetEditBlockLabel?: (label: string) => void;
   onSaveBlockEdit?: (blockId: string) => void;
   onDoubleClick?: (blockId: string) => void;
+  onItemActions?: (blockId: string) => void;
+  readingLink?: ReadingLink;
+  onOpenOccurrenceNote?: (blockId: string) => void;
 
   // shared
   onDragStart: (blockId: string, e?: React.DragEvent) => void;
@@ -147,6 +155,9 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   onSetEditBlockLabel,
   onSaveBlockEdit,
   onDoubleClick,
+  onItemActions,
+  readingLink,
+  onOpenOccurrenceNote,
   onDragStart,
   onDragEnd,
   onDelete,
@@ -242,6 +253,10 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   } | null>(null);
   const mobileDropElementRef = useRef<HTMLElement | null>(null);
   const suppressClickRef = useRef(false);
+  const { cancel: cancelItemPress, ...itemPress } = useItemLongPress(onItemActions ? () => {
+    resetSwipe();
+    onItemActions(block.id);
+  } : undefined, true);
 
   // Keep noteValue in sync if block.blockNote changes externally
   useEffect(() => {
@@ -303,7 +318,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const hasDetailContent = tasks.length > 0 || hasNoteContent || hasExerciseContent;
   const canManageTasks = !!onAddBlockTask || tasks.length > 0;
   const canManageNotes = !!onSaveBlockNote;
-  const noteDetailLabel = block.isHabitBlock ? "Instance note" : "Note";
+  const noteDetailLabel = block.location.type === 'slot' ? 'Note for this occurrence' : 'Note';
   const inferredKindLabel =
     kindLabel ??
     (block.isHabitBlock
@@ -320,15 +335,14 @@ export const BlockCard: React.FC<BlockCardProps> = ({
     return "notes";
   };
   const openBlockDetails = (tab?: DetailTab) => {
+    if ((tab ?? getDefaultDetailTab()) === 'notes' && onOpenOccurrenceNote) {
+      setDetailOpen(false);
+      onOpenOccurrenceNote(block.id);
+      return;
+    }
     setActiveDetailTab(tab ?? getDefaultDetailTab());
     setDetailOpen(true);
   };
-
-  useEffect(() => {
-    if (canBuildWorkout && !hasExerciseContent) {
-      openBlockDetails("workout");
-    }
-  }, [canBuildWorkout, hasExerciseContent]);
 
   useEffect(() => {
     if (!detailOpen) return;
@@ -363,6 +377,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
   const blockClass = [
     "block",
     mobileMode ? "block-mobile-safe" : "",
+    onItemActions ? "block-has-item-actions" : "",
     kindClass ? `block-kind-${kindClass}` : "",
     block.isHabitBlock ? "habit-block" : "",
     block.isLinkedGroup ? "linked-group" : "",
@@ -398,7 +413,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
     ((variant === "slot" && !!onMobileMoveLater) ||
       (variant === "unscheduled" && !!onMobileOpenOutliner));
   const canUseSwipeActions = canSwipeRight || canSwipeLeft;
-  const canLongPressDrag = !!mobileMode && variant === "slot" && !!onMobileDrop;
+  const canLongPressDrag = !!mobileMode && variant === "slot" && !!onMobileDrop && !onItemActions;
   const rightSwipeLabel =
     variant === "slot" ? (block.completed ? "Undo" : "Done") : "Today";
   const leftSwipeLabel =
@@ -592,16 +607,17 @@ export const BlockCard: React.FC<BlockCardProps> = ({
       )}
       <div
         ref={blockElementRef}
+        {...itemPress}
         id={`block-${block.id}`}
         className={blockClass}
         draggable={!mobileMode}
-        onDragStart={mobileMode ? undefined : (e) => onDragStart(block.id, e)}
+        onDragStart={mobileMode ? undefined : (e) => { cancelItemPress(); onDragStart(block.id, e); }}
         onDragEnd={mobileMode ? undefined : onDragEnd}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={resetSwipe}
-        onContextMenu={mobileMode ? (event) => event.preventDefault() : undefined}
+        onContextMenu={onItemActions ? itemPress.onContextMenu : mobileMode ? (event) => event.preventDefault() : undefined}
         onClick={handleBlockClick}
         onDoubleClick={onDoubleClick && !mobileMode ? () => onDoubleClick(block.id) : undefined}
         title={hoverInfo}
@@ -800,6 +816,11 @@ export const BlockCard: React.FC<BlockCardProps> = ({
             </span>
           )}
 
+          {onItemActions && <button type="button" className="grid-item-actions" title={`Options for ${block.label}`} aria-label={`Options for ${block.label}`} onClick={event => { event.stopPropagation(); onItemActions(block.id); }}><MoreHorizontal size={18} /></button>}
+          {block.location.type === 'slot' && <div className="grid-block-tools">
+            {canManageNotes && <button type="button" className="grid-note-button" data-has-note={hasNoteContent} title={`${hasNoteContent ? 'Read note' : 'Add note'} for ${block.label}`} aria-label={`Notes for ${block.label}`} onClick={event => { event.stopPropagation(); openBlockDetails('notes'); }}><StickyNote size={18} /></button>}
+            <TileTimerButton blockId={block.id} name={block.label.replace(/^(Note|Task|Habit|Routine|Link):\s*/i, '')} />
+          </div>}
           {isStrengthTraining(block) && !canBuildWorkout && onUpdateWorkout && onSubmitWorkout && (
             <WorkoutInputs
               workoutData={block.workoutData}
@@ -810,6 +831,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
           )}
         </div>
 
+        {readingLink && <ReadingLinkCard link={readingLink} title={block.label.replace(/^(Link|Task|Note):\s*/i, '')} />}
         {outlineItems.length > 0 && (
           <div className="block-outline-preview" onClick={(e) => e.stopPropagation()}>
             <div className="block-outline-preview-header">
@@ -1026,7 +1048,7 @@ export const BlockCard: React.FC<BlockCardProps> = ({
                   key={tab.id}
                   type="button"
                   className={`block-detail-tab ${activeDetailTab === tab.id ? "active" : ""}`}
-                  onClick={() => setActiveDetailTab(tab.id)}
+                  onClick={() => openBlockDetails(tab.id)}
                 >
                   <span>{tab.label}</span>
                   {tab.meta && <em>{tab.meta}</em>}

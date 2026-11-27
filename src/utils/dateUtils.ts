@@ -10,7 +10,7 @@ export const getMondayOfWeek = (weekOffset: number = 0): Date => {
 
 export const getWeekStartDateString = (weekOffset: number = 0): string => {
   const monday = getMondayOfWeek(weekOffset);
-  return monday.toISOString().split("T")[0];
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
 };
 
 export const getCurrentWeekRange = (weekOffset: number = 0): string => {

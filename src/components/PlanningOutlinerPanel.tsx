@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Plus, MoreHorizontal, ChevronRight, ChevronDown, GripVertical, ChevronsDownUp, ChevronsUpDown, Trash2, RotateCcw, CalendarDays, Folder, FolderInput, StickyNote, Repeat2, ListChecks, Check, CornerDownRight, ArrowUp, ArrowDown, Outdent, X } from "lucide-react";
 import {
   cloneOutlineNodes,
   createOutlineNode,
-  loadPlanningOutliner,
-  savePlanningOutliner,
   updateOutlineNode,
   type OutlineLink,
   type OutlineFrequency,
   type OutlineReminderKind,
   type OutlineNode,
 } from "../services/planningOutliner";
+import { activeOutline, outlineTrashRoots, filterOutlineCategory, type OutlineCategory, isThemeRow, outlineSelectionRoots, outlineBranchItems, moveOutlineSelection, revealOutlineItem, outlineMoveDestinations, outlineDropPosition, applyOutlineDrop, type OutlineDropPosition, moveOutlineOut, rememberOutlineMove, restoreOutlineMove, type OutlineMoveUndo } from "../services/outlineModel";
+import { PlannerModal } from "./PlannerShell";
+import { OutlineMovePicker } from './OutlineMovePicker';
+import { OutlineTypePicker } from './OutlineTypePicker';
+import type { OutlineCardType } from '../services/cardTypes';
+import { ReadingLinkCard, ReadingLinkEditor } from './ReadingLink';
+import { publicWebUrl, readingSite, type ReadingLink } from '../services/readingLinks';
+import { outlineCardSections } from '../services/outlineModel';
 
 type ThemeOption = {
   id: string;
@@ -60,14 +67,27 @@ type RoutineLinkResult = {
   routineId: string;
 };
 
-type ReviewFilter = "all" | "review" | "schedule" | "today" | "overdue" | "waiting";
-
-const OUTLINER_TOP_LEVEL_PARENT = "__top-level__";
+type ReviewFilter = "all" | "review" | "schedule" | "today" | "overdue" | "waiting" | "completed" | "trash";
+type ParsedRowInput = { text: string; tag?: OutlineNode["tag"] };
 
 type Props = {
   userId: string;
   onClose: () => void;
-  presentation?: "floating" | "bench";
+  presentation?: "floating" | "bench" | "inline";
+  nodes: OutlineNode[];
+  loading?: boolean;
+  onAdd?: (themeId?: string) => void;
+  onAddToRoutine?: (node: OutlineNode) => void;
+  onChangeType: (nodeId: string, kind: OutlineCardType) => Promise<void>;
+  onLoadPlanning: (node: OutlineNode) => Promise<import('../services/cardTypes').OutlinePlanningDetail[]>;
+  onUnlinkPlanning: (node: OutlineNode, makeGroup: boolean) => Promise<void>;
+  onSaveReadingLink: (nodeId: string, title: string, link: ReadingLink) => Promise<void>;
+  onPlan: (node: OutlineNode) => void;
+  getHabitProgress?: (id: string) => string;
+  onHabitDragStart?: (habitId: string, event: React.DragEvent) => void;
+  onHabitDragEnd?: () => void;
+  onSaveHabitSettings: (node: OutlineNode) => Promise<boolean>;
+  onToggleTask?: (node: OutlineNode) => void;
   themes: ThemeOption[];
   onCreateBlock: (label: string, options?: OutlinerBlockOptions) => Promise<string | null>;
   onCreateHabit: (
@@ -91,16 +111,15 @@ type Props = {
     items: string[],
     notes?: string
   ) => Promise<RoutineLinkResult | null>;
-  onAddBoardForLinkedHabit: (link: OutlineLink) => Promise<HabitLinkResult | null>;
   onOpenLinked: (link: OutlineLink) => void;
   onRenameLinked: (link: OutlineLink, nextName: string) => Promise<boolean>;
   onLoadLinkedNote: (link: OutlineLink) => Promise<LinkedNoteResult>;
   onSaveLinkedNote: (link: OutlineLink, content: string) => Promise<LinkedNoteResult | null>;
   boardHabitIds: string[];
-  externalVersion?: number;
   focusNodeIdRequest?: string | null;
   focusRequestKey?: number;
-  onNodesChange?: (nodes: OutlineNode[]) => void;
+  onNodesChange?: (nodes: OutlineNode[]) => void | Promise<void>;
+  saveStatus?: "idle" | "saving" | "saved" | "error";
 };
 
 function findNode(
@@ -137,12 +156,6 @@ function addSibling(nodes: OutlineNode[], siblingId: string, sibling: OutlineNod
     }
   }
   return next;
-}
-
-function deleteNode(nodes: OutlineNode[], id: string): OutlineNode[] {
-  return nodes
-    .filter((node) => node.id !== id)
-    .map((node) => ({ ...node, children: deleteNode(node.children, id) }));
 }
 
 function findNodeLinkedToHabit(
@@ -204,123 +217,6 @@ function nestRowUnderPreviousSibling(nodes: OutlineNode[], targetId: string): Ou
   }));
 }
 
-function removeNodeById(
-  nodes: OutlineNode[],
-  id: string
-): { nodes: OutlineNode[]; removed: OutlineNode | null } {
-  const nextNodes: OutlineNode[] = [];
-  let removed: OutlineNode | null = null;
-
-  for (const node of nodes) {
-    if (node.id === id) {
-      removed = node;
-      continue;
-    }
-
-    const childResult = removeNodeById(node.children, id);
-    if (childResult.removed) {
-      removed = childResult.removed;
-      nextNodes.push({ ...node, children: childResult.nodes });
-    } else {
-      nextNodes.push(node);
-    }
-  }
-
-  return { nodes: nextNodes, removed };
-}
-
-function insertNodeBefore(
-  nodes: OutlineNode[],
-  targetId: string,
-  nodeToInsert: OutlineNode
-): { nodes: OutlineNode[]; inserted: boolean } {
-  const nextNodes: OutlineNode[] = [];
-  let inserted = false;
-
-  for (const node of nodes) {
-    if (node.id === targetId) {
-      nextNodes.push(nodeToInsert);
-      inserted = true;
-    }
-
-    if (inserted) {
-      nextNodes.push(node);
-      continue;
-    }
-
-    const childResult = insertNodeBefore(node.children, targetId, nodeToInsert);
-    inserted = childResult.inserted;
-    nextNodes.push(inserted ? { ...node, children: childResult.nodes } : node);
-  }
-
-  return { nodes: nextNodes, inserted };
-}
-
-function insertNodeAfter(
-  nodes: OutlineNode[],
-  targetId: string,
-  nodeToInsert: OutlineNode
-): { nodes: OutlineNode[]; inserted: boolean } {
-  const nextNodes: OutlineNode[] = [];
-  let inserted = false;
-
-  for (const node of nodes) {
-    nextNodes.push(node);
-    if (node.id === targetId) {
-      nextNodes.push(nodeToInsert);
-      inserted = true;
-      continue;
-    }
-
-    if (inserted) continue;
-
-    const childResult = insertNodeAfter(node.children, targetId, nodeToInsert);
-    inserted = childResult.inserted;
-    if (inserted) nextNodes[nextNodes.length - 1] = { ...node, children: childResult.nodes };
-  }
-
-  return { nodes: nextNodes, inserted };
-}
-
-function moveNodeRelative(
-  nodes: OutlineNode[],
-  draggedId: string,
-  targetId: string,
-  position: "before" | "after"
-): OutlineNode[] {
-  if (draggedId === targetId) return nodes;
-  const removeResult = removeNodeById(nodes, draggedId);
-  if (!removeResult.removed) return nodes;
-
-  const insertResult =
-    position === "before"
-      ? insertNodeBefore(removeResult.nodes, targetId, removeResult.removed)
-      : insertNodeAfter(removeResult.nodes, targetId, removeResult.removed);
-  return insertResult.inserted ? insertResult.nodes : nodes;
-}
-
-function isDescendantOf(nodes: OutlineNode[], possibleChildId: string, possibleParentId: string): boolean {
-  const parentResult = findNode(nodes, possibleParentId);
-  if (!parentResult) return false;
-  return !!findNode(parentResult.node.children, possibleChildId);
-}
-
-function moveNodeUnderParent(
-  nodes: OutlineNode[],
-  nodeId: string,
-  parentId: string | null
-): OutlineNode[] {
-  if (parentId === nodeId) return nodes;
-  if (parentId && isDescendantOf(nodes, parentId, nodeId)) return nodes;
-
-  const removeResult = removeNodeById(nodes, nodeId);
-  if (!removeResult.removed) return nodes;
-
-  if (!parentId) return [...removeResult.nodes, removeResult.removed];
-  if (!findNode(removeResult.nodes, parentId)) return nodes;
-  return addChild(removeResult.nodes, parentId, removeResult.removed);
-}
-
 function wrapNodeInNewParent(
   nodes: OutlineNode[],
   nodeId: string,
@@ -346,6 +242,22 @@ function wrapNodeInNewParent(
   }
 
   return { nodes: nextNodes, wrapped };
+}
+
+function setNodeTreeCollapsed(nodes: OutlineNode[], collapsed: boolean, rootId?: string): OutlineNode[] {
+  return nodes.map((node) => {
+    if (!rootId || node.id === rootId) {
+      return {
+        ...node,
+        collapsed,
+        children: setNodeTreeCollapsed(node.children, collapsed),
+      };
+    }
+    return {
+      ...node,
+      children: setNodeTreeCollapsed(node.children, collapsed, rootId),
+    };
+  });
 }
 
 function toLocalDatetimeValue(iso?: string | null) {
@@ -397,6 +309,27 @@ function formatNoteTimestamp(iso?: string) {
   });
 }
 
+function parseRowInputPrefix(value: string): ParsedRowInput {
+  const leadingSpace = value.match(/^\s*/)?.[0] ?? "";
+  const text = value.slice(leadingSpace.length);
+  const patterns: Array<{ pattern: RegExp; tag: OutlineNode["tag"] }> = [
+    { pattern: /^-\s+\[\s?\]\s+/i, tag: "task" },
+    { pattern: /^\[\s?\]\s+/i, tag: "task" },
+    { pattern: /^todo:\s+/i, tag: "task" },
+    { pattern: /^task:\s+/i, tag: "task" },
+    { pattern: /^habit:\s+/i, tag: "habit" },
+    { pattern: /^@\s+/, tag: "habit" },
+    { pattern: /^-\s+/, tag: "note" },
+    { pattern: /^•\s+/, tag: "note" },
+  ];
+  const match = patterns.find(({ pattern }) => pattern.test(text));
+  if (!match) return { text: value };
+  return {
+    text: `${leadingSpace}${text.replace(match.pattern, "")}`,
+    tag: match.tag,
+  };
+}
+
 const peskyIntervalOptions = [
   { value: 15, label: "Every 15 min" },
   { value: 60, label: "Hourly" },
@@ -405,28 +338,41 @@ const peskyIntervalOptions = [
 ];
 
 export default function PlanningOutlinerPanel({
-  userId,
   onClose,
   presentation = "floating",
+  nodes,
+  loading = false,
+  onAdd,
+  onAddToRoutine,
+  onChangeType,
+  onLoadPlanning,
+  onUnlinkPlanning,
+  onSaveReadingLink,
+  onPlan,
+  getHabitProgress,
+  onHabitDragStart,
+  onHabitDragEnd,
+  onSaveHabitSettings,
+  onToggleTask,
   themes,
   onCreateBlock,
   onCreateHabit,
   onCreateHabitBlock,
   onCreateThemeFromRow,
   onCreateRoutineFromRow,
-  onAddBoardForLinkedHabit,
   onOpenLinked,
   onRenameLinked,
   onLoadLinkedNote,
   onSaveLinkedNote,
   boardHabitIds,
-  externalVersion = 0,
   focusNodeIdRequest,
   focusRequestKey = 0,
   onNodesChange,
+  saveStatus,
 }: Props) {
-  const [nodes, setNodes] = useState<OutlineNode[]>([]);
-  const [nodesLoaded, setNodesLoaded] = useState(false);
+  const nodesLoaded = !loading;
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [pendingFocusNodeId, setPendingFocusNodeId] = useState<string | null>(null);
   const [reminderNodeId, setReminderNodeId] = useState<string | null>(null);
@@ -439,38 +385,48 @@ export default function PlanningOutlinerPanel({
   const [linkedNotes, setLinkedNotes] = useState<Record<string, LinkedNoteState>>({});
   const [noteAttachTargets, setNoteAttachTargets] = useState<Record<string, string>>({});
   const [habitLinkNodeId, setHabitLinkNodeId] = useState<string | null>(null);
+  const [habitSettingsNodeId, setHabitSettingsNodeId] = useState<string | null>(null);
   const [selectedHabitLinkValue, setSelectedHabitLinkValue] = useState("");
   const [parentMoveNodeId, setParentMoveNodeId] = useState<string | null>(null);
-  const [selectedParentNodeId, setSelectedParentNodeId] = useState(OUTLINER_TOP_LEVEL_PARENT);
+  const [revealedMoveId, setRevealedMoveId] = useState<string | null>(null);
+  const [lastMove, setLastMove] = useState<{ undo: OutlineMoveUndo; label: string } | null>(null);
   const [createParentNodeId, setCreateParentNodeId] = useState<string | null>(null);
   const [createParentName, setCreateParentName] = useState("");
+  const [groupParentId, setGroupParentId] = useState<string | null>(null);
+  const [groupName, setGroupName] = useState('');
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [groupError, setGroupError] = useState('');
+  const groupDraft = useRef<OutlineNode | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
-  const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null);
+  const draggingNodeRef = useRef<string | null>(null);
+  const [dropPreview, setDropPreview] = useState<{ id: string; position: OutlineDropPosition } | null>(null);
   const [actionMenuNodeId, setActionMenuNodeId] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<"Details" | "Organize" | "Settings">("Details");
   const [searchQuery, setSearchQuery] = useState("");
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const [category, setCategory] = useState<OutlineCategory>("all");
   const [panelStatus, setPanelStatus] = useState("");
+  useEffect(() => {
+    if (saveStatus === "saved") setPanelStatus(current => current === "Change could not be saved. Retry saving the Outline." ? "" : current);
+  }, [saveStatus]);
+  const [lastTrashedIds, setLastTrashedIds] = useState<string[]>([]);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingAction, setPendingAction] = useState<{ kind: "trash" | "move"; ids: string[] } | null>(null);
+  const feedbackRevision = useRef(0);
   const [habitThemeSelections, setHabitThemeSelections] = useState<Record<string, string>>({});
   const [habitTargetDrafts, setHabitTargetDrafts] = useState<Record<string, string>>({});
   const noteSaveTimers = useRef<Record<string, number>>({});
   const panelRef = useRef<HTMLDivElement>(null);
-  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const inputRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const handledFocusRequestRef = useRef<number | null>(null);
 
   useEffect(() => {
-    setNodesLoaded(false);
-    setFocusNodeId(null);
-    loadPlanningOutliner(userId).then((loaded) => {
-      setNodes(loaded);
-      onNodesChange?.(loaded);
-      setNodesLoaded(true);
-    });
-  }, [userId, externalVersion, onNodesChange]);
+    setSelectedIds(new Set());
+    setPendingAction(null);
+  }, [searchQuery, reviewFilter, category, focusNodeId]);
 
-  useEffect(() => {
-    if (!nodesLoaded) return;
-    savePlanningOutliner(userId, nodes);
-  }, [nodes, userId, nodesLoaded]);
+
 
   useEffect(() => {
     return () => {
@@ -487,18 +443,31 @@ export default function PlanningOutlinerPanel({
       }
     }
 
+    if (presentation === "inline") return;
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [onClose]);
+  }, [onClose, presentation]);
 
   useEffect(() => {
     if (!pendingFocusNodeId) return;
     const input = inputRefs.current[pendingFocusNodeId];
     if (!input) return;
     input.focus();
-    input.select();
+    setDetailTab("Details");
+    setActionMenuNodeId(pendingFocusNodeId);
     setPendingFocusNodeId(null);
   }, [nodes, pendingFocusNodeId]);
+
+  useEffect(() => {
+    if (!revealedMoveId) return;
+    const frame = requestAnimationFrame(() => {
+      const row = inputRefs.current[revealedMoveId];
+      row?.focus({ preventScroll: true });
+      row?.scrollIntoView({ block: 'nearest' });
+    });
+    const timer = window.setTimeout(() => setRevealedMoveId(null), 3000);
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
+  }, [revealedMoveId]);
 
   useEffect(() => {
     if (!focusNodeIdRequest || !nodesLoaded) return;
@@ -508,24 +477,22 @@ export default function PlanningOutlinerPanel({
     setFocusNodeId(focusNodeIdRequest);
     setSearchQuery("");
     setReviewFilter("all");
+    setCategory("all");
   }, [focusNodeIdRequest, focusRequestKey, nodes, nodesLoaded]);
 
-  const focusResult = focusNodeId ? findNode(nodes, focusNodeId) : null;
+  const activeNodes = useMemo(() => activeOutline(nodes), [nodes]);
+  useEffect(() => {
+    if (!focusNodeId) return;
+    const frame = requestAnimationFrame(() => inputRefs.current[focusNodeId]?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [focusNodeId]);
+  const dropDestinations = useMemo(() => new Set(draggingNodeId
+    ? outlineMoveDestinations(nodes, new Set([draggingNodeId])).map(item => item.id) : []), [nodes, draggingNodeId]);
+  const trashRoots = useMemo(() => outlineTrashRoots(nodes), [nodes]);
+  const focusResult = focusNodeId && reviewFilter !== "trash" ? findNode(activeNodes, focusNodeId) : null;
   const focusNode = focusResult?.node ?? null;
   const focusPath = focusResult?.path ?? [];
-  const visibleNodes = focusNode ? focusNode.children : nodes;
-  const parentRowOptions = useMemo(() => {
-    const collect = (items: OutlineNode[], path: string[] = []): Array<{ id: string; label: string }> =>
-      items.flatMap((node) => {
-        const label = node.text.trim() || "Untitled";
-        const nextPath = [...path, label];
-        return [
-          { id: node.id, label: nextPath.join(" > ") },
-          ...collect(node.children, nextPath),
-        ];
-      });
-    return collect(nodes);
-  }, [nodes]);
+  const visibleNodes = reviewFilter === "trash" ? trashRoots : focusNode ? [focusNode] : activeNodes;
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const todayDate = toDateInputValue(new Date());
   const boardHabitIdSet = useMemo(() => new Set(boardHabitIds), [boardHabitIds]);
@@ -556,16 +523,22 @@ export default function PlanningOutlinerPanel({
   );
 
   const displayedNodes = useMemo(() => {
+    if (reviewFilter === "trash") {
+      const matches = (node: OutlineNode): boolean =>
+        [node.text, node.draftNote].join(" ").toLowerCase().includes(normalizedSearch) || node.children.some(matches);
+      return visibleNodes.filter(matches);
+    }
     const nodeMatchesSearch = (node: OutlineNode) => {
       const linkedNote = linkedNotes[node.id]?.content ?? "";
       const searchable = [
         node.text,
-        node.tag,
+        node.isGroup ? 'group subgroup' : node.tag,
         node.frequency,
         node.linked?.label,
         node.linked?.habitId ? "linked habit" : "",
         node.linked?.themeId && !node.linked?.habitId ? "linked theme" : "",
-        node.taskDone ? "done completed" : "",
+        (node.tag === 'task' || node.tag === 'link') && node.taskDone ? "done completed read" : "",
+        node.readingLink?.url,
         node.reminderAt ? formatReminder(node.reminderAt) : "",
         node.reminderKind,
         node.planDate ? formatPlanDate(node.planDate, todayDate) : "",
@@ -580,11 +553,13 @@ export default function PlanningOutlinerPanel({
       return searchable.includes(normalizedSearch);
     };
 
-    const isNodeComplete = (node: OutlineNode) => node.taskDone || !!node.linked?.blockId;
+    const isNodeComplete = (node: OutlineNode) => ((node.tag === 'task' || node.tag === 'link') && node.taskDone) || !!node.linked?.blockId;
     const reminderDate = (node: OutlineNode) =>
       node.reminderAt ? toDateInputValue(new Date(node.reminderAt)) : null;
     const nodeMatchesFilter = (node: OutlineNode) => {
       if (reviewFilter === "all") return true;
+      if (node.isGroup) return false;
+      if (reviewFilter === "completed") return (node.tag === 'task' || node.tag === 'link') && node.taskDone;
       if (reviewFilter === "review") {
         return Boolean(
           node.reminderAt ||
@@ -635,29 +610,71 @@ export default function PlanningOutlinerPanel({
         })
         .filter((node): node is OutlineNode => !!node);
 
-    const baseNodes = reviewFilter !== "all" ? filterReviewNodes(visibleNodes) : visibleNodes;
+    const planningNodes = filterOutlineCategory(visibleNodes, category);
+    const baseNodes = reviewFilter !== "all" ? filterReviewNodes(planningNodes) : planningNodes;
     return normalizedSearch ? filterNodes(baseNodes) : baseNodes;
-  }, [visibleNodes, normalizedSearch, linkedNotes, reviewFilter, todayDate]);
+  }, [visibleNodes, normalizedSearch, linkedNotes, reviewFilter, todayDate, category]);
 
   const visibleCount = useMemo(() => {
     const count = (items: OutlineNode[]): number =>
       items.reduce((total, item) => total + 1 + count(item.children), 0);
     return count(displayedNodes);
   }, [displayedNodes]);
-  const filteredViewActive = !!focusNode || !!normalizedSearch || reviewFilter !== "all";
+  const filteredViewActive = !!focusNode || !!normalizedSearch || reviewFilter !== "all" || category !== "all";
+  const cardLayout = presentation === 'inline' && reviewFilter !== 'trash';
+  // Use the full active branch so filtering out its children never changes its grouping.
+  const groupRootIds = new Set(visibleNodes.filter(node =>
+    node.isGroup || isThemeRow(node) || node.children.length > 0
+  ).map(node => node.id));
+  const groupedNodes = displayedNodes.filter(node => groupRootIds.has(node.id));
+  const looseNodes = displayedNodes.filter(node => !groupRootIds.has(node.id));
+  const navigationItems = outlineBranchItems(activeNodes).filter(node => isThemeRow(node) || node.isGroup || node.children.length > 0);
 
   const showAllRows = () => {
     setFocusNodeId(null);
     setSearchQuery("");
     setReviewFilter("all");
+    setCategory("all");
   };
 
-  const updateAndSave = (updater: (current: OutlineNode[]) => OutlineNode[]) => {
-    setNodes((current) => {
-      const next = updater(cloneOutlineNodes(current));
-      onNodesChange?.(next);
-      return next;
+  const updateAndSave = (updater: (current: OutlineNode[]) => OutlineNode[], message?: string) => {
+    const next = updater(cloneOutlineNodes(nodesRef.current));
+    nodesRef.current = next;
+    const revision = ++feedbackRevision.current;
+    setPanelStatus(message ? "Saving change..." : "");
+    Promise.resolve(onNodesChange?.(next)).then(() => {
+      if (message && revision === feedbackRevision.current) setPanelStatus(message);
+    }).catch(() => {
+      if (revision === feedbackRevision.current) setPanelStatus("Change could not be saved. Retry saving the Outline.");
     });
+  };
+
+  const performOutlineMove = (ids: string[], updater: (current: OutlineNode[]) => OutlineNode[], message: string) => {
+    const current = nodesRef.current;
+    const next = updater(current);
+    const undo = rememberOutlineMove(current, next, new Set(ids));
+    if (!undo) return;
+    setLastMove({ undo, label: ids.length === 1 ? findNode(current, ids[0])?.node.text || 'item' : `${undo.before.length} items` });
+    updateAndSave(() => revealOutlineItem(next, ids[0]), message);
+    showAllRows();
+    setRevealedMoveId(ids[0]);
+  };
+
+  const undoLastMove = () => {
+    if (!lastMove) return;
+    const result = restoreOutlineMove(nodesRef.current, lastMove.undo);
+    if (result.error) { setPanelStatus(result.error); return; }
+    // The shared save retry retains this restored placement if persistence fails.
+    setLastMove(null);
+    updateAndSave(() => result.nodes, 'Move undone. Original placement restored.');
+    showAllRows();
+    setRevealedMoveId(lastMove.undo.before[0].id);
+  };
+
+  const moveRowOut = (node: OutlineNode) => {
+    performOutlineMove([node.id], current => moveOutlineOut(current, node.id), `Moved ${node.text || 'item'} out one level.`);
+    setParentMoveNodeId(null);
+    setActionMenuNodeId(null);
   };
 
   const updateRow = (id: string, updates: Partial<OutlineNode>) => {
@@ -668,6 +685,25 @@ export default function PlanningOutlinerPanel({
         target: Math.max(1, updates.target ?? item.target),
       }))
     );
+  };
+
+  const updateRowText = (node: OutlineNode, value: string) => {
+    const parsed = parseRowInputPrefix(value);
+    const updates: Partial<OutlineNode> = { text: parsed.text };
+    if (parsed.tag && parsed.text !== value && !node.linked && !node.isGroup) {
+      updates.tag = parsed.tag;
+      if (parsed.tag === "habit") {
+        setHabitThemeSelections((current) => ({
+          ...current,
+          [node.id]: current[node.id] ?? themes[0]?.id ?? "",
+        }));
+      }
+    }
+    updateRow(node.id, updates);
+  };
+
+  const setFocusedTreeCollapsed = (collapsed: boolean) => {
+    updateAndSave((current) => setNodeTreeCollapsed(current, collapsed, focusNode?.id));
   };
 
   const setRowLink = (id: string, link: OutlineLink) => {
@@ -713,7 +749,6 @@ export default function PlanningOutlinerPanel({
   const maybeSyncLinkedRename = async (node: OutlineNode) => {
     const label = node.text.trim();
     if (!label || !node.linked || node.linked.label === label) return;
-    if (node.linked.renameDeclinedFor === label) return;
     const renamed = await onRenameLinked(node.linked, label);
     mergeRowLink(node.id, {
       label: renamed ? label : node.linked.label,
@@ -722,7 +757,10 @@ export default function PlanningOutlinerPanel({
   };
 
   const addRootOrFocusedChild = () => {
-    const node = createOutlineNode();
+    setSearchQuery("");
+    setReviewFilter("all");
+    const node = createOutlineNode(category === "task" ? "New task" : "New note");
+    if (category === "task") node.tag = "task";
     updateAndSave((current) =>
       focusNode ? addChild(current, focusNode.id, node) : [...current, node]
     );
@@ -730,30 +768,89 @@ export default function PlanningOutlinerPanel({
   };
 
   const addChildWithFocus = (parentId: string) => {
-    const node = createOutlineNode("New detail");
+    showAllRows();
+    const node = createOutlineNode(category === "task" ? "New task" : "New note");
+    if (category === "task") node.tag = "task";
     updateAndSave((current) => addChild(current, parentId, node));
     setPendingFocusNodeId(node.id);
   };
 
   const addSiblingWithFocus = (siblingId: string) => {
-    const node = createOutlineNode("New next");
+    showAllRows();
+    const node = createOutlineNode(category === "task" ? "New task" : "New note");
+    if (category === "task") node.tag = "task";
     updateAndSave((current) => addSibling(current, siblingId, node));
     setPendingFocusNodeId(node.id);
   };
 
-  const deleteAndRecoverFocus = (id: string) => {
-    updateAndSave((current) => deleteNode(current, id));
-    if (focusNodeId === id || focusPath.some((node) => node.id === id)) {
-      setFocusNodeId(null);
-    }
+  const trashRow = (id: string) => {
+    const node = findNode(nodesRef.current, id)?.node;
+    if (!node) return;
+    setActionMenuNodeId(null);
+    if (outlineBranchItems(node.children).length) setPendingAction({ kind: "trash", ids: [id] });
+    else trashItems([id]);
   };
 
+  const restoreRow = (id: string) => {
+    const name = findNode(nodesRef.current, id)?.node.text || "Item";
+    updateAndSave(current => updateOutlineNode(current, id, node => ({ ...node, trashedAt: null })), `Restored ${name} to Outline.`);
+    setLastTrashedIds(current => current.filter(item => item !== id));
+  };
+
+  const trashItems = (ids: string[]) => {
+    const roots = outlineSelectionRoots(nodesRef.current, new Set(ids));
+    const affected = outlineBranchItems(roots);
+    if (!roots.length) return;
+    const rootIds = roots.map(node => node.id);
+    updateAndSave(current => rootIds.reduce((items, id) => updateOutlineNode(items, id, node => ({ ...node, trashedAt: new Date().toISOString() })), current),
+      affected.length === 1 ? `Moved ${roots[0].text || "item"} to Trash.` : `Moved ${affected.length} items to Trash.`);
+    setLastTrashedIds(rootIds);
+    setSelectedIds(new Set());
+    setPendingAction(null);
+    if (affected.some(node => node.id === focusNodeId)) setFocusNodeId(null);
+  };
+
+  const undoTrash = () => {
+    const ids = lastTrashedIds.filter(id => findNode(nodesRef.current, id)?.node.trashedAt);
+    updateAndSave(current => ids.reduce((items, id) => updateOutlineNode(items, id, node => ({ ...node, trashedAt: null })), current), "Restored items to their original places.");
+    setLastTrashedIds([]);
+  };
+
+  const toggleSelected = (id: string) => setSelectedIds(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const pendingRoots = pendingAction ? outlineSelectionRoots(nodes, new Set(pendingAction.ids)) : [];
+  const pendingItems = outlineBranchItems(pendingRoots);
+  const pendingUnfinishedCount = pendingItems.filter(node => node.tag === "task" && !node.taskDone).length;
+  const confirmBulkMove = (parentId: string | null) => {
+    if (!pendingAction || !pendingRoots.length) return;
+    const destination = parentId ? findNode(nodesRef.current, parentId)?.node.text : "Outline (top level)";
+    performOutlineMove(pendingRoots.map(node => node.id), current => moveOutlineSelection(current, new Set(pendingAction.ids), parentId), `Moved ${pendingRoots.length === 1 ? pendingRoots[0].text : `${pendingRoots.length} selected items`} to ${destination}.`);
+    setPendingAction(null);
+    setSelectedIds(new Set());
+    setSelecting(false);
+    showAllRows();
+    setRevealedMoveId(pendingRoots[0].id);
+  };
+
+  const visibleSelectableItems = (items: OutlineNode[]): OutlineNode[] => items.flatMap(node => [node,
+    ...(!node.collapsed || normalizedSearch || reviewFilter !== "all" || category !== "all" ? visibleSelectableItems(node.children) : []),
+  ]);
+  const selectableItems = visibleSelectableItems(displayedNodes);
+  const selectedRoots = outlineSelectionRoots(nodes, selectedIds);
+
   const nestPreviousUnder = (id: string) => {
-    updateAndSave((current) => nestPreviousSiblingUnder(current, id));
+    const location = findNode(nodesRef.current, id);
+    const siblings = location?.path[location.path.length - 2]?.children ?? nodesRef.current;
+    const previous = siblings[siblings.findIndex(item => item.id === id) - 1];
+    if (previous) performOutlineMove([previous.id], current => nestPreviousSiblingUnder(current, id), `Moved ${previous.text || 'item'} inside ${location?.node.text || 'item'}.`);
   };
 
   const indentRowUnderPrevious = (id: string) => {
-    updateAndSave((current) => nestRowUnderPreviousSibling(current, id));
+    performOutlineMove([id], current => nestRowUnderPreviousSibling(current, id), 'Moved item inside the previous item.');
   };
 
   const openParentMovePanel = (node: OutlineNode) => {
@@ -761,14 +858,6 @@ export default function PlanningOutlinerPanel({
     setParentMoveNodeId(nextOpen ? node.id : null);
     setCreateParentNodeId(null);
     setActionMenuNodeId(null);
-    if (!nextOpen) return;
-
-    const result = findNode(nodes, node.id);
-    const currentParentId =
-      result && result.path.length > 1
-        ? result.path[result.path.length - 2].id
-        : OUTLINER_TOP_LEVEL_PARENT;
-    setSelectedParentNodeId(currentParentId);
   };
 
   const openCreateParentPanel = (node: OutlineNode) => {
@@ -779,12 +868,12 @@ export default function PlanningOutlinerPanel({
     setCreateParentName("");
   };
 
-  const saveParentMove = (node: OutlineNode) => {
-    const nextParentId =
-      selectedParentNodeId === OUTLINER_TOP_LEVEL_PARENT ? null : selectedParentNodeId;
-    updateAndSave((current) => moveNodeUnderParent(current, node.id, nextParentId));
+  const saveParentMove = (node: OutlineNode, nextParentId: string | null) => {
+    const destination = nextParentId ? findNode(nodesRef.current, nextParentId)?.node.text : "Outline (top level)";
+    performOutlineMove([node.id], current => moveOutlineSelection(current, new Set([node.id]), nextParentId), `Moved ${node.text || "item"} ${nextParentId ? 'inside' : 'to'} ${destination}.`);
     setParentMoveNodeId(null);
-    setSelectedParentNodeId(OUTLINER_TOP_LEVEL_PARENT);
+    showAllRows();
+    setRevealedMoveId(node.id);
   };
 
   const saveCreatedParent = (node: OutlineNode) => {
@@ -792,10 +881,11 @@ export default function PlanningOutlinerPanel({
     if (!name) return;
 
     const parentNode = createOutlineNode(name);
-    updateAndSave((current) => {
+    parentNode.isGroup = true;
+    performOutlineMove([node.id], (current) => {
       const result = wrapNodeInNewParent(current, node.id, parentNode);
       return result.wrapped ? result.nodes : current;
-    });
+    }, `Moved ${node.text || 'item'} inside ${name}.`);
     setCreateParentNodeId(null);
     setCreateParentName("");
     setPendingFocusNodeId(parentNode.id);
@@ -810,13 +900,17 @@ export default function PlanningOutlinerPanel({
       .filter((label) => label.length > 0);
 
   const convertToBlock = async (node: OutlineNode, planDate: string | null = null) => {
+    if (node.linked?.blockId) {
+      onOpenLinked(node.linked);
+      return;
+    }
     const label = node.text.trim();
     if (!label) return;
     const blockId = await onCreateBlock(label, {
       planDate,
       note: getNodeNoteForBlock(node),
       taskLabels: childLabelsForTasks(node),
-      hashtag: node.tag === "task" ? "task" : node.tag === "note" ? "note" : undefined,
+      hashtag: node.tag === "task" ? "task" : node.tag === 'link' ? 'link' : node.tag === "note" ? "note" : undefined,
     });
     if (blockId) {
       mergeOrCreateRowLink(node.id, {
@@ -906,12 +1000,6 @@ export default function PlanningOutlinerPanel({
     );
   };
 
-  const addBoardForLinkedHabit = async (node: OutlineNode) => {
-    if (!node.linked?.habitId) return;
-    const result = await onAddBoardForLinkedHabit(node.linked);
-    if (result?.blockId) mergeRowLink(node.id, { blockId: result.blockId });
-  };
-
   const openHabitLinkPanel = (node: OutlineNode) => {
     const nextOpen = habitLinkNodeId !== node.id;
     setHabitLinkNodeId(nextOpen ? node.id : null);
@@ -961,8 +1049,7 @@ export default function PlanningOutlinerPanel({
   };
 
   const openPlanPanel = (node: OutlineNode) => {
-    setPlanNodeId((current) => (current === node.id ? null : node.id));
-    setPlanDateValue(node.planDate ?? todayDate);
+    onPlan(node);
   };
 
   const savePlanDate = (nodeId: string, value = planDateValue) => {
@@ -1149,18 +1236,30 @@ export default function PlanningOutlinerPanel({
     window.setTimeout(() => setPanelStatus(""), 2600);
   };
 
-  const reorderRow = (
-    draggedId: string | null,
-    targetId: string,
-    position: "before" | "after"
-  ) => {
-    if (!draggedId || draggedId === targetId) return;
-    updateAndSave((current) => moveNodeRelative(current, draggedId, targetId, position));
+  const clearOutlineDrag = () => {
+    if (draggingNodeRef.current) onHabitDragEnd?.();
+    draggingNodeRef.current = null;
     setDraggingNodeId(null);
-    setDragOverNodeId(null);
+    setDropPreview(null);
+  };
+
+  const previewOutlineDrop = (event: React.DragEvent<HTMLDivElement>, targetId: string) => {
+    if (!draggingNodeRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!dropDestinations.has(targetId)) {
+      event.dataTransfer.dropEffect = 'none';
+      setDropPreview(null);
+      return;
+    }
+    event.dataTransfer.dropEffect = 'move';
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const position = outlineDropPosition(event.clientY, bounds.top, bounds.height);
+    setDropPreview(current => current?.id === targetId && current.position === position ? current : { id: targetId, position });
   };
 
   const focusRow = (node: OutlineNode) => {
+    if (node.collapsed) updateRow(node.id, { collapsed: false });
     setFocusNodeId(node.id);
     setSearchQuery("");
     setReviewFilter("all");
@@ -1174,20 +1273,23 @@ export default function PlanningOutlinerPanel({
     nearestThemeId: string | null = null
   ): JSX.Element[] =>
     items.map((node, index) => {
+      const nodeLocation = findNode(nodesRef.current, node.id)!;
+      const fullNode = nodeLocation.node;
+      const siblings = nodeLocation.path.length > 1 ? nodeLocation.path[nodeLocation.path.length - 2].children : nodesRef.current;
+      const previousSibling = siblings[siblings.findIndex(item => item.id === node.id) - 1];
       const hasChildren = node.children.length > 0;
       const isHabitLinked = !!node.linked?.habitId;
-      const isThemeLinked = !!node.linked?.themeId && !node.linked?.habitId;
+      const isThemeLinked = isThemeRow(node);
       const rowThemeId = isThemeLinked ? node.linked!.themeId! : nearestThemeId;
       const habitThemeId = habitThemeSelections[node.id] ?? rowThemeId ?? themes[0]?.id ?? "";
       const isBlockLinked = !!node.linked?.blockId;
       const isRoutineLinked = !!node.linked?.routineId;
       const isOnBoard = !!node.linked?.habitId && boardHabitIdSet.has(node.linked.habitId);
       const canMakeTheme = !node.linked && !!node.text.trim();
-      const isDoneRow = node.taskDone;
-      const isDragTarget = dragOverNodeId === node.id && draggingNodeId !== node.id;
-      const availableParentOptions = parentRowOptions.filter(
-        (option) => option.id !== node.id && !isDescendantOf(nodes, option.id, node.id)
-      );
+      const isDoneRow = (node.tag === 'task' || node.tag === 'link') && node.taskDone;
+      const isCardRoot = cardLayout && depth === 0 && groupRootIds.has(node.id);
+      const childCount = isCardRoot ? outlineBranchItems(node.children).length : 0;
+      const dropPosition = dropPreview?.id === node.id ? dropPreview.position : null;
       const noteLabel = node.linked
         ? node.linked.routineId
           ? "Routine note"
@@ -1203,135 +1305,133 @@ export default function PlanningOutlinerPanel({
         ? "Write notes for this theme..."
         : "Write a row note here, then attach it to a habit or theme when you are ready...";
       return (
-        <div key={node.id} className="outliner-row-wrap">
+        <div key={node.id} className={`outliner-row-wrap${isCardRoot ? ' outliner-group-card' : ''}${dropPosition ? ` outliner-drop--${dropPosition}` : ''}`} role={isCardRoot ? 'region' : undefined} aria-label={isCardRoot ? node.text || 'Untitled group' : undefined} style={{ '--outline-drop-indent': `${depth * 18 + 8}px` } as React.CSSProperties}>
           <div
             className={[
               "outliner-row",
-              isDragTarget ? "outliner-row--drag-over" : "",
+              node.isGroup && depth > 0 ? 'outliner-row--group-heading' : '',
+              selecting ? "outliner-row--selecting" : "",
+              dropPosition ? 'outliner-row--drop-target' : '',
+              draggingNodeId === node.id ? 'outliner-row--dragging' : '',
+              revealedMoveId === node.id ? "outliner-row--moved" : "",
               focusNodeId === node.id ? "outliner-row--focused" : "",
               isDoneRow ? "outliner-row--done" : "",
               node.linked ? "outliner-row--linked" : "",
             ].filter(Boolean).join(" ")}
-            style={{ paddingLeft: `${depth * 18 + 8}px` }}
-            onDragOver={(event) => {
-              if (!draggingNodeId || draggingNodeId === node.id) return;
-              event.preventDefault();
-              setDragOverNodeId(node.id);
-            }}
+            style={{ paddingLeft: `${depth * 18 + 8}px`, "--outline-indent": `${depth * 14}px` } as React.CSSProperties}
+            onDragEnter={event => previewOutlineDrop(event, node.id)}
+            onDragOver={event => previewOutlineDrop(event, node.id)}
             onDrop={(event) => {
+              const draggedId = draggingNodeRef.current;
+              if (!draggedId) return;
               event.preventDefault();
-              const draggedId = draggingNodeId || event.dataTransfer.getData("text/plain");
+              event.stopPropagation();
               const bounds = event.currentTarget.getBoundingClientRect();
-              const position = event.clientY > bounds.top + bounds.height / 2 ? "after" : "before";
-              reorderRow(draggedId, node.id, position);
+              const position = outlineDropPosition(event.clientY, bounds.top, bounds.height);
+              const current = nodesRef.current;
+              const next = applyOutlineDrop(current, draggedId, node.id, position);
+              if (next !== current) {
+                const sourceName = findNode(current, draggedId)?.node.text || 'item';
+                performOutlineMove([draggedId], tree => applyOutlineDrop(tree, draggedId, node.id, position), `Moved ${sourceName} ${position} ${fullNode.text || 'item'}.`);
+                showAllRows();
+                setRevealedMoveId(draggedId);
+              }
+              clearOutlineDrag();
             }}
-            onDragLeave={() => {
-              setDragOverNodeId((current) => (current === node.id ? null : current));
+            onDragLeave={event => {
+              if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+              setDropPreview(current => current?.id === node.id ? null : current);
             }}
           >
+            {dropPosition && <span className="outliner-drop-hint" aria-hidden="true">
+              {dropPosition === 'inside' ? <CornerDownRight size={16} /> : dropPosition === 'before' ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
+              {dropPosition === 'inside' ? 'Inside' : dropPosition === 'before' ? 'Before' : 'After'}
+            </span>}
             <button
               type="button"
               className="outliner-drag-handle"
-              draggable
+              draggable={!selecting}
               onDragStart={(event) => {
                 event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData("text/plain", node.id);
+                event.dataTransfer.setData("text/plain", node.tag === 'link' ? `outline-link:${node.id}` : node.id);
+                event.dataTransfer.setData("application/outline-node-id", node.id);
+                draggingNodeRef.current = node.id;
+                setDropPreview(null);
+                if (node.linked?.habitId) onHabitDragStart?.(node.linked.habitId, event);
                 setDraggingNodeId(node.id);
               }}
-              onDragEnd={() => {
-                setDraggingNodeId(null);
-                setDragOverNodeId(null);
-              }}
-              title="Drag to reorder"
-              aria-label="Drag to reorder row"
+              onDragEnd={clearOutlineDrag}
+              title={isHabitLinked || node.tag === 'link' ? "Drag to move, nest or schedule" : "Drag to move or nest"}
+              aria-label={`Drag ${node.text || 'item'} to move or nest`}
             >
-              =
+              <GripVertical size={14} />
             </button>
-            <button
+            {hasChildren ? <button
               type="button"
-              className={`outliner-collapse ${hasChildren ? "" : "outliner-collapse--empty"}`}
+              className="outliner-collapse"
               onClick={() => {
-                if (!hasChildren) return;
                 updateRow(node.id, { collapsed: !node.collapsed });
               }}
-              aria-label={node.collapsed ? "Expand row" : "Collapse row"}
+              disabled={forceExpanded}
+              aria-expanded={forceExpanded || !node.collapsed}
+              aria-label={`${node.collapsed && !forceExpanded ? "Expand" : "Collapse"} ${node.text}`}
             >
-              {hasChildren ? (node.collapsed ? ">" : "v") : ""}
-            </button>
-            {node.tag === "task" ? (
+              {node.collapsed && !forceExpanded ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+            </button> : <span className="outliner-collapse-space" aria-hidden="true" />}
+            {selecting ? <button type="button" role="checkbox" aria-checked={selectedIds.has(node.id)} aria-label={`Select ${node.text}`} className="outliner-task-check" onClick={() => toggleSelected(node.id)}><span className="outliner-check-box" aria-hidden="true">{selectedIds.has(node.id) && <Check size={14} />}</span></button> : node.tag === "task" || node.tag === 'link' ? (
               <button
                 type="button"
                 className={`outliner-task-check ${node.taskDone ? "outliner-task-check--done" : ""}`}
-                onClick={() => updateRow(node.id, { taskDone: !node.taskDone })}
-                title={node.taskDone ? "Mark task not done" : "Mark task done"}
-                aria-label={node.taskDone ? "Mark task not done" : "Mark task done"}
+                onClick={() => onToggleTask ? onToggleTask(node) : updateRow(node.id, { taskDone: !node.taskDone })}
+                title={node.tag === 'link' ? (node.taskDone ? 'Mark unread' : 'Mark read') : node.taskDone ? "Mark task not done" : "Mark task done"}
+                role="checkbox"
+                aria-checked={node.taskDone}
+                aria-label={`Complete ${node.text}`}
               >
-                {node.taskDone ? "✓" : ""}
+                <span className="outliner-check-box" aria-hidden="true">{node.taskDone && <Check size={14} />}</span>
               </button>
-            ) : node.tag === "habit" ? (
-              <button
-                type="button"
-                className="outliner-bullet"
-                onClick={() => focusRow(node)}
-                title="Focus this row"
-                aria-label="Focus this row"
-              />
             ) : (
-              <span className="outliner-task-check-placeholder" />
+              <span className="outliner-type-icon" title={isCardRoot ? "Group" : isThemeLinked ? "Theme" : node.isGroup ? "Group" : isRoutineLinked ? "Routine" : node.tag === "habit" ? "Habit" : "Note"}>
+                {isCardRoot || isThemeLinked || node.isGroup ? <Folder size={16} /> : isRoutineLinked ? <ListChecks size={16} /> : node.tag === "habit" ? <Repeat2 size={16} /> : <StickyNote size={16} />}
+              </span>
             )}
-            <input
+            <div className="outliner-row-title" role={isCardRoot ? 'heading' : undefined} aria-level={isCardRoot ? 3 : undefined} aria-label={isCardRoot ? node.text || 'Untitled group' : undefined}>
+            <button
+              type="button"
               ref={(element) => {
                 inputRefs.current[node.id] = element;
               }}
               className={`outliner-input ${isDoneRow ? "outliner-input--done" : ""}`}
-              value={node.text}
-              onChange={(event) => updateRow(node.id, { text: event.target.value })}
-              onBlur={() => maybeSyncLinkedRename(node)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  if (event.shiftKey) addChildWithFocus(node.id);
-                  else addSiblingWithFocus(node.id);
-                  return;
-                }
-                if (event.key === "Tab" && !event.shiftKey && !normalizedSearch && index > 0) {
-                  event.preventDefault();
-                  indentRowUnderPrevious(node.id);
-                }
-              }}
-              placeholder="Planning row..."
-            />
-            <select
-              className={`outliner-tag-select outliner-tag-select--${node.tag}`}
-              value={node.tag}
-              onChange={(event) => {
-                const nextTag = event.target.value as OutlineNode["tag"];
-                updateRow(node.id, { tag: nextTag });
-                if (nextTag === "habit") {
-                  setHabitThemeSelections((current) => ({
-                    ...current,
-                    [node.id]: current[node.id] ?? rowThemeId ?? themes[0]?.id ?? "",
-                  }));
-                }
-              }}
-              title="Tag this row"
-            >
-              <option value="note">Row</option>
-              <option value="task">Task</option>
-              <option value="habit">Habit</option>
-            </select>
-            {(isThemeLinked || isHabitLinked || isBlockLinked || isRoutineLinked || isOnBoard || node.planDate || isDoneRow) && (
+              aria-label={`${selecting ? "Toggle selection for" : "Details for"} ${node.text}`}
+              onClick={() => { if (selecting) toggleSelected(node.id); else { setDetailTab("Details"); setActionMenuNodeId(node.id); } }}
+            >{node.text || "Untitled"}</button>
+            {isCardRoot && <span className="outliner-card-count">{childCount} {normalizedSearch || reviewFilter !== 'all' || category !== 'all' ? 'shown' : childCount === 1 ? 'item' : 'items'}</span>}
+            </div>
+            <span className="outliner-kind-label">{isThemeLinked ? "Theme" : node.isGroup ? "Group" : isRoutineLinked ? "Routine" : node.tag === "habit" ? "Habit" : node.tag === "task" ? "Task" : node.tag === 'link' ? 'Link' : "Note"}</span>
+            {isHabitLinked && <span className="outliner-progress">{getHabitProgress?.(node.linked!.habitId!)}</span>}
+            {(isBlockLinked || isRoutineLinked || isOnBoard || node.planDate || isDoneRow) && (
               <div className="outliner-link-pills">
-                {isThemeLinked && <span>Linked theme</span>}
-                {isHabitLinked && <span>Linked habit</span>}
-                {isBlockLinked && <span>Linked block</span>}
+                {isBlockLinked && <span>Planned</span>}
                 {isRoutineLinked && <span>Routine</span>}
                 {isOnBoard && <span>On board</span>}
                 {node.planDate && <span>Plan {formatPlanDate(node.planDate, todayDate)}</span>}
                 {isDoneRow && <span>Done</span>}
               </div>
             )}
-            <div className="outliner-row-actions">
+            {!selecting && <div className="outliner-row-actions">
+              <button type="button" className="outliner-move-action" title={`Move ${node.text} inside...`} aria-label={`Move ${node.text}`} onClick={() => openParentMovePanel(fullNode)}><FolderInput size={18} /></button>
+              {isDoneRow && <button type="button" className="outliner-trash-btn" title={`Move ${node.text} to Trash`} aria-label={`Move ${node.text} to Trash`} onClick={() => trashRow(node.id)}><Trash2 size={18} /></button>}
+              {!isDoneRow && !isThemeLinked && !node.isGroup && (
+                <button
+                  type="button"
+                  className="outliner-plan-action"
+                  title={`Plan ${node.text}`}
+                  aria-label={`Plan ${node.text}`}
+                  onClick={() => onPlan(node)}
+                >
+                  <CalendarDays size={18} />
+                </button>
+              )}
               <button
                 type="button"
                 className="outliner-quick-action"
@@ -1352,192 +1452,79 @@ export default function PlanningOutlinerPanel({
                 <button
                   type="button"
                   className={`outliner-more-btn ${actionMenuNodeId === node.id ? "outliner-more-btn--active" : ""}`}
-                  onClick={() => setActionMenuNodeId((current) => (current === node.id ? null : node.id))}
-                  title="More row actions"
-                  aria-label="More row actions"
+                  onClick={() => { setDetailTab("Organize"); setActionMenuNodeId(node.id); }}
+                  title={`Actions for ${node.text}`}
+                  aria-label={`Actions for ${node.text}`}
                 >
-                  ...
+                  <MoreHorizontal size={18} />
                 </button>
                 {actionMenuNodeId === node.id && (
-                  <div className="outliner-action-menu">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        openRowNote(node);
-                        setActionMenuNodeId(null);
-                      }}
-                    >
-                      Row note
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => focusRow(node)}
-                    >
-                      Focus row
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openParentMovePanel(node)}
-                    >
-                      Change parent
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openCreateParentPanel(node)}
-                    >
-                      Create parent
-                    </button>
-                    {node.linked && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onOpenLinked(node.linked!);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Open linked
-                      </button>
-                    )}
-                    {!node.linked && node.tag !== "habit" && habitLinkTargets.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          openHabitLinkPanel(node);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Link existing habit
-                      </button>
-                    )}
-                    {isHabitLinked && !isOnBoard && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          addBoardForLinkedHabit(node);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Add to board
-                      </button>
-                    )}
-                    {node.tag !== "habit" && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          convertToBlock(node, null);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Send to Waiting
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        updateRow(node.id, { planDate: todayDate });
-                        setActionMenuNodeId(null);
-                      }}
-                    >
-                      Mark for today
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const tomorrow = toDateInputValue(addDays(new Date(`${todayDate}T12:00:00`), 1));
-                        updateRow(node.id, { planDate: tomorrow });
-                        setActionMenuNodeId(null);
-                      }}
-                    >
-                      Mark for tomorrow
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        openPlanPanel(node);
-                        setActionMenuNodeId(null);
-                      }}
-                    >
-                      Pick plan date
-                    </button>
-                    {node.planDate && !isBlockLinked && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          convertToBlock(node, node.planDate);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Schedule block
-                      </button>
-                    )}
-                    {hasChildren && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          createRoutineFromRow(node);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Make routine
-                      </button>
-                    )}
-                    {canMakeTheme && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          convertToTheme(node);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Make theme
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        openReminderPanel(node);
-                        setActionMenuNodeId(null);
-                      }}
-                    >
-                      Remind me
-                    </button>
-                    {!normalizedSearch && index > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          indentRowUnderPrevious(node.id);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Indent under previous
-                      </button>
-                    )}
-                    {!normalizedSearch && index > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          nestPreviousUnder(node.id);
-                          setActionMenuNodeId(null);
-                        }}
-                      >
-                        Pull previous row under this
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="outliner-delete"
-                      onClick={() => {
-                        deleteAndRecoverFocus(node.id);
-                        setActionMenuNodeId(null);
-                      }}
-                    >
-                      Delete row
-                    </button>
-                  </div>
+                  <PlannerModal title={isThemeLinked ? "Theme details" : node.isGroup ? "Group details" : isRoutineLinked ? "Routine details" : node.tag === "habit" ? "Habit details" : node.tag === "task" ? "Task details" : node.tag === 'link' ? 'Link details' : "Note details"} onClose={() => setActionMenuNodeId(null)}>
+                    <div className="outliner-detail-tabs" role="tablist" aria-label="Item details">
+                      {(["Details", "Organize", "Settings"] as const).map((tab, tabIndex, tabs) => (
+                        <button key={tab} type="button" role="tab" id={`outline-tab-${node.id}-${tab}`} aria-controls={`outline-panel-${node.id}`} aria-selected={detailTab === tab} tabIndex={detailTab === tab ? 0 : -1}
+                          onClick={() => setDetailTab(tab)}
+                          onKeyDown={event => {
+                            const next = event.key === "ArrowRight" ? (tabIndex + 1) % tabs.length : event.key === "ArrowLeft" ? (tabIndex + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+                            if (next < 0) return;
+                            event.preventDefault();
+                            setDetailTab(tabs[next]);
+                            (event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus();
+                          }}>{tab}</button>
+                      ))}
+                    </div>
+                    <div className="outliner-action-menu" role="tabpanel" id={`outline-panel-${node.id}`} aria-labelledby={`outline-tab-${node.id}-${detailTab}`}>
+                      <p className="outliner-item-name">{node.text || "Untitled"}</p>
+                      {detailTab === "Details" && <>
+                        {node.tag === 'link' ? <ReadingLinkEditor key={node.id} title={node.text} link={node.readingLink} onSave={(title, link) => onSaveReadingLink(node.id, title, link)} /> : <label>Name<input value={node.text} onChange={event => updateRowText(node, event.target.value)} onPaste={event => {
+                          const url = publicWebUrl(event.clipboardData.getData('text/plain'));
+                          if (url && !node.linked && !node.isGroup && node.tag !== 'habit') {
+                            event.preventDefault();
+                            updateRow(node.id, { text: readingSite(url), tag: 'link', readingLink: { url } });
+                          }
+                        }} onBlur={() => maybeSyncLinkedRename(node)} /></label>}
+                        {isRoutineLinked && <button type="button" onClick={() => { onOpenLinked(node.linked!); setActionMenuNodeId(null); }}><ListChecks size={18} />Open routine</button>}
+                        {!isThemeLinked && !isRoutineLinked && <OutlineTypePicker key={node.id} node={fullNode} onChange={kind => onChangeType(node.id, kind)} onLoadPlanning={onLoadPlanning} onUnlinkPlanning={onUnlinkPlanning} />}
+                        {!isThemeLinked && !node.isGroup && !isDoneRow && <button type="button" onClick={() => { onPlan(fullNode); setActionMenuNodeId(null); }}><CalendarDays size={18} />Plan</button>}
+                        <button type="button" onClick={() => { openRowNote(fullNode); setActionMenuNodeId(null); }}><StickyNote size={18} />Notes</button>
+                        {onAddToRoutine && !isThemeLinked && !node.isGroup && !isRoutineLinked && <button type="button" onClick={() => { onAddToRoutine(fullNode); setActionMenuNodeId(null); }}><ListChecks size={18} />Add to routine</button>}
+                        {(node.tag === "task" || node.tag === 'link') && <button type="button" onClick={() => { onToggleTask ? onToggleTask(fullNode) : updateRow(node.id, { taskDone: !node.taskDone }); setActionMenuNodeId(null); }}><Check size={18} />{node.taskDone ? "Mark unfinished" : node.tag === 'link' ? 'Mark read' : "Mark complete"}</button>}
+                        <button type="button" className="outliner-delete" onClick={() => trashRow(node.id)}><Trash2 size={18} />{fullNode.children.length ? "Move item and nested items to Trash" : "Move to Trash"}</button>
+                      </>}
+                      {detailTab === "Organize" && <>
+                        {!isThemeLinked && !node.isGroup && !isDoneRow && <button type="button" onClick={() => { onPlan(fullNode); setActionMenuNodeId(null); }}><CalendarDays size={18} />Plan</button>}
+                        {onAddToRoutine && !isThemeLinked && !node.isGroup && !isRoutineLinked && <button type="button" onClick={() => { onAddToRoutine(fullNode); setActionMenuNodeId(null); }}><ListChecks size={18} />Add to routine</button>}
+                        {!isThemeLinked && !isRoutineLinked && <button type="button" onClick={() => setDetailTab('Details')}>Change type</button>}
+                        <button type="button" onClick={() => { groupDraft.current = null; setGroupName(''); setGroupError(''); setGroupParentId(node.id); setActionMenuNodeId(null); }}><Folder size={18} />Add subgroup</button>
+                        <button type="button" onClick={() => { addChildWithFocus(node.id); setActionMenuNodeId(null); }}><Plus size={18} />Add inside</button>
+                        <button type="button" onClick={() => { addSiblingWithFocus(node.id); setActionMenuNodeId(null); }}><Plus size={18} />Add after</button>
+                        <button type="button" onClick={() => openParentMovePanel(fullNode)}>Move to...</button>
+                        {nodeLocation.path.length > 1 && <button type="button" onClick={() => moveRowOut(fullNode)}><Outdent size={18} />Move out one level</button>}
+                        <button type="button" onClick={() => openCreateParentPanel(fullNode)}>Place in a new group</button>
+                        {hasChildren && <button type="button" onClick={() => focusRow(fullNode)}>Open just this branch</button>}
+                        {category === "all" && reviewFilter === "all" && !normalizedSearch && index > 0 && previousSibling?.id === items[index - 1].id && <>
+                          <button type="button" onClick={() => { indentRowUnderPrevious(node.id); setActionMenuNodeId(null); }}>Move inside previous item</button>
+                          <button type="button" onClick={() => { nestPreviousUnder(node.id); setActionMenuNodeId(null); }}>Move previous item inside this</button>
+                        </>}
+                        <button type="button" className="outliner-delete" onClick={() => trashRow(node.id)}><Trash2 size={18} />{fullNode.children.length ? "Move item and nested items to Trash" : "Move to Trash"}</button>
+                      </>}
+                      {detailTab === "Settings" && <>
+                        {node.linked && <button type="button" onClick={() => { onOpenLinked(node.linked!); setActionMenuNodeId(null); }}>{isThemeLinked ? "Theme settings" : isHabitLinked ? "Habit history" : isRoutineLinked ? "Open routine" : "Open planned item"}</button>}
+                        {isHabitLinked && <button type="button" onClick={() => { setHabitSettingsNodeId(node.id); setActionMenuNodeId(null); }}>Habit goal and frequency</button>}
+                        {!node.linked && node.tag !== "habit" && habitLinkTargets.length > 0 && <button type="button" onClick={() => { openHabitLinkPanel(fullNode); setActionMenuNodeId(null); }}>Link existing habit</button>}
+                        {!node.linked && !node.isGroup && node.tag !== "habit" && <button type="button" onClick={() => { convertToBlock(fullNode, null); setActionMenuNodeId(null); }}>Send to Waiting</button>}
+                        {!isThemeLinked && !node.isGroup && <button type="button" onClick={() => { openPlanPanel(fullNode); setActionMenuNodeId(null); }}>Day preference</button>}
+                        {hasChildren && !node.linked && <button type="button" onClick={() => { createRoutineFromRow(fullNode); setActionMenuNodeId(null); }}>Make routine</button>}
+                        {canMakeTheme && <button type="button" onClick={() => { convertToTheme(fullNode); setActionMenuNodeId(null); }}>Make theme</button>}
+                        <button type="button" onClick={() => { openReminderPanel(fullNode); setActionMenuNodeId(null); }}>Reminder</button>
+                      </>}
+                    </div>
+                  </PlannerModal>
                 )}
               </div>
-            </div>
+            </div>}
           </div>
+          {node.tag === 'link' && node.readingLink && <div className="outline-reading-preview" style={{ marginLeft: `${depth * 18 + 44}px` }}><ReadingLinkCard link={node.readingLink} title={node.text} /></div>}
           {node.reminderAt && (
             <div
               className={`outliner-reminder-pill ${node.reminderKind === "pesky" ? "outliner-reminder-pill--pesky" : ""}`}
@@ -1547,36 +1534,17 @@ export default function PlanningOutlinerPanel({
             </div>
           )}
           {parentMoveNodeId === node.id && (
-            <div className="outliner-parent-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
-              <span>Parent row</span>
-              <select
-                value={
-                  selectedParentNodeId === OUTLINER_TOP_LEVEL_PARENT ||
-                  availableParentOptions.some((option) => option.id === selectedParentNodeId)
-                    ? selectedParentNodeId
-                    : OUTLINER_TOP_LEVEL_PARENT
-                }
-                onChange={(event) => setSelectedParentNodeId(event.target.value)}
-              >
-                <option value={OUTLINER_TOP_LEVEL_PARENT}>Top level</option>
-                {availableParentOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={() => saveParentMove(node)}>
-                Move
-              </button>
-              <button type="button" className="outliner-reminder-clear" onClick={() => setParentMoveNodeId(null)}>
-                Cancel
-              </button>
-            </div>
+            <OutlineMovePicker nodes={nodes} ids={[node.id]}
+              summary={`${node.text}${outlineBranchItems(fullNode.children).length ? ` and ${outlineBranchItems(fullNode.children).length} nested item${outlineBranchItems(fullNode.children).length === 1 ? '' : 's'}` : ''}`}
+              currentParentId={nodeLocation.path[nodeLocation.path.length - 2]?.id ?? null}
+              onMoveOut={nodeLocation.path.length > 1 ? () => moveRowOut(fullNode) : undefined}
+              onMove={parentId => saveParentMove(fullNode, parentId)} onClose={() => setParentMoveNodeId(null)} />
           )}
           {createParentNodeId === node.id && (
-            <div className="outliner-parent-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
-              <span>New parent</span>
+            <PlannerModal title="New group" onClose={() => setCreateParentNodeId(null)}><div className="outliner-parent-panel outliner-parent-sheet">
+              <span>Group name</span>
               <input
+                aria-label="Group name"
                 type="text"
                 value={createParentName}
                 onChange={(event) => setCreateParentName(event.target.value)}
@@ -1585,7 +1553,7 @@ export default function PlanningOutlinerPanel({
                   event.preventDefault();
                   saveCreatedParent(node);
                 }}
-                placeholder="Parent row name..."
+                placeholder="Group name..."
               />
               <button type="button" onClick={() => saveCreatedParent(node)} disabled={!createParentName.trim()}>
                 Create
@@ -1593,7 +1561,7 @@ export default function PlanningOutlinerPanel({
               <button type="button" className="outliner-reminder-clear" onClick={() => setCreateParentNodeId(null)}>
                 Cancel
               </button>
-            </div>
+            </div></PlannerModal>
           )}
           {reminderNodeId === node.id && (
             <div className="outliner-reminder-panel" style={{ marginLeft: `${depth * 18 + 44}px` }}>
@@ -1751,9 +1719,9 @@ export default function PlanningOutlinerPanel({
               </div>
             </div>
           )}
-          {node.tag === "habit" && !isHabitLinked && (
+          {node.tag === "habit" && (!isHabitLinked || habitSettingsNodeId === node.id) && (
             <div className="outliner-habit-settings outliner-habit-setup" style={{ marginLeft: `${depth * 18 + 44}px` }}>
-              <span>Theme</span>
+              {!isHabitLinked && <><span>Theme</span>
               <select
                 value={habitThemeId}
                 onChange={(event) =>
@@ -1769,7 +1737,7 @@ export default function PlanningOutlinerPanel({
                     {theme.name}
                   </option>
                 ))}
-              </select>
+              </select></>}
               <span>Frequency</span>
               <select
                 value={node.frequency}
@@ -1808,51 +1776,62 @@ export default function PlanningOutlinerPanel({
                   aria-label="Target count"
                 />
               )}
-              <button type="button" onClick={() => convertToHabit(node, habitThemeId)}>
+              <button type="button" onClick={async () => {
+                if (isHabitLinked) {
+                  const saved = await onSaveHabitSettings(node);
+                  setPanelStatus(saved ? "Habit saved" : "Could not save habit. Please try again.");
+                  if (saved) setHabitSettingsNodeId(null);
+                } else await convertToHabit(node, habitThemeId);
+              }}>
                 Save habit
               </button>
-              <button type="button" onClick={() => convertToHabitBlock(node, habitThemeId)}>
+              {!isHabitLinked && <button type="button" onClick={() => convertToHabitBlock(node, habitThemeId)}>
                 Save + board
-              </button>
-              {habitLinkTargets.length > 0 && (
+              </button>}
+              {!isHabitLinked && habitLinkTargets.length > 0 && (
                 <button type="button" className="secondary" onClick={() => openHabitLinkPanel(node)}>
                   Link existing
                 </button>
               )}
             </div>
           )}
-          {hasChildren && (forceExpanded || !node.collapsed) && renderRows(node.children, depth + 1, forceExpanded, rowThemeId)}
+          {hasChildren && (forceExpanded || !node.collapsed) && <div className="outliner-children" style={{ '--branch-depth': depth } as React.CSSProperties}>
+            {isCardRoot ? outlineCardSections(node.children, fullNode.children).map(section => (
+              <div className={`outliner-card-section outliner-card-section--${section.key}`} key={section.key}>
+                {section.label && <h4>{section.label}</h4>}
+                {renderRows(section.items, depth + 1, forceExpanded, rowThemeId)}
+              </div>
+            )) : renderRows(node.children, depth + 1, forceExpanded, rowThemeId)}
+          </div>}
+          {isCardRoot && !selecting && <div className="outliner-group-footer">
+            <button type="button" onClick={() => addChildWithFocus(node.id)} aria-label={`Add item inside ${node.text}`}><Plus size={18} />Add item</button>
+            {focusNodeId !== node.id && <button type="button" onClick={() => focusRow(fullNode)} aria-label={`Open ${node.text}`}>Open<ChevronRight size={18} /></button>}
+          </div>}
         </div>
 	      );
 	    });
 
   const filterOptions: Array<{ id: ReviewFilter; label: string }> = [
-    { id: "all", label: "All" },
+    { id: "all", label: "All active items" },
     { id: "review", label: "Review" },
     { id: "schedule", label: "Schedule" },
     { id: "today", label: "Today" },
     { id: "overdue", label: "Overdue" },
     { id: "waiting", label: "Waiting" },
+    { id: "completed", label: "Completed" },
+    { id: "trash", label: `Trash (${trashRoots.length})` },
   ];
-  const filterNoticeText =
-    reviewFilter === "review"
-      ? "Review is showing rows with reminders, plan dates, tasks, habits, links, or notes."
-      : reviewFilter === "schedule"
-        ? "Schedule is showing rows that are ready to place on the planner."
-        : reviewFilter === "today"
-          ? "Today is showing rows dated or reminded for today."
-          : reviewFilter === "overdue"
-            ? "Overdue is showing unfinished rows whose plan date or reminder has passed."
-            : reviewFilter === "waiting"
-              ? "Waiting is showing outline rows already linked to waiting/planner blocks."
-              : normalizedSearch
-                ? "Search is hiding rows that do not match."
-                : "You are focused inside one row.";
-  const emptyText = normalizedSearch
+  const filterNoticeText = [
+    reviewFilter !== "all" ? filterOptions.find(filter => filter.id === reviewFilter)?.label : "",
+    category !== "all" && reviewFilter !== "trash" ? (category === "task" ? "Tasks" : category === "note" ? "Notes" : category === 'link' ? 'Links' : "Habits") : "",
+    normalizedSearch ? `Search: ${searchQuery.trim()}` : "",
+    focusNode ? `Inside: ${focusNode.text}` : "",
+  ].filter(Boolean).join(" / ");
+  const emptyText = reviewFilter === "trash" && !normalizedSearch ? "Trash is empty." : normalizedSearch
     ? "No matching rows."
     : reviewFilter !== "all"
       ? "Nothing in this view at this level."
-      : "Add a row to start planning at this level.";
+      : "No items here yet.";
   const footerQualifier = normalizedSearch
     ? "matching"
     : reviewFilter !== "all"
@@ -1860,20 +1839,30 @@ export default function PlanningOutlinerPanel({
       : "in view";
 
   return (
-    <div className={`outliner-panel outliner-panel--${presentation}`} ref={panelRef}>
+    <div className={`outliner-panel outliner-panel--${presentation}${cardLayout ? ' outliner-panel--cards' : ''}`} ref={panelRef}
+      onDragOver={event => { if (!(event.target instanceof Element) || !event.target.closest('.outliner-row')) setDropPreview(null); }}
+      onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropPreview(null); }}>
+      <span className="outliner-drag-announcement" role="status" aria-live="polite" aria-atomic="true">
+        {dropPreview ? `Move ${findNode(nodes, draggingNodeId || '')?.node.text || 'item'} ${dropPreview.position} ${findNode(nodes, dropPreview.id)?.node.text || 'item'}` : ''}
+      </span>
       <div className="outliner-header">
         <div>
-          <span className="outliner-title">Planning Outliner</span>
-          <span className="outliner-subtitle">Nest ideas from broad to specific.</span>
+          <h2 className="outliner-title">Outline</h2>
         </div>
-        <button className="outliner-header-btn" type="button" onClick={onClose} title="Close">
+        {onAdd && <button className="outliner-capture" type="button" onClick={() => onAdd([...focusPath].reverse().find(isThemeRow)?.linked?.themeId)}><Plus size={18} />Capture</button>}
+        {reviewFilter !== "trash" && <button type="button" className="outliner-select-toggle" aria-pressed={selecting} title={selecting ? "Done selecting" : "Select items"} aria-label={selecting ? "Done selecting" : "Select items"} onClick={() => { setSelecting(!selecting); setSelectedIds(new Set()); setActionMenuNodeId(null); }}>{selecting ? "Done selecting" : <ListChecks size={20} />}</button>}
+        {presentation !== "inline" && <button className="outliner-header-btn" type="button" onClick={onClose} title="Close">
           x
-        </button>
+        </button>}
       </div>
 
-      <div className="outliner-breadcrumbs">
+      <div className="outliner-controls">
+      <label className="outliner-theme-jump">Jump to<select value={[...focusPath].reverse().find(node => navigationItems.some(item => item.id === node.id))?.id ?? ""} onChange={event => { showAllRows(); const node = navigationItems.find(item => item.id === event.target.value); if (node) focusRow(node); }}><option value="">Whole outline</option>{navigationItems.map(node => <option key={node.id} value={node.id}>{findNode(activeNodes, node.id)?.path.map(item => item.text || 'Untitled').join(' / ')}</option>)}</select></label>
+      {reviewFilter !== "trash" && <div className="outliner-categories" role="group" aria-label="Outline category">{([['all', 'All'], ['task', 'Tasks'], ['note', 'Notes'], ['habit', 'Habits'], ['link', 'Links']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={category === value} onClick={() => setCategory(value)}>{label}</button>)}</div>}
+
+      <div className={`outliner-breadcrumbs ${focusNode ? "" : "outliner-breadcrumbs--root"}`}>
         <button type="button" onClick={() => setFocusNodeId(null)}>
-          All plans
+          Outline
         </button>
         {focusPath.map((node) => (
           <button key={node.id} type="button" onClick={() => setFocusNodeId(node.id)}>
@@ -1887,7 +1876,8 @@ export default function PlanningOutlinerPanel({
 	          type="search"
 	          value={searchQuery}
 	          onChange={(event) => setSearchQuery(event.target.value)}
-	          placeholder="Search rows, notes, tasks, habits, reminders..."
+	          placeholder="Search Outline"
+              aria-label="Search Outline"
 	        />
 	        {searchQuery && (
 	          <button type="button" onClick={() => setSearchQuery("")}>
@@ -1896,33 +1886,57 @@ export default function PlanningOutlinerPanel({
 	        )}
 	      </div>
 
-      <div className="outliner-filter-tabs">
-        {filterOptions.map((filter) => (
-          <button
-            key={filter.id}
-            type="button"
-            className={reviewFilter === filter.id ? "active" : ""}
-            onClick={() => setReviewFilter(filter.id)}
-          >
-            {filter.label}
+      <label className="outliner-filter-select">View<select value={reviewFilter} onChange={event => setReviewFilter(event.target.value as ReviewFilter)}>{filterOptions.map(filter => <option key={filter.id} value={filter.id}>{filter.label}</option>)}</select></label>
+      </div>
+
+      <div className="outliner-workbar">
+        <div className="outliner-workbar-context">
+          <span>{focusNode ? "Focused outline" : "Whole outline"}</span>
+          <strong>{visibleCount} item{visibleCount === 1 ? "" : "s"}</strong>
+        </div>
+        {reviewFilter !== "trash" && <div className="outliner-workbar-actions">
+          <button type="button" onClick={() => setFocusedTreeCollapsed(false)} title="Expand all" aria-label="Expand all">
+            <ChevronsUpDown size={18} />
           </button>
-        ))}
+          <button type="button" onClick={() => setFocusedTreeCollapsed(true)} title="Collapse all" aria-label="Collapse all">
+            <ChevronsDownUp size={18} />
+          </button>
+        </div>}
       </div>
 
       {filteredViewActive && (
         <div className="outliner-filter-notice">
           <span>{filterNoticeText}</span>
 	          <button type="button" onClick={showAllRows}>
-	            Show all
+            Show all items
           </button>
         </div>
       )}
 
+      {selecting && reviewFilter !== "trash" && <section className="outliner-selection-bar" aria-label="Selected items">
+        <strong role="status">{selectedIds.size} selected</strong>
+        <div>
+          <button type="button" onClick={() => setSelectedIds(new Set(selectableItems.map(node => node.id)))}>Select shown</button>
+          <button type="button" onClick={() => setSelectedIds(new Set(selectableItems.filter(node => (node.tag === "task" || node.tag === 'link') && node.taskDone).map(node => node.id)))}>Select completed</button>
+          <button type="button" disabled={!selectedIds.size} onClick={() => setSelectedIds(new Set())}>Clear selection</button>
+        </div>
+        <div>
+          <button type="button" disabled={!selectedRoots.length} onClick={() => setPendingAction({ kind: "move", ids: [...selectedIds] })}>Move to...</button>
+          <button type="button" disabled={!selectedRoots.length} onClick={() => setPendingAction({ kind: "trash", ids: [...selectedIds] })}><Trash2 size={18} />Move to Trash</button>
+        </div>
+      </section>}
+
       {panelStatus && (
-        <div className="outliner-status-note">
+        <div className="outliner-status-note" role="status">
           {panelStatus}
         </div>
       )}
+      {lastTrashedIds.some(id => findNode(nodes, id)?.node.trashedAt) && <div className="outliner-trash-status"><span>Last removal</span><button type="button" onClick={undoTrash}><RotateCcw size={16} />Undo</button></div>}
+      {lastMove && <div className="outliner-move-status" role="group" aria-label="Last Outline move">
+        <span>Last move: <strong>{lastMove.label}</strong></span>
+        <button type="button" onClick={undoLastMove}><RotateCcw size={16} />Undo move</button>
+        <button type="button" className="outliner-dismiss-undo" title="Dismiss Undo move" aria-label="Dismiss Undo move" onClick={() => setLastMove(null)}><X size={18} /></button>
+      </div>}
 
       {focusNode && (
         <div className="outliner-focus-card">
@@ -1931,27 +1945,75 @@ export default function PlanningOutlinerPanel({
             <strong>{focusNode.text.trim() || "Untitled"}</strong>
           </div>
           <button type="button" onClick={() => setFocusNodeId(null)}>
-            All rows
+            All items
           </button>
         </div>
       )}
 
 	      <div className="outliner-body">
-	        {displayedNodes.length === 0 ? (
+	        {loading ? <div className="outliner-empty">Loading outline...</div> : displayedNodes.length === 0 ? (
 	          <div className="outliner-empty">{emptyText}</div>
-	        ) : (
-	          renderRows(displayedNodes, 0, !!normalizedSearch || reviewFilter !== "all")
+	        ) : reviewFilter === "trash" ? displayedNodes.map(node => (
+            <div className="outliner-trash-row" key={node.id}>
+              <div><strong>{node.text || "Untitled"}</strong>{node.children.length > 0 && <small>Includes nested items</small>}</div>
+              <button type="button" title={`Restore ${node.text}`} aria-label={`Restore ${node.text}`} onClick={() => restoreRow(node.id)}><RotateCcw size={18} />Restore</button>
+            </div>
+          )) : cardLayout ? <>
+            {groupedNodes.length > 0 && <div className={`outliner-group-grid${focusNode ? ' outliner-group-grid--focused' : ''}`}>
+              {renderRows(groupedNodes, 0, !!normalizedSearch || reviewFilter !== 'all' || category !== 'all')}
+            </div>}
+            {looseNodes.length > 0 && <section className="outliner-ungrouped" aria-label={focusNode ? 'Focused item' : 'Ungrouped'}>
+              {!focusNode && <h3>Ungrouped <span>{looseNodes.length}</span></h3>}
+              {renderRows(looseNodes, 0, !!normalizedSearch || reviewFilter !== 'all' || category !== 'all')}
+            </section>}
+          </> : (
+	          renderRows(displayedNodes, 0, !!normalizedSearch || reviewFilter !== "all" || category !== "all")
 	        )}
 	      </div>
 
 	      <div className="outliner-footer">
 	        <span>
-	          {visibleCount} row{visibleCount === 1 ? "" : "s"} {footerQualifier}
+          {visibleCount} item{visibleCount === 1 ? "" : "s"} {footerQualifier}
 	        </span>
-        <button type="button" onClick={addRootOrFocusedChild}>
-          + Add row here
-        </button>
+        {reviewFilter !== "trash" && <button type="button" onClick={() => onAdd ? onAdd([...focusPath].reverse().find(isThemeRow)?.linked?.themeId) : addRootOrFocusedChild()} disabled={loading}>
+          <Plus size={18} /> Capture
+        </button>}
       </div>
+      {groupParentId && <PlannerModal title="Add subgroup" onClose={() => setGroupParentId(null)} busy={groupSaving}>
+        <form className="capture-form" onSubmit={async event => {
+          event.preventDefault();
+          if (groupSaving || !groupName.trim()) return;
+          if (!findNode(nodesRef.current, groupParentId)) { setGroupError('That parent is no longer available.'); return; }
+          setGroupSaving(true); setGroupError('');
+          const draft = groupDraft.current ?? { ...createOutlineNode(groupName.trim()), isGroup: true };
+          groupDraft.current = draft;
+          try {
+            const current = nodesRef.current;
+            await onNodesChange?.(findNode(current, draft.id) ? current : addChild(current, groupParentId, draft));
+            showAllRows(); setGroupParentId(null); setPendingFocusNodeId(draft.id);
+          } catch { setGroupError('Could not save the group. Please retry.'); }
+          finally { setGroupSaving(false); }
+        }}>
+          <label>Group name<input autoFocus required value={groupName} disabled={groupSaving || !!groupDraft.current} onChange={event => setGroupName(event.target.value)} placeholder="Kitchen" /></label>
+          <p>Inside {findNode(nodesRef.current, groupParentId)?.node.text}</p>
+          {groupError && <p role="alert">{groupError}</p>}
+          <footer><button type="button" disabled={groupSaving} onClick={() => setGroupParentId(null)}>Cancel</button><button type="submit" disabled={groupSaving || !groupName.trim()}>{groupSaving ? 'Saving...' : groupError ? 'Retry' : 'Add group'}</button></footer>
+        </form>
+      </PlannerModal>}
+      {pendingAction?.kind === 'move' && <OutlineMovePicker nodes={nodes} ids={pendingAction.ids}
+        summary={`${pendingRoots.length} selected items${pendingItems.length > pendingRoots.length ? ` and ${pendingItems.length - pendingRoots.length} nested items` : ''}`}
+        onMove={confirmBulkMove} onClose={() => setPendingAction(null)} />}
+      {pendingAction?.kind === 'trash' && <PlannerModal title="Move to Trash?" onClose={() => setPendingAction(null)}>
+        <div className="outliner-batch-dialog">
+          <p className="outliner-action-summary">{pendingRoots.length} selected item{pendingRoots.length === 1 ? "" : "s"}{pendingItems.length > pendingRoots.length ? ` and ${pendingItems.length - pendingRoots.length} nested items` : ""}</p>
+          <ul>{pendingRoots.map(node => <li key={node.id}>{node.text || "Untitled"}</li>)}</ul>
+          <>
+            {pendingUnfinishedCount > 0 && <p>{pendingUnfinishedCount} unfinished task{pendingUnfinishedCount === 1 ? " is" : "s are"} included.</p>}
+            <p>Items can be restored from Trash. Existing scheduled blocks and habit history will be kept.</p>
+          </>
+          <footer><button type="button" onClick={() => setPendingAction(null)}>Cancel</button><button type="button" disabled={!pendingRoots.length} onClick={() => trashItems(pendingAction.ids)}>Move to Trash</button></footer>
+        </div>
+      </PlannerModal>}
     </div>
   );
 }

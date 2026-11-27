@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import type { HabitProgressRecord } from "./habitProgress";
 
 export type PlanningTemplate = {
   id: string;
@@ -419,6 +420,36 @@ export const database = {
   },
 
   blocks: {
+    async getByIds(userId: string, ids: string[]) {
+      if (!ids.length) return [] as Block[];
+      const { data, error } = await supabase.from("blocks").select("*").eq("user_id", userId).in("id", [...new Set(ids)]);
+      if (error) throw error;
+      return data as Block[];
+    },
+
+    async ensureWithId(userId: string, id: string, block: Omit<Block, "id" | "user_id" | "created_at" | "updated_at">) {
+      // A retry must not overwrite notes, completion, or edits on an existing occurrence.
+      const { error } = await supabase.from("blocks").upsert({ ...block, id, user_id: userId }, { onConflict: "id", ignoreDuplicates: true });
+      if (error) throw error;
+    },
+
+    async getHabitProgress(userId: string): Promise<HabitProgressRecord[]> {
+      const records: HabitProgressRecord[] = [];
+      const pageSize = 500;
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await supabase
+          .from("blocks")
+          .select("id, habit_id, completed, location_type, week_start_date, day_index, block_habit_credits(habit_id), block_activity_logs(habit_id, completed_at)")
+          .eq("user_id", userId)
+          .eq("completed", true)
+          .order("id")
+          .range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        records.push(...(data as HabitProgressRecord[]));
+        if (data.length < pageSize) return records;
+      }
+    },
+
     async getAll(userId: string) {
       const { data, error } = await supabase
         .from("blocks")
@@ -846,6 +877,13 @@ export const database = {
   },
 
   blockHabitCredits: {
+    async ensure(userId: string, blockId: string, habitId: string) {
+      const { error } = await supabase.from('block_habit_credits').upsert(
+        { user_id: userId, block_id: blockId, habit_id: habitId },
+        { onConflict: 'block_id,habit_id', ignoreDuplicates: true }
+      );
+      if (error) throw error;
+    },
     async getByBlock(blockId: string) {
       const { data, error } = await supabase
         .from("block_habit_credits")
@@ -934,7 +972,8 @@ export const database = {
       habitId: string,
       weekStartDate: string | null,
       dayIndex: number | null,
-      timeIndex: number | null
+      timeIndex: number | null,
+      completedAt = new Date().toISOString()
     ) {
       const { data, error } = await supabase
         .from("block_activity_logs")
@@ -945,7 +984,7 @@ export const database = {
           week_start_date: weekStartDate,
           day_index: dayIndex,
           time_index: timeIndex,
-          completed_at: new Date().toISOString(),
+          completed_at: completedAt,
         })
         .select()
         .single();
@@ -1295,6 +1334,11 @@ export const database = {
   },
 
   blockTasks: {
+    async ensureWithIds(userId: string, blockId: string, items: { id: string; label: string; sort_order: number }[]) {
+      if (!items.length) return;
+      const { error } = await supabase.from('block_tasks').upsert(items.map(item => ({ ...item, user_id: userId, block_id: blockId, completed: false })), { onConflict: 'id', ignoreDuplicates: true });
+      if (error) throw error;
+    },
     async getByBlock(blockId: string) {
       const { data, error } = await supabase
         .from("block_tasks")

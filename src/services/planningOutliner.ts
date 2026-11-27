@@ -1,8 +1,25 @@
 import { supabase } from "../lib/supabase";
+import { hydrateOutline, isThemeRow, normalizeOutlinePlans, serializeOutline } from "./outlineModel";
+import type { ReadingLink } from './readingLinks';
 
-export type OutlineTag = "note" | "task" | "habit";
+export type OutlineTag = "note" | "task" | "habit" | "link";
 export type OutlineFrequency = "daily" | "weekly" | "monthly" | "none";
 export type OutlineReminderKind = "regular" | "pesky";
+
+export type OutlinePlan = {
+  id: string;
+  scope: "week" | "day";
+  // Local calendar date; week plans use the Monday starting that week.
+  date: string;
+  targetCount: number | null;
+  scheduledBlockIds: string[];
+  parentPlanId?: string;
+  // Preserve a session's identity when its time is released back to a loose plan.
+  occurrenceBlockId?: string;
+  sessionInitialized?: true;
+  // Temporary bridge while existing controls still edit planDate.
+  legacyPlanDate?: true;
+};
 
 export type OutlineLink = {
   habitId?: string;
@@ -19,6 +36,9 @@ export type OutlineNode = {
   collapsed: boolean;
   tag: OutlineTag;
   taskDone: boolean;
+  isGroup?: boolean;
+  readingLink?: ReadingLink;
+  trashedAt?: string | null;
   frequency: OutlineFrequency;
   target: number;
   reminderAt: string | null;
@@ -26,6 +46,7 @@ export type OutlineNode = {
   reminderKind: OutlineReminderKind;
   reminderIntervalMinutes: number | null;
   planDate: string | null;
+  plans: OutlinePlan[];
   linked: OutlineLink | null;
   draftNote: string;
   draftNoteUpdatedAt: string | null;
@@ -120,6 +141,7 @@ export const createOutlineNode = (text = "New row"): OutlineNode => ({
   reminderKind: "regular",
   reminderIntervalMinutes: null,
   planDate: null,
+  plans: [],
   linked: null,
   draftNote: "",
   draftNoteUpdatedAt: null,
@@ -136,36 +158,43 @@ const defaultNodes = (): OutlineNode[] => {
   return [{ ...createOutlineNode("Look good"), children: [exercise] }];
 };
 
-export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode => ({
-  id: node.id ?? createOutlineId("outline"),
-  text: node.text ?? "New row",
-  collapsed: node.collapsed ?? false,
-  tag: node.tag ?? "note",
-  taskDone: node.taskDone ?? false,
-  frequency: node.frequency ?? "weekly",
-  target: node.target ?? 1,
-  reminderAt: node.reminderAt ?? null,
-  reminderDismissedAt: node.reminderDismissedAt ?? null,
-  reminderKind: node.reminderKind ?? "regular",
-  reminderIntervalMinutes: node.reminderIntervalMinutes ?? null,
-  planDate: node.planDate ?? null,
-  linked: node.linked
-    ? {
-        habitId: node.linked.habitId,
-        themeId: node.linked.themeId,
-        blockId: node.linked.blockId,
-        routineId: node.linked.routineId,
-        label: node.linked.label ?? node.text ?? "Untitled",
-        renameDeclinedFor: node.linked.renameDeclinedFor ?? null,
-      }
-    : null,
-  draftNote: node.draftNote ?? "",
-  draftNoteUpdatedAt: node.draftNoteUpdatedAt ?? null,
-  children: Array.isArray(node.children) ? node.children.map(normalizeOutlineNode) : [],
-});
+export const normalizeOutlineNode = (node: Partial<OutlineNode>): OutlineNode => {
+  const id = node.id ?? createOutlineId("outline");
+  return {
+    id,
+    text: node.text ?? "New row",
+    collapsed: node.collapsed ?? false,
+    tag: node.tag ?? "note",
+    isGroup: node.isGroup === true,
+    readingLink: node.readingLink ? { ...node.readingLink } : undefined,
+    taskDone: node.taskDone ?? false,
+    trashedAt: node.trashedAt ?? null,
+    frequency: node.frequency ?? "weekly",
+    target: node.target ?? 1,
+    reminderAt: node.reminderAt ?? null,
+    reminderDismissedAt: node.reminderDismissedAt ?? null,
+    reminderKind: node.reminderKind ?? "regular",
+    reminderIntervalMinutes: node.reminderIntervalMinutes ?? null,
+    planDate: node.planDate ?? null,
+    plans: normalizeOutlinePlans(node.plans, id, node.planDate),
+    linked: node.linked
+      ? {
+          habitId: node.linked.habitId,
+          themeId: node.linked.themeId,
+          blockId: node.linked.blockId,
+          routineId: node.linked.routineId,
+          label: node.linked.label ?? node.text ?? "Untitled",
+          renameDeclinedFor: node.linked.renameDeclinedFor ?? null,
+        }
+      : null,
+    draftNote: node.draftNote ?? "",
+    draftNoteUpdatedAt: node.draftNoteUpdatedAt ?? null,
+    children: Array.isArray(node.children) ? node.children.map(normalizeOutlineNode) : [],
+  };
+};
 
 export const cloneOutlineNodes = (nodes: OutlineNode[]): OutlineNode[] =>
-  nodes.map((node) => ({ ...node, children: cloneOutlineNodes(node.children) }));
+  nodes.map((node) => ({ ...node, plans: normalizeOutlinePlans(node.plans, node.id, node.planDate), children: cloneOutlineNodes(node.children) }));
 
 const parseLegacyLocalStorage = (userId: string): OutlineNode[] | null => {
   try {
@@ -179,15 +208,25 @@ const parseLegacyLocalStorage = (userId: string): OutlineNode[] | null => {
 };
 
 export const loadPlanningOutliner = async (userId: string, seedDefault = true): Promise<OutlineNode[]> => {
+  await outlineSaveQueues.get(userId)?.catch(() => {});
   const { data, error } = await supabase
     .from("planning_outliner_data")
     .select("nodes")
     .eq("user_id", userId)
     .maybeSingle();
 
+  if (error) throw error;
+
   if (!error && data) {
     const parsed = data.nodes as Partial<OutlineNode>[];
-    return Array.isArray(parsed) ? parsed.map(normalizeOutlineNode) : seedDefault ? defaultNodes() : [];
+    const nodes = Array.isArray(parsed) ? parsed.map(normalizeOutlineNode) : seedDefault ? defaultNodes() : [];
+    const [themes, habits] = await Promise.all([
+      supabase.from("themes").select("id, name").eq("user_id", userId),
+      supabase.from("habits").select("id, name, theme_id, frequency, target_per_week").eq("user_id", userId),
+    ]);
+    if (themes.error) throw themes.error;
+    if (habits.error) throw habits.error;
+    return hydrateOutline(nodes, themes.data, habits.data);
   }
 
   // First load — migrate from localStorage if present
@@ -195,16 +234,24 @@ export const loadPlanningOutliner = async (userId: string, seedDefault = true): 
   if (legacy !== null) {
     await savePlanningOutliner(userId, legacy);
     localStorage.removeItem(legacyStorageKey(userId));
-    return legacy;
+    return loadPlanningOutliner(userId, seedDefault);
   }
 
   return seedDefault ? defaultNodes() : [];
 };
 
-export const savePlanningOutliner = async (userId: string, nodes: OutlineNode[]): Promise<void> => {
-  await supabase
-    .from("planning_outliner_data")
-    .upsert({ user_id: userId, nodes, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+const outlineSaveQueues = new Map<string, Promise<void>>();
+
+export const savePlanningOutliner = (userId: string, nodes: OutlineNode[]): Promise<void> => {
+  const storedNodes = serializeOutline(nodes);
+  const save = (outlineSaveQueues.get(userId) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const { error } = await supabase
+      .from("planning_outliner_data")
+      .upsert({ user_id: userId, nodes: storedNodes, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+    if (error) throw error;
+  });
+  outlineSaveQueues.set(userId, save);
+  return save;
 };
 
 const findNodeById = (nodes: OutlineNode[], nodeId: string): OutlineNode | null => {
@@ -281,7 +328,7 @@ const findNodeByLinkedHabit = (nodes: OutlineNode[], habitId: string): OutlineNo
 
 const findNodeByLinkedTheme = (nodes: OutlineNode[], themeId: string): OutlineNode | null => {
   for (const node of nodes) {
-    if (node.linked?.themeId === themeId && !node.linked.habitId) return node;
+    if (node.linked?.themeId === themeId && isThemeRow(node)) return node;
     const child = findNodeByLinkedTheme(node.children, themeId);
     if (child) return child;
   }
@@ -440,9 +487,7 @@ export const syncThemesToPlanningOutliner = async (
     }
   }
 
-  if (createdThemes > 0 || createdHabits > 0 || createdBlocks > 0) {
-    await savePlanningOutliner(userId, nextNodes);
-  }
+  await savePlanningOutliner(userId, nextNodes);
 
   return { createdThemes, createdHabits, createdBlocks, nodes: nextNodes };
 };
@@ -464,6 +509,7 @@ const findDueReminder = (
   path: string[] = []
 ): OutlinerReminder | null => {
   for (const node of nodes) {
+    if (node.trashedAt) continue;
     const nodeText = node.text.trim() || "Untitled";
     const nextPath = [...path, nodeText];
     if (
