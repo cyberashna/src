@@ -1,0 +1,49 @@
+.routine-widget { letter-spacing: 0; }
+.routine-widget > header, .routine-widget-row-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.routine-widget > header h2 { margin: 0; }
+.routine-widget-row { padding: 16px 0; border-bottom: 1px solid #e1e6e3; }
+.routine-widget-row-heading > div:first-child { min-width: 0; flex: 1; }
+.routine-widget-row h3 { margin: 0 0 4px; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+.routine-widget-row-heading span, .routine-widget-preview { color: #64706c; font-size: 13px; }
+.routine-widget-preview { margin: 8px 0 0; overflow-wrap: anywhere; }
+.routine-widget-row-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.routine-widget button, .routine-widget-row button { display: inline-flex; gap: 6px; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 14px; }
+.routine-widget button:hover, .routine-widget-row button:hover { background: #edf3f0; }
+.routine-widget button:disabled, .routine-widget-row button:disabled { opacity: .5; cursor: default; }
+.routine-widget button:focus-visible, .routine-widget-row button:focus-visible { outline: 2px solid #28674e; outline-offset: 2px; }
+.routine-run-checklist { margin-top: 12px; }
+.routine-run-step { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 6px 0; font-size: 15px; cursor: pointer; }
+.routine-run-step input { width: 22px; height: 22px; margin: 0; flex: 0 0 auto; accent-color: #28674e; }
+.routine-run-step span { overflow-wrap: anywhere; min-width: 0; }
+.routine-run-step .is-complete { text-decoration: line-through; color: #64706c; }
+.routine-run-notes { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; color: #59655e; }
+.routine-run-footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.routine-run-footer > button:first-child { background: #28674e; color: #fff; }
+.routine-run-confirm, .routine-widget-picker { margin-top: 12px; padding: 12px 0; border-block: 1px solid #dce4df; }
+.routine-run-confirm p { font-size: 14px; overflow-wrap: anywhere; }
+.routine-widget [role=alert], .routine-widget-row [role=alert] { color: #a03232; font-size: 14px; }
+.routine-last-used { display: block; margin-top: 4px; font-size: 12px; color: #64706c; }
+.routine-run-modes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+.routine-run-modes button { border-color: #dce4df; font-size: 13px; }
+.routine-run-modes button[aria-pressed=true] { background: #e6efea; border-color: #64977f; }
+.routine-run-modes button span { margin-left: 2px; font-size: 12px; }
+.routine-essential-toggle { flex: 0 0 44px; min-height: 44px; border: 0; background: transparent; color: #707d78; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; }
+.routine-essential-toggle[aria-pressed=true], .routine-essential-mark { color: #986e18; }
+.routine-essential-toggle:focus-visible { outline: 2px solid #28674e; outline-offset: 2px; }
+.routine-run-step .routine-essential-mark { flex-shrink: 0; }
+.routine-timer-control { margin: 0; padding: 0; border: 0; min-width: 0; }
+.routine-history-toggle { margin-top: 8px; color: #586c67 !important; }
+.routine-history-toggle span { font-size: 12px; }
+.routine-history { margin-top: 8px; border-top: 1px solid #dce4df; }
+.routine-history-entry { padding: 12px 0; border-bottom: 1px solid #e1e6e3; }
+.routine-history-entry summary { cursor: pointer; min-height: 44px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.routine-history-entry summary span { display: block; color: #64706c; }
+.routine-history-entry ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.routine-history-entry li { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; }
+.routine-history-entry li span { overflow-wrap: anywhere; min-width: 0; }
+.routine-history-entry li svg { flex-shrink: 0; color: #64706c; }
+@media (max-width: 400px) {
+  .routine-widget-row-heading { align-items: flex-start; gap: 4px; }
+  .routine-widget-row-actions { gap: 0; }
+  .routine-widget-row-actions button { padding: 6px; }
+}

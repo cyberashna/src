@@ -26,6 +26,7 @@ type RoutineFocusFilter = "all" | WorkoutRoutineFocus;
 type RoutineEnergyFilter = "all" | WorkoutRoutineEnergy;
 type RoutineTimeFilter = "all" | WorkoutRoutineTime;
 type RoutineEquipmentFilter = "all" | WorkoutRoutineEquipment;
+type WorkoutPanelTab = "routines" | "library";
 
 type RoutineIntentionSummary = {
   routineId: string;
@@ -144,6 +145,7 @@ export default function WorkoutLibraryPanel({
   onPlanRoutineIntention,
   onClearRoutineIntention,
 }: Props) {
+  const [activeTab, setActiveTab] = useState<WorkoutPanelTab>("routines");
   const [focus, setFocus] = useState<FocusFilter>("strength");
   const [routineFocusFilter, setRoutineFocusFilter] = useState<RoutineFocusFilter>("all");
   const [routineEnergyFilter, setRoutineEnergyFilter] = useState<RoutineEnergyFilter>("all");
@@ -291,6 +293,7 @@ export default function WorkoutLibraryPanel({
     setSelectedIds(routineExerciseIds);
     setRoutineName(routine.name);
     setDraftEquipment(routine.equipment ?? "any");
+    setActiveTab("library");
   };
 
   const getRoutineMeta = (routine: WorkoutRoutine) => {
@@ -353,70 +356,104 @@ export default function WorkoutLibraryPanel({
       : routineIntentionDayIndexes.map((dayIndex) => days[dayIndex]).join(", ");
 
   return (
-    <div className="workout-library-panel">
+    <div className={`workout-library-panel workout-library-panel--${activeTab}`}>
       <div className="workout-library-header">
         <div>
-          <div className="workout-library-kicker">Workout library</div>
-          <div className="workout-library-title">Build or start a workout routine</div>
+          <div className="workout-library-kicker">Workout</div>
+          <div className="workout-library-title">
+            {activeTab === "routines" ? "Start or plan a saved routine" : "Build or edit the exercise library"}
+          </div>
         </div>
         <button type="button" className="workout-library-close" onClick={onClose} aria-label="Close workout library">
           x
         </button>
       </div>
 
-      <div className="workout-focus-tabs">
-        {(Object.keys(focusLabels) as FocusFilter[]).map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={focus === item ? "active" : ""}
-            onClick={() => setFocus(item)}
-          >
-            {focusLabels[item]}
-          </button>
-        ))}
+      <div className="workout-panel-tabs" role="tablist" aria-label="Workout sections">
+        <button
+          type="button"
+          className={activeTab === "routines" ? "active" : ""}
+          onClick={() => setActiveTab("routines")}
+          role="tab"
+          aria-selected={activeTab === "routines"}
+        >
+          Routines
+        </button>
+        <button
+          type="button"
+          className={activeTab === "library" ? "active" : ""}
+          onClick={() => setActiveTab("library")}
+          role="tab"
+          aria-selected={activeTab === "library"}
+        >
+          Library
+        </button>
       </div>
 
-      <div className="workout-library-layout">
-        <div className="workout-library-main">
-          <div className="workout-library-toolbar">
-            <span>{visibleExercises.length} exercise options</span>
-            <button type="button" onClick={() => onCreateWorkout(defaultWorkoutLabel[focus], [])}>
-              Start blank
+      {activeTab === "library" && (
+        <div className="workout-focus-tabs">
+          {(Object.keys(focusLabels) as FocusFilter[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={focus === item ? "active" : ""}
+              onClick={() => setFocus(item)}
+            >
+              {focusLabels[item]}
             </button>
-          </div>
-
-          <div className="workout-library-grid">
-            {visibleExercises.map((exercise) => {
-              const latest = getLatestExerciseHistory(exerciseHistory[exercise.id]);
-              const result = formatExerciseResult(latest);
-              const selected = selectedIds.includes(exercise.id);
-              return (
-                <button
-                  key={exercise.id}
-                  type="button"
-                  className={`workout-library-card ${selected ? "selected" : ""}`}
-                  onClick={() => toggleExercise(exercise.id)}
-                >
-                  <span className={`workout-library-card-category workout-exercise-${exercise.category}`}>
-                    {categoryLabels[exercise.category]}
-                  </span>
-                  <strong>{exercise.name}</strong>
-                  <span>{getExerciseTags(exercise).join(" / ")}</span>
-                  <em>
-                    Last: {formatLastExerciseDone(latest)}
-                    {result ? `, ${result}` : ""}
-                  </em>
-                  <small>{getProgressiveOverloadNudge(exercise, exerciseHistory[exercise.id])}</small>
-                </button>
-              );
-            })}
-          </div>
+          ))}
         </div>
+      )}
+
+      <div className="workout-library-layout">
+        {activeTab === "library" && (
+          <div className="workout-library-main">
+            <div className="workout-library-toolbar">
+              <span>{visibleExercises.length} exercise options</span>
+              <button type="button" onClick={() => onCreateWorkout(defaultWorkoutLabel[focus], [])}>
+                Start blank
+              </button>
+            </div>
+
+            <div className="workout-library-grid">
+              {visibleExercises.map((exercise) => {
+                const latest = getLatestExerciseHistory(exerciseHistory[exercise.id]);
+                const result = formatExerciseResult(latest);
+                const selected = selectedIds.includes(exercise.id);
+                return (
+                  <button
+                    key={exercise.id}
+                    type="button"
+                    className={`workout-library-card ${selected ? "selected" : ""}`}
+                    onClick={() => toggleExercise(exercise.id)}
+                  >
+                    <span className={`workout-library-card-category workout-exercise-${exercise.category}`}>
+                      {categoryLabels[exercise.category]}
+                    </span>
+                    <strong>{exercise.name}</strong>
+                    <span>{getExerciseTags(exercise).join(" / ")}</span>
+                    <em>
+                      Last: {formatLastExerciseDone(latest)}
+                      {result ? `, ${result}` : ""}
+                    </em>
+                    <small>{getProgressiveOverloadNudge(exercise, exerciseHistory[exercise.id])}</small>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="workout-library-side">
-          <section>
-            <div className="workout-library-section-title">Saved routines</div>
+          <section className="workout-routine-launcher-section">
+            <div className="workout-library-section-title">
+              Saved routines
+              {activeTab === "routines" && (
+                <button type="button" onClick={() => setActiveTab("library")}>
+                  Library
+                </button>
+              )}
+            </div>
             {workoutRoutines.length > 0 && (
               <div className="workout-routine-filters">
                 <select value={routineFocusFilter} onChange={(event) => setRoutineFocusFilter(event.target.value as RoutineFocusFilter)}>
@@ -453,7 +490,12 @@ export default function WorkoutLibraryPanel({
               </div>
             )}
             {workoutRoutines.length === 0 ? (
-              <div className="workout-library-empty">Save a few exercise sets and they will appear here.</div>
+              <div className="workout-library-empty">
+                Save a few exercise sets and they will appear here.
+                <button type="button" onClick={() => setActiveTab("library")}>
+                  Open library
+                </button>
+              </div>
             ) : filteredWorkoutRoutines.length === 0 ? (
               <div className="workout-library-empty">No routines match those filters.</div>
             ) : (
@@ -611,103 +653,107 @@ export default function WorkoutLibraryPanel({
             )}
           </section>
 
-          <section>
-            <div className="workout-library-section-title">Routine draft</div>
-            <div className="workout-session-card">
-              <span>{focusLabels[focus]}</span>
-              <strong>
-                {selectedExercises.length === 0
-                  ? "Build a routine from options"
-                  : `${selectedExercises.length} exercise${selectedExercises.length === 1 ? "" : "s"} selected`}
-              </strong>
-              <em>
-                {selectedExercises.length === 0
-                  ? "Choose exercises, use a saved routine as a draft, or start blank."
-                  : "Save this as a reusable routine or start it as a workout block."}
-              </em>
-              {selectedExercises.length > 0 && (
-                <button type="button" onClick={() => setSelectedIds([])}>
-                  Clear picks
+          {activeTab === "library" && (
+            <>
+              <section>
+                <div className="workout-library-section-title">Routine draft</div>
+                <div className="workout-session-card">
+                  <span>{focusLabels[focus]}</span>
+                  <strong>
+                    {selectedExercises.length === 0
+                      ? "Build a routine from options"
+                      : `${selectedExercises.length} exercise${selectedExercises.length === 1 ? "" : "s"} selected`}
+                  </strong>
+                  <em>
+                    {selectedExercises.length === 0
+                      ? "Choose exercises, use a saved routine as a draft, or start blank."
+                      : "Save this as a reusable routine or start it as a workout block."}
+                  </em>
+                  {selectedExercises.length > 0 && (
+                    <button type="button" onClick={() => setSelectedIds([])}>
+                      Clear picks
+                    </button>
+                  )}
+                </div>
+                {selectedExercises.length === 0 ? (
+                  <div className="workout-library-empty">Pick exercises or start blank.</div>
+                ) : (
+                  <div className="workout-selected-list">
+                    {selectedExercises.map((exercise) => (
+                      <button key={exercise.id} type="button" onClick={() => toggleExercise(exercise.id)}>
+                        <span>{exercise.name}</span>
+                        <em>{exercise.bodyArea ? bodyAreaLabels[exercise.bodyArea] : "Exercise"}</em>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button type="button" className="workout-library-primary" onClick={createWorkout}>
+                  Start selected block
                 </button>
-              )}
-            </div>
-            {selectedExercises.length === 0 ? (
-              <div className="workout-library-empty">Pick exercises or start blank.</div>
-            ) : (
-              <div className="workout-selected-list">
-                {selectedExercises.map((exercise) => (
-                  <button key={exercise.id} type="button" onClick={() => toggleExercise(exercise.id)}>
-                    <span>{exercise.name}</span>
-                    <em>{exercise.bodyArea ? bodyAreaLabels[exercise.bodyArea] : "Exercise"}</em>
+                <div className="workout-routine-inline-save">
+                  <input
+                    type="text"
+                    value={routineName}
+                    onChange={(event) => setRoutineName(event.target.value)}
+                    placeholder="Routine name..."
+                  />
+                  <select value={draftEquipment} onChange={(event) => setDraftEquipment(event.target.value as WorkoutRoutineEquipment)}>
+                    {(Object.keys(routineEquipmentLabels) as RoutineEquipmentFilter[])
+                      .filter((item): item is WorkoutRoutineEquipment => item !== "all")
+                      .map((item) => (
+                        <option key={item} value={item}>
+                          {routineEquipmentLabels[item]}
+                        </option>
+                      ))}
+                  </select>
+                  <button type="button" onClick={saveRoutine} disabled={selectedIds.length === 0}>
+                    Save routine
                   </button>
-                ))}
-              </div>
-            )}
-            <button type="button" className="workout-library-primary" onClick={createWorkout}>
-              Start selected block
-            </button>
-            <div className="workout-routine-inline-save">
-              <input
-                type="text"
-                value={routineName}
-                onChange={(event) => setRoutineName(event.target.value)}
-                placeholder="Routine name..."
-              />
-              <select value={draftEquipment} onChange={(event) => setDraftEquipment(event.target.value as WorkoutRoutineEquipment)}>
-                {(Object.keys(routineEquipmentLabels) as RoutineEquipmentFilter[])
-                  .filter((item): item is WorkoutRoutineEquipment => item !== "all")
-                  .map((item) => (
-                    <option key={item} value={item}>
-                      {routineEquipmentLabels[item]}
-                    </option>
-                  ))}
-              </select>
-              <button type="button" onClick={saveRoutine} disabled={selectedIds.length === 0}>
-                Save routine
-              </button>
-            </div>
-          </section>
+                </div>
+              </section>
 
-          <section>
-            <div className="workout-library-section-title">Add exercise</div>
-            <div className="workout-add-exercise-form">
-              <input
-                type="text"
-                value={newExerciseName}
-                onChange={(event) => setNewExerciseName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") addExercise();
-                }}
-                placeholder="Exercise name..."
-              />
-              <select value={newCategory} onChange={(event) => setNewCategory(event.target.value as ExerciseCategory)}>
-                {categoryOptions.map((category) => (
-                  <option key={category} value={category}>
-                    {categoryLabels[category]}
-                  </option>
-                ))}
-              </select>
-              <select value={newBodyArea} onChange={(event) => setNewBodyArea(event.target.value as ExerciseLibraryItem["bodyArea"] | "")}>
-                <option value="">Body area</option>
-                {(Object.keys(bodyAreaLabels) as NonNullable<ExerciseLibraryItem["bodyArea"]>[]).map((area) => (
-                  <option key={area} value={area}>
-                    {bodyAreaLabels[area]}
-                  </option>
-                ))}
-              </select>
-              <select value={newPattern} onChange={(event) => setNewPattern(event.target.value as ExerciseLibraryItem["pattern"] | "")}>
-                <option value="">Pattern</option>
-                {(Object.keys(patternLabels) as NonNullable<ExerciseLibraryItem["pattern"]>[]).map((pattern) => (
-                  <option key={pattern} value={pattern}>
-                    {patternLabels[pattern]}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={addExercise} disabled={!newExerciseName.trim()}>
-                Add exercise
-              </button>
-            </div>
-          </section>
+              <section>
+                <div className="workout-library-section-title">Add exercise</div>
+                <div className="workout-add-exercise-form">
+                  <input
+                    type="text"
+                    value={newExerciseName}
+                    onChange={(event) => setNewExerciseName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") addExercise();
+                    }}
+                    placeholder="Exercise name..."
+                  />
+                  <select value={newCategory} onChange={(event) => setNewCategory(event.target.value as ExerciseCategory)}>
+                    {categoryOptions.map((category) => (
+                      <option key={category} value={category}>
+                        {categoryLabels[category]}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={newBodyArea} onChange={(event) => setNewBodyArea(event.target.value as ExerciseLibraryItem["bodyArea"] | "")}>
+                    <option value="">Body area</option>
+                    {(Object.keys(bodyAreaLabels) as NonNullable<ExerciseLibraryItem["bodyArea"]>[]).map((area) => (
+                      <option key={area} value={area}>
+                        {bodyAreaLabels[area]}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={newPattern} onChange={(event) => setNewPattern(event.target.value as ExerciseLibraryItem["pattern"] | "")}>
+                    <option value="">Pattern</option>
+                    {(Object.keys(patternLabels) as NonNullable<ExerciseLibraryItem["pattern"]>[]).map((pattern) => (
+                      <option key={pattern} value={pattern}>
+                        {patternLabels[pattern]}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={addExercise} disabled={!newExerciseName.trim()}>
+                    Add exercise
+                  </button>
+                </div>
+              </section>
+            </>
+          )}
         </div>
       </div>
     </div>

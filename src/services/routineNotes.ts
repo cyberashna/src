@@ -1,6 +1,8 @@
 export type RoutineItem = {
   id: string;
   label: string;
+  sourceOutlineId?: string;
+  essential?: boolean;
 };
 
 export type RoutineCategory =
@@ -62,6 +64,8 @@ export const normalizeRoutine = (routine: Partial<RoutineTab>): RoutineTab => {
     ? routine.items.map((item) => ({
         id: item.id ?? createRoutineId("routine-item"),
         label: item.label ?? "",
+        ...(item.sourceOutlineId ? { sourceOutlineId: item.sourceOutlineId } : {}),
+        ...(item.essential === true ? { essential: true } : {}),
       }))
     : [];
 
@@ -113,6 +117,7 @@ export const defaultRoutines = (): RoutineTab[] => [
 ];
 
 export const createRoutineStorageKey = (userId: string) => `routine-notes:${userId}`;
+export const routineNotesChanged = 'routine-notes-changed';
 
 export const loadRoutineNotes = (userId: string) => {
   const storageKey = createRoutineStorageKey(userId);
@@ -128,6 +133,7 @@ export const loadRoutineNotes = (userId: string) => {
 
 export const saveRoutineNotes = (userId: string, routines: RoutineTab[]) => {
   window.localStorage.setItem(createRoutineStorageKey(userId), JSON.stringify(routines));
+  window.dispatchEvent(new CustomEvent(routineNotesChanged, { detail: userId }));
 };
 
 export const addRoutineItem = (userId: string, routineId: string, label: string) => {
@@ -146,4 +152,21 @@ export const addRoutineItem = (userId: string, routineId: string, label: string)
 
   saveRoutineNotes(userId, next);
   return next;
+};
+
+export const addOutlineItemToRoutine = (routines: RoutineTab[], routineId: string, item: { id: string; text: string }): RoutineTab[] => {
+  if (!routines.some(routine => routine.id === routineId)) throw new Error("This routine is no longer available.");
+  return routines.map(routine => routine.id !== routineId || routine.items.some(entry => entry.sourceOutlineId === item.id) ? routine : {
+    ...routine, items: [...routine.items, { id: createRoutineId("routine-item"), label: item.text, sourceOutlineId: item.id }],
+  });
+};
+
+type OutlineLabel = { id: string; text: string; children?: OutlineLabel[] };
+export const resolveRoutineOutlineLabels = (routines: RoutineTab[], items: OutlineLabel[]): RoutineTab[] => {
+  const labels = new Map<string, string>();
+  const visit = (nodes: OutlineLabel[]) => nodes.forEach(node => { labels.set(node.id, node.text); visit(node.children ?? []); });
+  visit(items);
+  return routines.map(routine => ({ ...routine, items: routine.items.map(item => ({ ...item,
+    label: item.sourceOutlineId ? labels.get(item.sourceOutlineId) ?? item.label : item.label,
+  })) }));
 };

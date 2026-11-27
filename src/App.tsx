@@ -1,7 +1,20 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { CalendarClock, ChevronLeft, ChevronRight, GripVertical, Plus, X } from "lucide-react";
+import { AddPlannerDialog, AddToRoutineDialog, PlanItemDialog, PlannerNavigation, PlannerNoteDialog, PlannerConnectionStatus, TodayHome, type NewPlannerItem, type PlanView, type PlanChoice, type PlanMode } from "./components/PlannerShell";
+import { WeeklyStack, type StackDay } from "./components/WeeklyStack";
+import { WeeklySoftPlan } from "./components/WeeklySoftPlan";
+import { getSoftPlansForWeek, isRepeatingPlanNode, defaultWeeklyTarget, weeklyPlanId, recurringPlanProgress, type SoftPlanDestination } from "./services/softPlanning";
+import { persistSoftPlan } from "./services/softPlanPersistence";
+import { GridOutlineDialog } from "./components/GridOutlineDialog";
+import { TileTimersProvider } from "./components/TileTimers";
+import { cancelTileTimer } from "./services/tileTimers";
+import { tileTimerAlarm } from "./native/tileTimerAlarm";
+import { findGridOutlineEntry, gridOutlineDestinations, placeGridOutlineEntry, placeOccurrenceNote, type GridOutlineChoice } from "./services/gridOutline";
+import { planningDate } from "./services/planningDate";
 
 export let currentDragBlockId: string | null = null;
 import "./App.css";
+import "./PlannerShell.css";
 import { hasSupabaseConfig, supabase } from "./lib/supabase";
 import { AuthScreen } from "./components/AuthScreen";
 import { CalendarSettings } from "./components/CalendarSettings";
@@ -12,6 +25,7 @@ import type { ToastItem } from "./components/Toast";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 
 import { database, SessionGroup, Habit as DBHabit, Block as DBBlock, Meal, BlockTask } from "./services/database";
+import { countHabitProgress, localDateKey, type HabitProgressRecord } from "./services/habitProgress";
 import MealForm from "./components/MealForm";
 import { updateSessionGroups } from "./services/sessionGrouping";
 import type { User } from "@supabase/supabase-js";
@@ -28,33 +42,43 @@ import EventSuggestions from "./components/EventSuggestions";
 import type { Suggestion } from "./components/EventSuggestions";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import RoutineNotesPopup from "./components/RoutineNotesPopup";
+import { RoutineWidget } from "./components/RoutineWidget";
+import { persistGridCapture, type GridCaptureDraft } from './services/gridCapture';
+import { gridHabitCreditChoices } from './services/gridOutline';
 import AmbientMode from "./components/AmbientMode";
 import type { AmbientSettings, AmbientTask } from "./components/AmbientMode";
-import { createRoutineId, inferRoutineCategory, loadRoutineNotes, saveRoutineNotes, type RoutineTab } from "./services/routineNotes";
+import { createRoutineId, createRoutineStorageKey, routineNotesChanged, inferRoutineCategory, loadRoutineNotes, saveRoutineNotes, addOutlineItemToRoutine, resolveRoutineOutlineLabels, type RoutineTab } from "./services/routineNotes";
 import PlanningOutlinerPanel from "./components/PlanningOutlinerPanel";
+import { ReadingLinkCard } from './components/ReadingLink';
+import { normalizeReadingLink, publicWebUrl, type ReadingLink } from './services/readingLinks';
+import { blockTypePatch, outlineTypeBlockIds, prepareOutlineTypeChange, describeOutlinePlanning, outlinePlanningKey, withoutOutlinePlanning, type OutlineCardType } from './services/cardTypes';
+import { outlineHabitPlacements, outlineBranchItems, moveOutlineSelection, normalizeOutlinePlans, isThemeRow as isThemeOutlineNode } from "./services/outlineModel";
 import WorkoutLibraryPanel from "./components/WorkoutLibraryPanel";
 import BlockCard from "./components/BlockCard";
 import SmartWeeklySetupModal from "./components/SmartWeeklySetupModal";
 import type { SmartWeekSuggestion } from "./components/SmartWeeklySetupModal";
 import {
   addQuickCaptureToPlanningOutliner,
-  addHabitToPlanningOutliner,
-  addThemeToPlanningOutliner,
+  createOutlineNode,
   clearOutlinerReminder,
   dismissOutlinerReminder,
   getDueOutlinerReminder,
   loadPlanningOutliner,
   savePlanningOutliner,
   snoozeOutlinerReminder,
+  syncThemesToPlanningOutliner,
   updateOutlineNode,
   type OutlineFrequency,
   type OutlineLink,
   type OutlineNode,
   type OutlinerReminder,
+  type SyncHabitToOutlinerInput,
 } from "./services/planningOutliner";
 import { loadThemeNotesPrefs, saveThemeGeneralNote } from "./services/themeNotes";
 import { createWorkoutExerciseRow, formatExerciseResult } from "./services/workoutLibrary";
 import { getWeekStartDateString, getCurrentWeekRange, getTodayDayIndex } from "./utils/dateUtils";
+import { getNativePlannerLaunchTarget, updateNativePlannerWidget } from "./native/plannerWidget";
+import workoutExerciseData from "./data/workout_exercise_data.json";
 
 type HabitGroup = {
   id: string;
@@ -76,14 +100,31 @@ type Habit = {
 };
 
 type HabitWithTheme = Habit & { themeName: string; themeId: string };
+type ThemeType = "habit" | "meals" | "household";
 
 type Theme = {
   id: string;
   name: string;
-  themeType: "habit" | "meals";
+  themeType: ThemeType;
   habits: Habit[];
   groups: HabitGroup[];
   meals: Meal[];
+};
+
+type ThemeOutlineItem = {
+  id: string;
+  text: string;
+  tag: OutlineNode["tag"];
+  depth: number;
+  linkedLabel?: string;
+};
+
+type ThemeOutlineMeta = {
+  nodeId: string;
+  path: string[];
+  habitOrder: string[];
+  outlineItems: ThemeOutlineItem[];
+  nestedThemes: Array<{ id: string; name: string; nodeId: string }>;
 };
 
 type BlockLocation =
@@ -108,6 +149,10 @@ export type ExerciseLibraryItem = {
   defaultSets?: number | null;
   defaultReps?: number | null;
   defaultDuration?: number | null;
+  equipment?: string | null;
+  status?: string | null;
+  notes?: string | null;
+  aliases?: string[];
 };
 
 export type WorkoutBlockExercise = {
@@ -187,6 +232,15 @@ export type Block = {
   blockTasks?: BlockTask[];
 };
 
+export type HabitCardOutlineItem = {
+  id: string;
+  text: string;
+  tag: "task" | "habit";
+  taskDone: boolean;
+  linkedHabitId?: string;
+  onBoard?: boolean;
+};
+
 type WeeklyHabitIntentionPlacement = {
   id: string;
   dayIndex: number;
@@ -215,6 +269,22 @@ type WeeklyRoutineIntention = {
   placements: WeeklyHabitIntentionPlacement[];
 };
 
+type SoftPlanPlacement =
+  | {
+      kind: "habit";
+      intention: WeeklyHabitIntention;
+      placement: WeeklyHabitIntentionPlacement;
+      title: string;
+      detail: string;
+    }
+  | {
+      kind: "routine";
+      intention: WeeklyRoutineIntention;
+      placement: WeeklyHabitIntentionPlacement;
+      title: string;
+      detail: string;
+    };
+
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const normalizePlanningName = (s: string) => s.trim().toLowerCase();
@@ -222,30 +292,319 @@ const normalizePlanningName = (s: string) => s.trim().toLowerCase();
 const createClientId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+type ImportedWorkoutExercise = {
+  name: string;
+  category?: ExerciseCategory;
+  bodyArea?: ExerciseLibraryItem["bodyArea"];
+  pattern?: ExerciseLibraryItem["pattern"];
+  defaultSets?: number | string | null;
+  defaultReps?: number | string | null;
+  defaultDuration?: number | string | null;
+  equipment?: string | null;
+  status?: string | null;
+  notes?: string | null;
+  aliases?: string[];
+};
+
+type ImportedWorkoutRoutine = {
+  name: string;
+  status?: string | null;
+  focus?: WorkoutRoutineFocus;
+  energy?: WorkoutRoutineEnergy;
+  timeBudget?: WorkoutRoutineTime;
+  equipment?: WorkoutRoutineEquipment | string | null;
+  exercises?: Array<{
+    name: string;
+    sets?: number | string | null;
+    reps?: number | string | null;
+    duration?: number | string | null;
+    notes?: string | null;
+  }>;
+  notes?: string | null;
+};
+
+type ImportedWorkoutData = {
+  generatedAt?: string;
+  exercises?: ImportedWorkoutExercise[];
+  routines?: ImportedWorkoutRoutine[];
+};
+
+const importedWorkoutData = workoutExerciseData as ImportedWorkoutData;
+
+const slugifyId = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const parseWorkoutNumber = (value: number | string | null | undefined): number | null => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const match = value.match(/\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+};
+
+const isUsableImportedStatus = (status?: string | null) =>
+  !/\b(excluded|superseded)\b/i.test(status ?? "");
+
+const isValidExerciseCategory = (value: unknown): value is ExerciseCategory =>
+  value === "strength" || value === "mobility" || value === "core" || value === "cardio" || value === "recovery";
+
+const isValidBodyArea = (value: unknown): value is ExerciseLibraryItem["bodyArea"] =>
+  value === "upper" || value === "lower" || value === "core" || value === "full";
+
+const isValidPattern = (value: unknown): value is ExerciseLibraryItem["pattern"] =>
+  value === "push" ||
+  value === "pull" ||
+  value === "squat" ||
+  value === "hinge" ||
+  value === "carry" ||
+  value === "rotation" ||
+  value === "brace" ||
+  value === "stretch" ||
+  value === "cardio";
+
+const isValidRoutineFocus = (value: unknown): value is WorkoutRoutineFocus =>
+  value === "full" || value === "upper" || value === "lower" || value === "core" || value === "mobility" || value === "cardio";
+
+const isValidRoutineEnergy = (value: unknown): value is WorkoutRoutineEnergy =>
+  value === "low" || value === "medium" || value === "high";
+
+const isValidRoutineTime = (value: unknown): value is WorkoutRoutineTime =>
+  value === "short" || value === "medium" || value === "long";
+
+const normalizeRoutineEquipment = (value: unknown): WorkoutRoutineEquipment =>
+  value === "none" || value === "dumbbells" || value === "gym" ? value : "any";
+
 const defaultExerciseLibrary: ExerciseLibraryItem[] = [
+  { id: "exercise-bodyweight-squat", name: "Bodyweight squat", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-rdl", name: "Romanian deadlift", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-goblet-squat", name: "Goblet squat", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-split-squat", name: "Split squat", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-reverse-lunge", name: "Reverse lunge", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-forward-lunge", name: "Forward lunge", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-lateral-lunge", name: "Lateral lunge", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-step-up", name: "Step-up", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-wall-sit", name: "Wall sit", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-glute-bridge", name: "Glute bridge", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-single-leg-glute-bridge", name: "Single-leg glute bridge", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 8 },
   { id: "exercise-hip-thrust", name: "Hip thrust", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-good-morning", name: "Good morning", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-kettlebell-swing", name: "Kettlebell swing", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 12 },
   { id: "exercise-hamstring-curl", name: "Hamstring curl", category: "strength", bodyArea: "lower", pattern: "hinge", defaultSets: 3, defaultReps: 12 },
   { id: "exercise-calf-raise", name: "Calf raise", category: "strength", bodyArea: "lower", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-tibialis-raise", name: "Tibialis raise", category: "strength", bodyArea: "lower", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-clamshell", name: "Clamshell", category: "strength", bodyArea: "lower", pattern: "rotation", defaultSets: 2, defaultReps: 12 },
+  { id: "exercise-band-lateral-walk", name: "Band lateral walk", category: "strength", bodyArea: "lower", pattern: "carry", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-leg-press", name: "Leg press", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-leg-extension", name: "Leg extension", category: "strength", bodyArea: "lower", pattern: "squat", defaultSets: 3, defaultReps: 12 },
   { id: "exercise-chest-press", name: "Chest press", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-bench-press", name: "Bench press", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-incline-press", name: "Incline press", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-shoulder-press", name: "Shoulder press", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-push-up", name: "Push-up", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-wall-push-up", name: "Wall push-up", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-incline-push-up", name: "Incline push-up", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-dip", name: "Dip", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-triceps-extension", name: "Triceps extension", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-lateral-raise", name: "Lateral raise", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-front-raise", name: "Front raise", category: "strength", bodyArea: "upper", pattern: "push", defaultSets: 3, defaultReps: 12 },
   { id: "exercise-row", name: "Row", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-one-arm-row", name: "One-arm dumbbell row", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-seated-cable-row", name: "Seated cable row", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-lat-pulldown", name: "Lat pulldown", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-pull-up", name: "Pull-up", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 6 },
+  { id: "exercise-assisted-pull-up", name: "Assisted pull-up", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 8 },
+  { id: "exercise-face-pull", name: "Face pull", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-reverse-fly", name: "Reverse fly", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-biceps-curl", name: "Biceps curl", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-hammer-curl", name: "Hammer curl", category: "strength", bodyArea: "upper", pattern: "pull", defaultSets: 3, defaultReps: 12 },
   { id: "exercise-farmer-carry", name: "Farmer carry", category: "strength", bodyArea: "full", pattern: "carry", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-suitcase-carry", name: "Suitcase carry", category: "strength", bodyArea: "full", pattern: "carry", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-bear-crawl", name: "Bear crawl", category: "strength", bodyArea: "full", pattern: "carry", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-turkish-get-up", name: "Turkish get-up", category: "strength", bodyArea: "full", pattern: "rotation", defaultSets: 2, defaultReps: 3 },
   { id: "exercise-dead-bug", name: "Dead bug", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultReps: 10 },
   { id: "exercise-plank", name: "Plank", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultDuration: 1 },
   { id: "exercise-side-plank", name: "Side plank", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 2, defaultDuration: 1 },
   { id: "exercise-pallof-press", name: "Pallof press", category: "core", bodyArea: "core", pattern: "rotation", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-bird-dog", name: "Bird dog", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-hollow-hold", name: "Hollow hold", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-mountain-climber", name: "Mountain climber", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultDuration: 1 },
+  { id: "exercise-russian-twist", name: "Russian twist", category: "core", bodyArea: "core", pattern: "rotation", defaultSets: 3, defaultReps: 12 },
+  { id: "exercise-wood-chop", name: "Wood chop", category: "core", bodyArea: "core", pattern: "rotation", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-marching-bridge", name: "Marching bridge", category: "core", bodyArea: "core", pattern: "brace", defaultSets: 3, defaultReps: 10 },
+  { id: "exercise-cat-cow", name: "Cat-cow", category: "mobility", bodyArea: "full", pattern: "stretch", defaultReps: 10 },
+  { id: "exercise-childs-pose", name: "Child's pose", category: "mobility", bodyArea: "full", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-wall-angels", name: "Wall angels", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultSets: 2, defaultReps: 10 },
+  { id: "exercise-chin-tuck", name: "Chin tuck", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultSets: 2, defaultReps: 10 },
+  { id: "exercise-scapular-wall-slide", name: "Scapular wall slide", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultSets: 2, defaultReps: 10 },
+  { id: "exercise-band-pull-apart", name: "Band pull-apart", category: "mobility", bodyArea: "upper", pattern: "pull", defaultSets: 2, defaultReps: 12 },
+  { id: "exercise-doorway-pec-stretch", name: "Doorway pec stretch", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-lat-stretch", name: "Lat stretch", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-wrist-flexor-stretch", name: "Wrist flexor stretch", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-wrist-extensor-stretch", name: "Wrist extensor stretch", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-neck-cars", name: "Neck CARs", category: "mobility", bodyArea: "upper", pattern: "rotation", defaultReps: 5 },
   { id: "exercise-hip-flexor-stretch", name: "Hip flexor stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-hamstring-stretch", name: "Hamstring stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-quad-stretch", name: "Quad stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-figure-four-stretch", name: "Figure-four stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-piriformis-stretch", name: "Piriformis stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-couch-stretch", name: "Couch stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-adductor-rockback", name: "Adductor rockback", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultReps: 10 },
+  { id: "exercise-worlds-greatest-stretch", name: "World's greatest stretch", category: "mobility", bodyArea: "full", pattern: "stretch", defaultReps: 5 },
   { id: "exercise-thoracic-rotation", name: "Thoracic rotation", category: "mobility", bodyArea: "upper", pattern: "stretch", defaultReps: 10 },
+  { id: "exercise-open-book-stretch", name: "Open book stretch", category: "mobility", bodyArea: "upper", pattern: "rotation", defaultReps: 8 },
+  { id: "exercise-thread-the-needle", name: "Thread the needle", category: "mobility", bodyArea: "upper", pattern: "rotation", defaultReps: 8 },
   { id: "exercise-ankle-rocks", name: "Ankle rocks", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultReps: 15 },
+  { id: "exercise-calf-stretch", name: "Calf stretch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultDuration: 2 },
+  { id: "exercise-knee-to-wall-ankle-mobility", name: "Knee-to-wall ankle mobility", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultReps: 10 },
   { id: "exercise-90-90", name: "90/90 hip switch", category: "mobility", bodyArea: "lower", pattern: "stretch", defaultReps: 8 },
+  { id: "exercise-hip-cars", name: "Hip CARs", category: "mobility", bodyArea: "lower", pattern: "rotation", defaultReps: 5 },
+  { id: "exercise-shoulder-cars", name: "Shoulder CARs", category: "mobility", bodyArea: "upper", pattern: "rotation", defaultReps: 5 },
+  { id: "exercise-sun-salutation", name: "Sun salutation", category: "mobility", bodyArea: "full", pattern: "stretch", defaultDuration: 5 },
   { id: "exercise-walk", name: "Walk", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 20 },
   { id: "exercise-bike", name: "Bike", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 20 },
+  { id: "exercise-elliptical", name: "Elliptical", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 20 },
+  { id: "exercise-rower", name: "Rower", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 15 },
+  { id: "exercise-jump-rope", name: "Jump rope", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 10 },
+  { id: "exercise-stair-climb", name: "Stair climb", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 15 },
+  { id: "exercise-dance-cardio", name: "Dance cardio", category: "cardio", bodyArea: "full", pattern: "cardio", defaultDuration: 20 },
   { id: "exercise-foam-roll", name: "Foam rolling", category: "recovery", bodyArea: "full", defaultDuration: 10 },
+  { id: "exercise-breathing-reset", name: "Breathing reset", category: "recovery", bodyArea: "full", pattern: "brace", defaultDuration: 5 },
+  { id: "exercise-legs-up-wall", name: "Legs up the wall", category: "recovery", bodyArea: "full", pattern: "stretch", defaultDuration: 5 },
+  { id: "exercise-box-breathing", name: "Box breathing", category: "recovery", bodyArea: "full", pattern: "brace", defaultDuration: 5 },
+];
+
+const importedExerciseLibrary: ExerciseLibraryItem[] = (importedWorkoutData.exercises ?? [])
+  .filter((exercise) => exercise.name?.trim() && isUsableImportedStatus(exercise.status))
+  .map((exercise) => ({
+    id: `exercise-imported-${slugifyId(exercise.name)}`,
+    name: exercise.name.trim(),
+    category: isValidExerciseCategory(exercise.category) ? exercise.category : "strength",
+    bodyArea: isValidBodyArea(exercise.bodyArea) ? exercise.bodyArea : undefined,
+    pattern: isValidPattern(exercise.pattern) ? exercise.pattern : undefined,
+    defaultSets: parseWorkoutNumber(exercise.defaultSets),
+    defaultReps: parseWorkoutNumber(exercise.defaultReps),
+    defaultDuration: parseWorkoutNumber(exercise.defaultDuration),
+    equipment: exercise.equipment ?? null,
+    status: exercise.status ?? null,
+    notes: exercise.notes ?? null,
+    aliases: exercise.aliases ?? [],
+  }));
+
+const mergeExerciseLibraries = (...libraries: ExerciseLibraryItem[][]): ExerciseLibraryItem[] => {
+  const seenNames = new Set<string>();
+  const seenIds = new Set<string>();
+  return libraries.flat().filter((exercise) => {
+    const nameKey = normalizePlanningName(exercise.name);
+    if (!nameKey || seenNames.has(nameKey) || seenIds.has(exercise.id)) return false;
+    seenNames.add(nameKey);
+    seenIds.add(exercise.id);
+    return true;
+  });
+};
+
+const starterExerciseLibrary = mergeExerciseLibraries(defaultExerciseLibrary, importedExerciseLibrary);
+
+const findStarterExerciseByName = (name: string) => {
+  const normalizedName = normalizePlanningName(name);
+  return starterExerciseLibrary.find((exercise) => {
+    if (normalizePlanningName(exercise.name) === normalizedName) return true;
+    return (exercise.aliases ?? []).some((alias) => normalizePlanningName(alias) === normalizedName);
+  });
+};
+
+const importedWorkoutRoutines: WorkoutRoutine[] = (importedWorkoutData.routines ?? [])
+  .filter((routine) => routine.name?.trim() && isUsableImportedStatus(routine.status))
+  .map((routine) => {
+    const createdAt = importedWorkoutData.generatedAt
+      ? new Date(`${importedWorkoutData.generatedAt}T00:00:00`).toISOString()
+      : new Date(0).toISOString();
+    const exercises = (routine.exercises ?? [])
+      .map((row): WorkoutRoutineExercise | null => {
+        const exercise = findStarterExerciseByName(row.name);
+        if (!exercise) return null;
+        return {
+          exerciseId: exercise.id,
+          sets: parseWorkoutNumber(row.sets),
+          reps: parseWorkoutNumber(row.reps),
+          weight: null,
+          unit: "lbs" as const,
+          duration: parseWorkoutNumber(row.duration),
+          notes: row.notes ?? "",
+        };
+      })
+      .filter((row): row is WorkoutRoutineExercise => !!row);
+
+    return {
+      id: `workout-routine-imported-${slugifyId(routine.name)}`,
+      name: routine.name.trim(),
+      createdAt,
+      updatedAt: createdAt,
+      exercises,
+      focus: isValidRoutineFocus(routine.focus) ? routine.focus : "full",
+      energy: isValidRoutineEnergy(routine.energy) ? routine.energy : "medium",
+      timeBudget: isValidRoutineTime(routine.timeBudget) ? routine.timeBudget : "short",
+      equipment: normalizeRoutineEquipment(routine.equipment),
+    };
+  })
+  .filter((routine) => routine.exercises.length > 0);
+
+const mergeWorkoutRoutines = (...routineLists: WorkoutRoutine[][]): WorkoutRoutine[] => {
+  const seenNames = new Set<string>();
+  const seenIds = new Set<string>();
+  return routineLists.flat().filter((routine) => {
+    const nameKey = normalizePlanningName(routine.name);
+    if (!nameKey || seenNames.has(nameKey) || seenIds.has(routine.id)) return false;
+    seenNames.add(nameKey);
+    seenIds.add(routine.id);
+    return true;
+  });
+};
+
+const householdChoreTemplate: Array<{
+  area: string;
+  chores: Array<{ name: string; target: number; frequency: Habit["frequency"] }>;
+}> = [
+  {
+    area: "Kitchen",
+    chores: [
+      { name: "Reset counters", target: 4, frequency: "weekly" },
+      { name: "Dishes sweep", target: 5, frequency: "weekly" },
+      { name: "Fridge check", target: 1, frequency: "weekly" },
+    ],
+  },
+  {
+    area: "Bathroom",
+    chores: [
+      { name: "Wipe sink and mirror", target: 2, frequency: "weekly" },
+      { name: "Clean toilet", target: 1, frequency: "weekly" },
+      { name: "Shower/tub touch-up", target: 1, frequency: "weekly" },
+    ],
+  },
+  {
+    area: "Floors",
+    chores: [
+      { name: "Vacuum main paths", target: 2, frequency: "weekly" },
+      { name: "Mop or spot-clean", target: 1, frequency: "weekly" },
+    ],
+  },
+  {
+    area: "Laundry",
+    chores: [
+      { name: "Start laundry", target: 2, frequency: "weekly" },
+      { name: "Put laundry away", target: 2, frequency: "weekly" },
+    ],
+  },
+  {
+    area: "Deep care",
+    chores: [
+      { name: "Dust surfaces", target: 1, frequency: "weekly" },
+      { name: "Trash and recycling reset", target: 1, frequency: "weekly" },
+      { name: "One monthly deep clean", target: 1, frequency: "monthly" },
+    ],
+  },
 ];
 
 const formatTimeSince = (timestamp: string): string => {
@@ -315,8 +674,10 @@ const getBucketForHourlyIndex = (hourlyIndex: number): number => {
 };
 
 type ViewMode = "hourly" | "buckets";
-type MobileHomeView = "today" | "planner" | "themes";
+type DesktopPlannerSurface = "stack" | "week";
+type MobileHomeView = "today" | "stack" | "planner" | "themes";
 type OverlayPanel = "routines" | "workout" | "outliner";
+type SlotCaptureMode = "task" | "note";
 type MobileCaptureMode = "block" | "note" | "task";
 type MobileCaptureDestination = "waiting" | "today" | "theme-note" | "habit-note";
 
@@ -334,6 +695,7 @@ type PendingQuickCapture = {
   createdAt: string;
 };
 
+const UNSORTED_HABIT_THEME_NAME = "Not sorted";
 const OUTLINER_TOP_LEVEL_PARENT = "__top-level__";
 const OUTLINER_NEW_PARENT = "__new-parent__";
 
@@ -500,8 +862,18 @@ const App: React.FC = () => {
   const [dataLoading, setDataLoading] = useState(false);
 
   const [weekOffset, setWeekOffset] = useState<number>(0);
+  const [calendarDate, setCalendarDate] = useState(() => localDateKey(new Date()));
+  const [habitProgressRecords, setHabitProgressRecords] = useState<HabitProgressRecord[]>([]);
+  const habitProgressRequest = useRef(0);
+  const pendingHabitCompletions = useRef(new Set<string>());
+  const pendingBlockCompletions = useRef(new Set<string>());
+  const completionAction = useRef<(id: string, desired?: boolean, undo?: boolean) => Promise<void>>(async () => {});
 
   const [leftColWidth, setLeftColWidth] = useState<number>(320);
+  const [themeDetailsId, setThemeDetailsId] = useState<string | null>(null);
+  const [outlineLoading, setOutlineLoading] = useState(true);
+  const outlineMutationQueue = useRef<Promise<void>>(Promise.resolve());
+  const [outlineSaveStatus, setOutlineSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const isResizing = useRef(false);
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(0);
@@ -576,7 +948,7 @@ const App: React.FC = () => {
 
   const [themes, setThemes] = useState<Theme[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
-  const [exerciseLibrary, setExerciseLibrary] = useState<ExerciseLibraryItem[]>(defaultExerciseLibrary);
+  const [exerciseLibrary, setExerciseLibrary] = useState<ExerciseLibraryItem[]>(starterExerciseLibrary);
   const [blockExercises, setBlockExercises] = useState<Record<string, WorkoutBlockExercise[]>>({});
   const [workoutBlockRoutineLinks, setWorkoutBlockRoutineLinks] = useState<Record<string, string>>({});
   const [exerciseHistory, setExerciseHistory] = useState<Record<string, WorkoutExerciseHistoryEntry[]>>({});
@@ -586,6 +958,7 @@ const App: React.FC = () => {
   const [dragHabitId, setDragHabitId] = useState<string | null>(null);
   const [dragOverThemeId, setDragOverThemeId] = useState<string | null>(null);
 
+  const [desktopPlannerSurface, setDesktopPlannerSurface] = useState<DesktopPlannerSurface>("stack");
   const [viewMode, setViewMode] = useState<ViewMode>("hourly");
   const [bucketSlots, setBucketSlots] = useState<string[]>([
     "Early morning",
@@ -610,6 +983,9 @@ const App: React.FC = () => {
   const [editHabitTarget, setEditHabitTarget] = useState<number>(2);
   const [editHabitFrequency, setEditHabitFrequency] = useState<"daily" | "weekly" | "monthly" | "none">("weekly");
   const [editHabitGroupId, setEditHabitGroupId] = useState<string>("");
+  const [reshapingHabitId, setReshapingHabitId] = useState<string | null>(null);
+  const [reshapingThemeId, setReshapingThemeId] = useState<string | null>(null);
+  const [shapeTargetThemeId, setShapeTargetThemeId] = useState("");
 
   const [managingGroupsForTheme, setManagingGroupsForTheme] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
@@ -629,7 +1005,7 @@ const App: React.FC = () => {
   const [sessionRenameValue, setSessionRenameValue] = useState("");
 
   const [newThemeName, setNewThemeName] = useState("");
-  const [newThemeType, setNewThemeType] = useState<"habit" | "meals">("habit");
+  const [newThemeType, setNewThemeType] = useState<ThemeType>("habit");
   const [addingMealForThemeId, setAddingMealForThemeId] = useState<string | null>(null);
   const [mealPopoverBlockId, setMealPopoverBlockId] = useState<string | null>(null);
 
@@ -673,9 +1049,24 @@ const App: React.FC = () => {
   const [dailyPriorities, setDailyPriorities] = useState<Array<{ block_id: string | null; priority_rank: number }>>([]);
   const [creditPopoverBlockId, setCreditPopoverBlockId] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
-  const [showRoutineNotes, setShowRoutineNotes] = useState(true);
+  const [showRoutineNotes, setShowRoutineNotes] = useState(false);
+  const [selectedRoutineId, setSelectedRoutineId] = useState<string>();
+  const [planView, setPlanView] = useState<PlanView>("stack");
+  const [showAddPlanner, setShowAddPlanner] = useState(false);
+  const [captureThemeId, setCaptureThemeId] = useState("");
+  const [captureKind, setCaptureKind] = useState<"task" | "note" | "habit">("task");
+  const pendingCapture = useRef<{ key: string; node: OutlineNode } | null>(null);
+  const [routineCaptureNode, setRoutineCaptureNode] = useState<OutlineNode | null>(null);
+  const [gridItemSelection, setGridItemSelection] = useState<{ blockId: string; existing?: { id: string; inTrash: boolean } } | null>(null);
+  const gridHabitDrafts = useRef(new Map<string, { habitId: string; themeId: string; linkedExisting?: boolean }>());
+  const [planSelection, setPlanSelection] = useState<{ id?: string; date: string; blockId?: string; softPlanId?: string; time?: number; mode?: PlanMode; targetCount?: number; requestId?: string } | null>(null);
+  const recurringDraftIds = useRef(new Map<string, string>());
+  const softPlanSaving = useRef(false);
+  const softPlanBlockIds = useRef(new Map<string, string>());
+  const [todayNoteId, setTodayNoteId] = useState<string | null>(null);
   const [showWorkoutLibrary, setShowWorkoutLibrary] = useState(false);
   const [showPlanningOutliner, setShowPlanningOutliner] = useState(false);
+  const [showSoftPlanPanel, setShowSoftPlanPanel] = useState(false);
   const [showAmbientMode, setShowAmbientMode] = useState(false);
   const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(defaultAmbientSettings);
   const [ambientQuickNote, setAmbientQuickNote] = useState("");
@@ -694,12 +1085,26 @@ const App: React.FC = () => {
   const [smartWeeklyApplying, setSmartWeeklyApplying] = useState(false);
   const [smartWeeklySuggestions, setSmartWeeklySuggestions] = useState<SmartWeekSuggestion[]>([]);
   const [mobileDayIndex, setMobileDayIndex] = useState(0);
-  const [mobileHomeView, setMobileHomeView] = useState<MobileHomeView>("today");
+  const [mobileHomeView, setMobileHomeView] = useState<MobileHomeView>("themes");
+  const outlineScrollPosition = useRef({ root: 0, window: 0 });
   const [mobileCaptureMode, setMobileCaptureMode] = useState<MobileCaptureMode>("block");
   const [mobileCaptureDestination, setMobileCaptureDestination] = useState<MobileCaptureDestination>("waiting");
   const [mobileCaptureThemeId, setMobileCaptureThemeId] = useState("");
   const [mobileCaptureHabitId, setMobileCaptureHabitId] = useState("");
+  const [slotCaptureTarget, setSlotCaptureTarget] = useState<{
+    dayIndex: number;
+    timeIndex: number;
+    mode: SlotCaptureMode;
+  } | null>(null);
+  const [slotCaptureText, setSlotCaptureText] = useState("");
+  const [slotCaptureHabitId, setSlotCaptureHabitId] = useState('');
+  const [slotCaptureBusy, setSlotCaptureBusy] = useState(false);
+  const [slotCaptureError, setSlotCaptureError] = useState('');
+  const slotCaptureSaving = useRef(false);
+  const slotCaptureDraft = useRef<GridCaptureDraft | null>(null);
   const [mobileQuickCapturePrimed, setMobileQuickCapturePrimed] = useState(false);
+  const [mobileQuickCaptureOpen, setMobileQuickCaptureOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [pendingQuickCaptures, setPendingQuickCaptures] = useState<PendingQuickCapture[]>([]);
   const [mobileHabitPickerSlot, setMobileHabitPickerSlot] = useState<{
     dayIndex: number;
@@ -707,13 +1112,16 @@ const App: React.FC = () => {
   } | null>(null);
   const [mobileHabitPickerQuery, setMobileHabitPickerQuery] = useState("");
   const [outlinerNodes, setOutlinerNodes] = useState<OutlineNode[]>([]);
+  const latestOutlineNodes = useRef(outlinerNodes);
+  latestOutlineNodes.current = outlinerNodes;
   const [outlinerRefreshKey, setOutlinerRefreshKey] = useState(0);
   const [outlinerFocusNodeId, setOutlinerFocusNodeId] = useState<string | null>(null);
   const [outlinerFocusRequestKey, setOutlinerFocusRequestKey] = useState(0);
   const [waitingOutlinerParentBlockId, setWaitingOutlinerParentBlockId] = useState<string | null>(null);
   const [waitingOutlinerParentNodeId, setWaitingOutlinerParentNodeId] = useState(OUTLINER_TOP_LEVEL_PARENT);
   const [waitingOutlinerNewParentName, setWaitingOutlinerNewParentName] = useState("");
-  const [routineTabs, setRoutineTabs] = useState<RoutineTab[]>([]);
+  const [storedRoutineTabs, setRoutineTabs] = useState<RoutineTab[]>([]);
+  const routineTabs = useMemo(() => resolveRoutineOutlineLabels(storedRoutineTabs, outlinerNodes), [storedRoutineTabs, outlinerNodes]);
 
   useEffect(() => {
     if (!hasSupabaseConfig) {
@@ -743,6 +1151,40 @@ const App: React.FC = () => {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  const refreshHabitProgress = useCallback(async () => {
+    const request = ++habitProgressRequest.current;
+    if (!user) {
+      setHabitProgressRecords([]);
+      return;
+    }
+    try {
+      const records = await database.blocks.getHabitProgress(user.id);
+      if (request === habitProgressRequest.current) setHabitProgressRecords(records);
+    } catch (error) {
+      console.error("Error loading habit progress:", error);
+      if (request === habitProgressRequest.current) showToast("Could not refresh habit progress. Please reload to try again.", "error");
+    }
+  }, [user, showToast]);
+
+  useEffect(() => {
+    const checkDate = () => setCalendarDate(localDateKey(new Date()));
+    const timer = window.setInterval(checkDate, 30000);
+    window.addEventListener("focus", checkDate);
+    document.addEventListener("visibilitychange", checkDate);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", checkDate);
+      document.removeEventListener("visibilitychange", checkDate);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      ++habitProgressRequest.current;
+      setHabitProgressRecords([]);
+    }
+  }, [user]);
 
   const persistWeeklyIntentions = (nextIntentions: WeeklyHabitIntention[]) => {
     setWeeklyIntentions(nextIntentions);
@@ -786,6 +1228,8 @@ const App: React.FC = () => {
     }
 
     const loaded = loadRoutineNotes(user.id);
+    // Persist generated IDs before linking default checklists into Outline.
+    saveRoutineNotes(user.id, loaded);
     setRoutineTabs(loaded);
     return loaded;
   }, [user]);
@@ -807,14 +1251,22 @@ const App: React.FC = () => {
     setShowRoutineNotes(panel === "routines");
     setShowWorkoutLibrary(panel === "workout");
     setShowPlanningOutliner(panel === "outliner");
+    if (panel === "outliner") {
+      setThemeDetailsId(null);
+      setMobileHomeView("themes");
+      window.setTimeout(() => document.getElementById("planning-outline")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    }
   }, []);
 
   const toggleOverlayPanel = useCallback(
     (panel: OverlayPanel) => {
+      if (panel === "outliner") {
+        openOverlayPanel(panel);
+        return;
+      }
       const isOpen =
         (panel === "routines" && showRoutineNotes) ||
-        (panel === "workout" && showWorkoutLibrary) ||
-        (panel === "outliner" && showPlanningOutliner);
+        (panel === "workout" && showWorkoutLibrary);
 
       if (isOpen) {
         setShowRoutineNotes(false);
@@ -873,7 +1325,7 @@ const App: React.FC = () => {
     }, 0);
   }, []);
 
-  const handleMobileHomeNav = (view: MobileHomeView, event: React.PointerEvent<HTMLButtonElement>) => {
+  const handleMobileHomeNav = (view: MobileHomeView, event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
     resetMobileTabViewport(event.currentTarget);
@@ -881,20 +1333,23 @@ const App: React.FC = () => {
     if (view === "today") {
       setMobileDayIndex(todayDayIndex >= 0 ? todayDayIndex : 0);
     }
+    setMobileMoreOpen(false);
     closeOverlayPanels();
   };
 
-  const handleMobileOverlayNav = (panel: OverlayPanel, event: React.PointerEvent<HTMLButtonElement>) => {
+  const handleMobileOverlayNav = (panel: OverlayPanel, event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
     resetMobileTabViewport(event.currentTarget);
+    setMobileMoreOpen(false);
     toggleOverlayPanel(panel);
   };
 
-  const handleMobileAmbientNav = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const handleMobileAmbientNav = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
     resetMobileTabViewport(event.currentTarget);
+    setMobileMoreOpen(false);
     openAmbientMode();
   };
 
@@ -902,33 +1357,12 @@ const App: React.FC = () => {
     if (!user) return;
     getDueOutlinerReminder(user.id).then((reminder) => {
       setOutlinerReminder((current) => current ?? reminder);
-    });
+    }).catch((error) => console.error("Error loading outline reminders:", error));
   }, [user]);
 
   const showConfirm = useCallback((message: string, onConfirm: () => void, options?: { confirmLabel?: string; cancelLabel?: string; destructive?: boolean }) => {
     setConfirmDialog({ message, onConfirm, confirmLabel: options?.confirmLabel, cancelLabel: options?.cancelLabel, destructive: options?.destructive });
   }, []);
-
-  const askConfirm = useCallback(
-    (message: string, options?: { confirmLabel?: string; cancelLabel?: string; destructive?: boolean }) =>
-      new Promise<boolean>((resolve) => {
-        setConfirmDialog({
-          message,
-          confirmLabel: options?.confirmLabel,
-          cancelLabel: options?.cancelLabel,
-          destructive: options?.destructive,
-          onConfirm: () => {
-            setConfirmDialog(null);
-            resolve(true);
-          },
-          onCancel: () => {
-            setConfirmDialog(null);
-            resolve(false);
-          },
-        });
-      }),
-    []
-  );
 
   useEffect(() => {
     if (!user) {
@@ -948,6 +1382,18 @@ const App: React.FC = () => {
   }, [user, refreshRoutineTabs]);
 
   useEffect(() => {
+    if (!user) return;
+    const update = (event: Event) => {
+      if (event instanceof StorageEvent ? event.key === createRoutineStorageKey(user.id) || event.key === null : (event as CustomEvent).detail === user.id) {
+        setRoutineTabs(loadRoutineNotes(user.id));
+      }
+    };
+    window.addEventListener('storage', update);
+    window.addEventListener(routineNotesChanged, update);
+    return () => { window.removeEventListener('storage', update); window.removeEventListener(routineNotesChanged, update); };
+  }, [user]);
+
+  useEffect(() => {
     if (!user) {
       setWeeklyIntentions([]);
       setWeeklyRoutineIntentions([]);
@@ -958,20 +1404,7 @@ const App: React.FC = () => {
     setWeeklyIntentions(loadWeeklyHabitIntentions(user.id, weekStartDate));
     setWeeklyRoutineIntentions(loadWeeklyRoutineIntentions(user.id, weekStartDate));
     setPlanningIntentionHabitId(null);
-  }, [user, weekOffset]);
-
-  useEffect(() => {
-    if (!user) return;
-
-    let cancelled = false;
-    loadPlanningOutliner(user.id, false).then((nodes) => {
-      if (!cancelled) setOutlinerNodes(nodes);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user, outlinerRefreshKey]);
+  }, [user, weekOffset, calendarDate]);
 
   useEffect(() => {
     if (!themes.length) {
@@ -993,18 +1426,74 @@ const App: React.FC = () => {
   }, [themes]);
 
   useEffect(() => {
+    if (!user || dataLoading) return;
+    let cancelled = false;
+    setOutlineLoading(true);
+
+    const mapHabitForOutliner = (habit: Habit, theme: Theme): SyncHabitToOutlinerInput => ({
+      habitId: habit.id,
+      habitName: habit.name,
+      themeId: theme.id,
+      themeName: theme.name,
+      frequency: habit.frequency,
+      target: habit.targetPerWeek,
+      subtasks: habit.subtasks.map((subtask) => mapHabitForOutliner(subtask, theme)),
+    });
+
+    outlineMutationQueue.current.catch(() => {}).then(() => syncThemesToPlanningOutliner(
+      user.id,
+      themes.map((theme) => ({
+        themeId: theme.id,
+        themeName: theme.name,
+        habits: theme.habits.map((habit) => mapHabitForOutliner(habit, theme)),
+        blocks: blocks
+          .filter((block) => block.location.type === "unscheduled" && block.themeId === theme.id && !block.habitId)
+          .map((block) => ({
+            blockId: block.id,
+            label: cleanBlockLabel(block),
+            tag: getBlockKindLabel(block) === "Task" ? "task" : "note",
+            draftNote: getBlockKindLabel(block) === "Note" ? cleanBlockLabel(block) : block.blockNote ?? "",
+          })),
+      }))
+    ))
+      .then(async (result) => {
+        if (!cancelled) {
+          const routineIds = new Set<string>();
+          const collect = (nodes: OutlineNode[]) => nodes.forEach(node => { if (node.linked?.routineId) routineIds.add(node.linked.routineId); collect(node.children); });
+          collect(result.nodes);
+          const missingRoutines = loadRoutineNotes(user.id).filter(routine => !routineIds.has(routine.id));
+          if (missingRoutines.length) {
+            result.nodes = [...result.nodes, ...missingRoutines.map(routine => ({ ...createOutlineNode(routine.name), linked: { routineId: routine.id, label: routine.name } }))];
+            await savePlanningOutliner(user.id, result.nodes);
+          }
+          if (cancelled) return;
+          setOutlinerNodes(result.nodes);
+          setOutlineLoading(false);
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Error loading outline:", error);
+        showToast("Could not load Outline. Please reload to try again.", "error");
+      });
+    return () => { cancelled = true; };
+  }, [user, dataLoading, outlinerRefreshKey]);
+
+  useEffect(() => {
     if (!user || launchParamsHandledRef.current) return;
 
     const params = new URLSearchParams(window.location.search);
     const capture = params.get("capture");
-    const destination = params.get("destination");
     const panel = params.get("panel");
     const section = params.get("section");
     const view = params.get("view");
 
-    const focusQuickCapture = () => {
-      setMobileQuickCapturePrimed(true);
-      window.setTimeout(() => mobileQuickCaptureInputRef.current?.focus(), 150);
+    const openQuickNoteCapture = () => {
+      setMobileHomeView("themes");
+      setCaptureKind("note");
+      setCaptureThemeId("");
+      closeOverlayPanels();
+      setShowAddPlanner(true);
     };
 
     if (params.get("mode") === "ambient") {
@@ -1014,18 +1503,15 @@ const App: React.FC = () => {
     }
 
     if (capture === "note" || capture === "task") {
-      setMobileHomeView("today");
-      setMobileCaptureMode(capture);
-      setMobileCaptureDestination(
-        destination === "today" ||
-          destination === "theme-note" ||
-          destination === "habit-note" ||
-          destination === "waiting"
-          ? destination
-          : "waiting"
-      );
-      closeOverlayPanels();
-      focusQuickCapture();
+      if (capture === "note") {
+        openQuickNoteCapture();
+      } else {
+        setMobileHomeView("themes");
+        closeOverlayPanels();
+        setCaptureKind("task");
+        setCaptureThemeId("");
+        setShowAddPlanner(true);
+      }
       launchParamsHandledRef.current = true;
       return;
     }
@@ -1046,14 +1532,27 @@ const App: React.FC = () => {
         }, 250);
       }
       launchParamsHandledRef.current = true;
+      return;
     }
+
+    getNativePlannerLaunchTarget().then((target) => {
+      if (!target || launchParamsHandledRef.current) return;
+
+      if (target === "quick-note") {
+        openQuickNoteCapture();
+      } else {
+        setMobileHomeView("today");
+        closeOverlayPanels();
+      }
+      launchParamsHandledRef.current = true;
+    });
   }, [closeOverlayPanels, openAmbientMode, openOverlayPanel, user]);
 
   useEffect(() => {
     if (user) {
       loadUserData();
     }
-  }, [user, weekOffset]);
+  }, [user, weekOffset, calendarDate]);
 
   const ambientWakeLockSupported = typeof navigator !== "undefined" && "wakeLock" in navigator;
 
@@ -1159,13 +1658,8 @@ const App: React.FC = () => {
       const savedWorkoutRoutineHistory = window.localStorage.getItem(`workout-routine-history:${user.id}`);
       const parsedLibrary = savedLibrary
         ? (JSON.parse(savedLibrary) as ExerciseLibraryItem[])
-        : defaultExerciseLibrary;
-      setExerciseLibrary([
-        ...defaultExerciseLibrary,
-        ...parsedLibrary.filter(
-          (saved) => !defaultExerciseLibrary.some((item) => item.id === saved.id)
-        ),
-      ]);
+        : [];
+      setExerciseLibrary(mergeExerciseLibraries(starterExerciseLibrary, parsedLibrary));
       setBlockExercises(
         savedBlockExercises
           ? (JSON.parse(savedBlockExercises) as Record<string, WorkoutBlockExercise[]>)
@@ -1181,7 +1675,8 @@ const App: React.FC = () => {
           ? (JSON.parse(savedExerciseHistory) as Record<string, WorkoutExerciseHistoryEntry[]>)
           : {}
       );
-      setWorkoutRoutines(savedWorkoutRoutines ? (JSON.parse(savedWorkoutRoutines) as WorkoutRoutine[]) : []);
+      const parsedWorkoutRoutines = savedWorkoutRoutines ? (JSON.parse(savedWorkoutRoutines) as WorkoutRoutine[]) : [];
+      setWorkoutRoutines(mergeWorkoutRoutines(parsedWorkoutRoutines, importedWorkoutRoutines));
       setWorkoutRoutineHistory(
         savedWorkoutRoutineHistory
           ? (JSON.parse(savedWorkoutRoutineHistory) as WorkoutRoutineHistoryEntry[])
@@ -1211,6 +1706,7 @@ const App: React.FC = () => {
         database.habitGroups.getAll(user.id),
         database.sessionGroups.getForWeek(user.id, weekStartDate),
         database.meals.getByUser(user.id),
+        refreshHabitProgress(),
       ]);
 
       const mapHabit = (h: DBHabit, allHabits: DBHabit[]): Habit => ({
@@ -1233,7 +1729,7 @@ const App: React.FC = () => {
         return {
           id: theme.id,
           name: theme.name,
-          themeType: (theme.theme_type ?? "habit") as "habit" | "meals",
+          themeType: (theme.theme_type ?? "habit") as ThemeType,
           habits: topLevelHabits.map((h) => mapHabit(h, themeHabits)),
           groups: groupsData
             .filter((g) => g.theme_id === theme.id)
@@ -1425,7 +1921,17 @@ const App: React.FC = () => {
   const flattenHabits = (habits: Habit[], themeName: string, themeId: string): (Habit & { themeName: string; themeId: string })[] =>
     habits.flatMap((h) => [{ ...h, themeName, themeId }, ...flattenHabits(h.subtasks, themeName, themeId)]);
 
-  const allHabits = themes.flatMap((theme) => flattenHabits(theme.habits, theme.name, theme.id));
+  const allHabits = useMemo(
+    () => themes.flatMap((theme) => flattenHabits(theme.habits, theme.name, theme.id)),
+    [themes]
+  );
+  const progressReference = new Date(getWeekStartDateString(weekOffset) + "T12:00:00");
+  progressReference.setDate(progressReference.getDate() + mobileDayIndex);
+  const progressDate = localDateKey(progressReference);
+  const habitProgressCounts = useMemo(
+    () => countHabitProgress(allHabits, habitProgressRecords, new Date(progressDate + "T12:00:00")),
+    [allHabits, habitProgressRecords, progressDate]
+  );
 
   const findHabitByBlockLabel = (label: string) => {
     const normalizedLabel = normalizeHabitBlockLabel(label);
@@ -1477,16 +1983,42 @@ const App: React.FC = () => {
   };
 
   const getHabitDoneCount = (habitId: string, frequency: "daily" | "weekly" | "monthly" | "none"): number => {
+    const habit = allHabits.find((h) => h.id === habitId);
     if (frequency === "none") {
-      const habit = allHabits.find((h) => h.id === habitId);
       return habit?.doneCount ?? 0;
     }
 
-    const habitBlocks = blocks.filter(
-      (b) => b.habitId === habitId && b.completed && b.location.type === "slot"
-    );
+    return habitProgressCounts.get(habitId) ?? 0;
+  };
 
-    return habitBlocks.length;
+  const getHouseholdChoreNeed = (habit: Habit) => {
+    if (habit.frequency === "none") {
+      return {
+        label: habit.doneCount > 0 ? "Tracked" : "Optional",
+        className: "optional",
+        pct: habit.doneCount > 0 ? 25 : 0,
+      };
+    }
+
+    const cadenceDays =
+      habit.frequency === "daily"
+        ? Math.max(1, 1 / Math.max(1, habit.targetPerWeek))
+        : habit.frequency === "weekly"
+          ? Math.max(1, 7 / Math.max(1, habit.targetPerWeek))
+          : Math.max(1, 30 / Math.max(1, habit.targetPerWeek));
+    const lastDoneMs = habit.lastDoneAt ? new Date(habit.lastDoneAt).getTime() : 0;
+    const elapsedDays = lastDoneMs > 0
+      ? Math.max(0, (Date.now() - lastDoneMs) / 86400000)
+      : cadenceDays * 1.2;
+    const ratio = elapsedDays / cadenceDays;
+
+    if (ratio >= 1.15) {
+      return { label: "Needs care", className: "due", pct: 100 };
+    }
+    if (ratio >= 0.8) {
+      return { label: "Getting there", className: "soon", pct: Math.round(ratio * 100) };
+    }
+    return { label: "Okay", className: "fresh", pct: Math.round(ratio * 100) };
   };
 
   const handleSignOut = async () => {
@@ -1507,8 +2039,52 @@ const App: React.FC = () => {
       .filter((h) => h.id !== habitId)
       .map((h) => ({ ...h, subtasks: removeHabitFromTree(h.subtasks, habitId) }));
 
+  const collectHabitTreeIds = (habit: Habit): string[] => [
+    habit.id,
+    ...habit.subtasks.flatMap(collectHabitTreeIds),
+  ];
+
+  const findHabitWithTheme = (habitId: string): { habit: Habit; theme: Theme } | null => {
+    for (const theme of themes) {
+      const habit = flattenHabits(theme.habits, theme.name, theme.id).find((item) => item.id === habitId);
+      if (habit) return { habit, theme };
+    }
+    return null;
+  };
+
+  const ensureUnsortedHabitTheme = async (): Promise<Theme | null> => {
+    if (!user) return null;
+
+    const existing = themes.find(
+      (theme) =>
+        theme.themeType === "habit" &&
+        normalizePlanningName(theme.name) === normalizePlanningName(UNSORTED_HABIT_THEME_NAME)
+    );
+    if (existing) return existing;
+
+    const themeData = await database.themes.create(user.id, UNSORTED_HABIT_THEME_NAME, "habit");
+    const newTheme: Theme = {
+      id: themeData.id,
+      name: themeData.name,
+      themeType: "habit",
+      habits: [],
+      groups: [],
+      meals: [],
+    };
+
+    setThemes((prev) => [...prev, newTheme]);
+    setExpandedThemes((prev) => new Set([...prev, themeData.id]));
+    return newTheme;
+  };
+
+  const resolveHabitThemeId = async (themeId?: string | null): Promise<string | null> => {
+    if (themeId) return themeId;
+    const unsortedTheme = await ensureUnsortedHabitTheme();
+    return unsortedTheme?.id ?? null;
+  };
+
   const addHabitToTheme = async (
-    themeId: string,
+    themeId: string | null | undefined,
     name: string,
     targetPerWeek: number,
     frequency: "daily" | "weekly" | "monthly" | "none",
@@ -1527,9 +2103,12 @@ const App: React.FC = () => {
     if (!user) return null;
 
     try {
+      const resolvedThemeId = await resolveHabitThemeId(themeId);
+      if (!resolvedThemeId) return null;
+
       const habitData = await database.habits.create(
         user.id,
-        themeId,
+        resolvedThemeId,
         trimmed,
         targetPerWeek,
         frequency,
@@ -1548,7 +2127,7 @@ const App: React.FC = () => {
 
       setThemes((prevThemes) =>
         prevThemes.map((theme) =>
-          theme.id === themeId
+          theme.id === resolvedThemeId
             ? { ...theme, habits: [...theme.habits, newHabit] }
             : theme
         )
@@ -1572,19 +2151,22 @@ const App: React.FC = () => {
   };
 
   const createOrLinkOutlinerHabit = async (
-    themeId: string,
+    themeId: string | null | undefined,
     name: string,
     targetPerWeek: number,
     frequency: OutlineFrequency
   ): Promise<{ habitId: string; themeId: string; linkedExisting?: boolean } | null> => {
-    const existing = findHabitInThemeByName(themeId, name);
+    const resolvedThemeId = await resolveHabitThemeId(themeId);
+    if (!resolvedThemeId) return null;
+
+    const existing = findHabitInThemeByName(resolvedThemeId, name);
     if (existing) {
       showToast("Linked existing habit", "info");
-      return { habitId: existing.id, themeId, linkedExisting: true };
+      return { habitId: existing.id, themeId: resolvedThemeId, linkedExisting: true };
     }
 
-    const habitId = await addHabitToTheme(themeId, name, targetPerWeek, frequency);
-    return habitId ? { habitId, themeId } : null;
+    const habitId = await addHabitToTheme(resolvedThemeId, name, targetPerWeek, frequency);
+    return habitId ? { habitId, themeId: resolvedThemeId } : null;
   };
 
   const updateHabit = async (
@@ -1769,7 +2351,8 @@ const App: React.FC = () => {
 
   const incrementHabit = async (habitId: string) => {
     const habit = allHabits.find((h) => h.id === habitId);
-    if (!habit || !user) return;
+    if (!habit || !user || pendingHabitCompletions.current.has(habitId)) return;
+    pendingHabitCompletions.current.add(habitId);
 
     const now = new Date().toISOString();
     const newCount = habit.doneCount + 1;
@@ -1777,6 +2360,33 @@ const App: React.FC = () => {
     const ancestorIds = getHabitAncestorIds(habitId);
 
     try {
+      const completion = await database.blocks.create(user.id, {
+        label: `Habit: ${habit.name}`,
+        habit_id: habitId,
+        is_habit_block: true,
+        completed: true,
+        location_type: "unscheduled",
+        week_start_date: null,
+        day_index: null,
+        time_index: null,
+        hashtag: habit.themeName,
+        linked_block_id: null,
+        is_linked_group: false,
+        workout_submitted: false,
+        session_group_id: null,
+        is_daily_template: false,
+        daily_template_id: null,
+      });
+      try {
+        await database.blockActivityLogs.create(user.id, completion.id, habitId, null, null, null, now);
+      } catch (error) {
+        await database.blocks.delete(completion.id);
+        throw error;
+      }
+      setBlocks((current) => [...current, {
+        id: completion.id, label: completion.label, habitId, isHabitBlock: true,
+        completed: true, location: { type: "unscheduled" }, creditedHabitIds: [],
+      }]);
       await database.habits.update(habitId, {
         done_count: newCount,
         last_done_at: now,
@@ -1833,6 +2443,10 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error("Error updating habit:", error);
+      showToast("Could not finish recording this habit. Check its progress before trying again.", "error");
+    } finally {
+      await refreshHabitProgress();
+      pendingHabitCompletions.current.delete(habitId);
     }
   };
 
@@ -1888,6 +2502,98 @@ const App: React.FC = () => {
       }
       setConfirmDialog(null);
     }, { confirmLabel: "Delete", destructive: true });
+  };
+
+  const makeHabitIntoTheme = (habitId: string) => {
+    const found = findHabitWithTheme(habitId);
+    if (!found || !user) return;
+    const { habit } = found;
+
+    showConfirm(`Make "${habit.name}" its own theme? Its history and subtasks will move with it.`, async () => {
+      try {
+        const themeData = await database.themes.create(user.id, habit.name, "habit");
+        const habitIds = collectHabitTreeIds(habit);
+
+        await Promise.all(
+          habitIds.map((id) =>
+            database.habits.update(id, {
+              theme_id: themeData.id,
+              habit_group_id: null,
+              ...(id === habit.id ? { parent_habit_id: null } : {}),
+            })
+          )
+        );
+
+        await Promise.all(
+          blocks
+            .filter((block) => block.habitId && habitIds.includes(block.habitId))
+            .map((block) =>
+              database.blocks.update(block.id, {
+                theme_id: themeData.id,
+                hashtag: themeData.name,
+              })
+            )
+        );
+
+        setReshapingHabitId(null);
+        await loadUserData();
+        setExpandedThemes((prev) => new Set([...prev, themeData.id]));
+        showToast("Habit turned into theme", "success");
+      } catch (error) {
+        console.error("Error turning habit into theme:", error);
+        showToast("Failed to change habit shape", "error");
+      }
+      setConfirmDialog(null);
+    }, { confirmLabel: "Make theme" });
+  };
+
+  const makeThemeIntoHabit = (theme: Theme, targetThemeId: string) => {
+    if (!user || !targetThemeId) return;
+    const targetTheme = themes.find((item) => item.id === targetThemeId);
+    if (!targetTheme || targetTheme.id === theme.id) return;
+
+    showConfirm(`Make "${theme.name}" a habit inside "${targetTheme.name}"? Its habits will become subtasks.`, async () => {
+      try {
+        const habitData = await database.habits.create(user.id, targetTheme.id, theme.name, 1, "weekly");
+        const habitIds = theme.habits.flatMap(collectHabitTreeIds);
+        const topHabitIds = new Set(theme.habits.map((habit) => habit.id));
+
+        await Promise.all(
+          habitIds.map((id) =>
+            database.habits.update(id, {
+              theme_id: targetTheme.id,
+              habit_group_id: null,
+              ...(topHabitIds.has(id) ? { parent_habit_id: habitData.id } : {}),
+            })
+          )
+        );
+
+        await Promise.all(
+          blocks
+            .filter((block) => block.habitId && habitIds.includes(block.habitId))
+            .map((block) =>
+              database.blocks.update(block.id, {
+                theme_id: targetTheme.id,
+                hashtag: targetTheme.name,
+              })
+            )
+        );
+
+        await Promise.all(theme.groups.map((group) => database.habitGroups.delete(group.id)));
+        await database.themes.delete(theme.id);
+
+        setReshapingThemeId(null);
+        setShapeTargetThemeId("");
+        await loadUserData();
+        setExpandedThemes((prev) => new Set([...prev, targetTheme.id]));
+        setExpandedHabits((prev) => new Set([...prev, habitData.id]));
+        showToast("Theme turned into habit", "success");
+      } catch (error) {
+        console.error("Error turning theme into habit:", error);
+        showToast("Failed to change theme shape", "error");
+      }
+      setConfirmDialog(null);
+    }, { confirmLabel: "Make habit" });
   };
 
   const toggleHabitExpanded = (habitId: string) => {
@@ -1954,12 +2660,55 @@ const App: React.FC = () => {
     try {
       const themeData = await database.themes.create(user.id, trimmed, newThemeType);
 
+      const seededGroups: HabitGroup[] = [];
+      const seededHabits: Habit[] = [];
+
+      if (newThemeType === "household") {
+        for (const area of householdChoreTemplate) {
+          const groupData = await database.habitGroups.create(
+            user.id,
+            themeData.id,
+            area.area,
+            "custom",
+            "none"
+          );
+          const group: HabitGroup = {
+            id: groupData.id,
+            name: groupData.name,
+            groupType: groupData.group_type,
+            linkBehavior: groupData.link_behavior,
+          };
+          seededGroups.push(group);
+
+          for (const chore of area.chores) {
+            const habitData = await database.habits.create(
+              user.id,
+              themeData.id,
+              chore.name,
+              chore.target,
+              chore.frequency,
+              group.id
+            );
+            seededHabits.push({
+              id: habitData.id,
+              name: habitData.name,
+              targetPerWeek: habitData.target_per_week,
+              doneCount: habitData.done_count,
+              frequency: habitData.frequency,
+              habitGroupId: habitData.habit_group_id ?? undefined,
+              parentHabitId: habitData.parent_habit_id ?? undefined,
+              subtasks: [],
+            });
+          }
+        }
+      }
+
       const newTheme: Theme = {
         id: themeData.id,
         name: themeData.name,
         themeType: newThemeType,
-        habits: [],
-        groups: [],
+        habits: seededHabits,
+        groups: seededGroups,
         meals: [],
       };
 
@@ -1967,7 +2716,7 @@ const App: React.FC = () => {
       setExpandedThemes((prev) => new Set([...prev, themeData.id]));
       setNewThemeName("");
       setNewThemeType("habit");
-      showToast("Theme created", "success");
+      showToast(newThemeType === "household" ? "Household chores created" : "Theme created", "success");
     } catch (error) {
       console.error("Error creating theme:", error);
       showToast("Failed to create theme", "error");
@@ -2148,7 +2897,7 @@ const App: React.FC = () => {
     habitId?: string,
     hashtag?: string,
     locationOverride?: BlockLocation,
-    options: { resetInputs?: boolean; suppressErrorToast?: boolean } = {}
+    options: { resetInputs?: boolean; suppressErrorToast?: boolean; weekStartDate?: string } = {}
   ): Promise<string | null> => {
     const trimmed = label.trim();
     if (!trimmed) {
@@ -2161,7 +2910,7 @@ const App: React.FC = () => {
     try {
       const nextLocation = locationOverride ?? { type: "unscheduled" as const };
       const weekStartDate =
-        nextLocation.type === "slot" ? getWeekStartDateString(weekOffset) : null;
+        nextLocation.type === "slot" ? options.weekStartDate ?? getWeekStartDateString(weekOffset) : null;
 
       const blockData = await database.blocks.create(user.id, {
         label: trimmed,
@@ -2195,7 +2944,9 @@ const App: React.FC = () => {
         creditedHabitIds: [],
       };
 
-      setBlocks((prev) => [...prev, newBlock]);
+      if (nextLocation.type === "unscheduled" || weekStartDate === getWeekStartDateString(weekOffset)) {
+        setBlocks((prev) => [...prev, newBlock]);
+      }
       if (options.resetInputs ?? true) {
         setBlockLabel("");
         setBlockHashtag("");
@@ -2331,6 +3082,48 @@ const App: React.FC = () => {
     setOutlinerRefreshKey((key) => key + 1);
   };
 
+  const findOutlinerNodeForBoardBlock = (nodes: OutlineNode[], block: Block): OutlineNode | null => {
+    for (const node of nodes) {
+      if (node.linked?.blockId === block.id) return node;
+      if (block.habitId && node.linked?.habitId === block.habitId) return node;
+      const childMatch = findOutlinerNodeForBoardBlock(node.children, block);
+      if (childMatch) return childMatch;
+    }
+    return null;
+  };
+
+  const getBoardOutlineItemsForBlock = (block: Block): HabitCardOutlineItem[] => {
+    if (!block.habitId && !block.isHabitBlock) return [];
+    const node = findOutlinerNodeForBoardBlock(outlinerNodes, block);
+    if (!node) return [];
+
+    return node.children
+      .filter((child) => child.tag === "task" || child.tag === "habit")
+      .map((child) => ({
+        id: child.id,
+        text: child.text.trim() || "Untitled",
+        tag: child.tag as "task" | "habit",
+        taskDone: child.taskDone,
+        linkedHabitId: child.linked?.habitId,
+        onBoard: !!child.linked?.habitId && blocks.some((item) => item.habitId === child.linked?.habitId),
+      }));
+  };
+
+  const toggleBoardOutlineTask = async (nodeId: string) => {
+    if (!user) return;
+    const sourceNodes = outlinerNodes.length > 0 ? outlinerNodes : await loadPlanningOutliner(user.id, false);
+    let changed = false;
+    const nextNodes = updateOutlineNode(sourceNodes, nodeId, (node) => {
+      changed = true;
+      return { ...node, taskDone: !node.taskDone };
+    });
+    if (!changed) return;
+
+    setOutlinerNodes(nextNodes);
+    await savePlanningOutliner(user.id, nextNodes);
+    setOutlinerRefreshKey((key) => key + 1);
+  };
+
   const addLinkedHabitToBoard = async (
     link: OutlineLink
   ): Promise<{ habitId: string; themeId: string; blockId?: string; linkedExisting?: boolean } | null> => {
@@ -2368,11 +3161,13 @@ const App: React.FC = () => {
   const openLinkedOutlinerItem = (link: OutlineLink) => {
     if (link.blockId && blocks.some((block) => block.id === link.blockId)) {
       setShowPlanningOutliner(false);
+      setMobileHomeView("planner");
       scrollLinkedElementIntoView(`block-${link.blockId}`);
       return;
     }
 
     if (link.routineId) {
+      setSelectedRoutineId(link.routineId);
       refreshRoutineTabs();
       openOverlayPanel("routines");
       return;
@@ -2386,6 +3181,7 @@ const App: React.FC = () => {
       }
       setExpandedThemes((prev) => new Set([...prev, habit.themeId]));
       setExpandedHabits((prev) => new Set([...prev, habit.id]));
+      setThemeDetailsId(habit.themeId);
       setShowPlanningOutliner(false);
       scrollLinkedElementIntoView(`habit-${habit.id}`);
       return;
@@ -2398,6 +3194,7 @@ const App: React.FC = () => {
         return;
       }
       setExpandedThemes((prev) => new Set([...prev, theme.id]));
+      setThemeDetailsId(theme.id);
       setShowPlanningOutliner(false);
       scrollLinkedElementIntoView(`theme-${theme.id}`);
     }
@@ -2406,12 +3203,7 @@ const App: React.FC = () => {
   const renameLinkedOutlinerItem = async (link: OutlineLink, nextName: string): Promise<boolean> => {
     const trimmed = nextName.trim();
     if (!trimmed) return false;
-    const label = link.habitId ? "habit" : link.routineId ? "routine" : "theme";
-    const shouldRename = await askConfirm(
-      `Rename the linked ${label} to "${trimmed}" too?`,
-      { confirmLabel: "Rename", cancelLabel: "Only row" }
-    );
-    if (!shouldRename) return false;
+    const label = link.habitId ? "habit" : link.routineId ? "routine" : link.blockId ? "task" : "theme";
 
     try {
       if (link.habitId) {
@@ -2434,7 +3226,7 @@ const App: React.FC = () => {
             block.habitId === link.habitId ? { ...block, label: `Habit: ${trimmed}` } : block
           )
         );
-        showToast("Linked habit renamed", "success");
+        showToast("Habit renamed", "success");
         return true;
       }
 
@@ -2451,12 +3243,18 @@ const App: React.FC = () => {
         return true;
       }
 
+      if (link.blockId) {
+        await database.blocks.update(link.blockId, { label: trimmed });
+        setBlocks((current) => current.map((block) => block.id === link.blockId ? { ...block, label: trimmed } : block));
+        return true;
+      }
+
       if (link.themeId) {
         await database.themes.update(link.themeId, trimmed);
         setThemes((prevThemes) =>
           prevThemes.map((theme) => (theme.id === link.themeId ? { ...theme, name: trimmed } : theme))
         );
-        showToast("Linked theme renamed", "success");
+        showToast("Theme renamed", "success");
         return true;
       }
     } catch (error) {
@@ -2523,46 +3321,161 @@ const App: React.FC = () => {
     return null;
   };
 
-  const addHabitViewToOutliner = async (habit: Habit, theme: Theme) => {
-    if (!user) return;
-
-    const result = await addHabitToPlanningOutliner(user.id, {
-      habitId: habit.id,
-      habitName: habit.name,
-      themeId: theme.id,
-      themeName: theme.name,
-      frequency: habit.frequency,
-      target: habit.targetPerWeek,
-    });
-
-    setOutlinerNodes(result.nodes);
-    setOutlinerRefreshKey((value) => value + 1);
-    setOutlinerFocusNodeId(result.nodeId);
+  const openEntityInOutline = (habitId?: string, themeId?: string) => {
+    const find = (nodes: OutlineNode[]): OutlineNode | undefined => {
+      for (const node of nodes) {
+        if (habitId ? node.linked?.habitId === habitId : node.linked?.themeId === themeId && !node.linked?.habitId && !node.linked?.blockId) return node;
+        const child = find(node.children);
+        if (child) return child;
+      }
+    };
+    const node = find(outlinerNodes);
+    setOutlinerFocusNodeId(node?.id ?? null);
     setOutlinerFocusRequestKey((value) => value + 1);
+    setOutlinerRefreshKey((value) => value + 1);
     openOverlayPanel("outliner");
-    showToast(
-      result.existing ? "That habit is already in Planning Outliner" : "Habit added to Planning Outliner",
-      result.existing ? "info" : "success"
-    );
   };
 
-  const addThemeViewToOutliner = async (theme: Theme) => {
-    if (!user) return;
+  const addHabitViewToOutliner = (habit: Habit, _theme: Theme) => openEntityInOutline(habit.id);
+  const addThemeViewToOutliner = (theme: Theme) => openEntityInOutline(undefined, theme.id);
 
-    const result = await addThemeToPlanningOutliner(user.id, {
-      themeId: theme.id,
-      themeName: theme.name,
+  const saveOutlineNodes = (nodes: OutlineNode[]) => {
+    if (!user || outlineLoading) return;
+    const previousPlacements = new Map(outlineHabitPlacements(outlinerNodes).map((item) => [item.habitId, item]));
+    const moves = outlineHabitPlacements(nodes).filter((item) => {
+      const previous = previousPlacements.get(item.habitId);
+      return previous && (previous.themeId !== item.themeId || previous.parentHabitId !== item.parentHabitId);
     });
+    setOutlinerNodes(nodes);
+    latestOutlineNodes.current = nodes;
+    setOutlineSaveStatus('saving');
+    if (moves.length) {
+      setThemes((current) => {
+        const habits = current.flatMap((theme) => flattenHabits(theme.habits, theme.name, theme.id)).map((habit) => {
+          const move = moves.find((item) => item.habitId === habit.id);
+          return move ? { ...habit, themeId: move.themeId, parentHabitId: move.parentHabitId ?? undefined } : habit;
+        });
+        const buildTree = (themeId: string, parentId?: string): Habit[] => habits
+          .filter((habit) => habit.themeId === themeId && habit.parentHabitId === parentId)
+          .map((habit) => ({ ...habit, subtasks: buildTree(themeId, habit.id) }));
+        return current.map((theme) => ({ ...theme, habits: buildTree(theme.id) }));
+      });
+    }
+    const save = outlineMutationQueue.current.catch(() => {}).then(async () => {
+      for (const move of moves) {
+        await database.habits.update(move.habitId, { theme_id: move.themeId, parent_habit_id: move.parentHabitId });
+      }
+      await savePlanningOutliner(user.id, nodes);
+    });
+    outlineMutationQueue.current = save;
+    void save.then(() => { if (outlineMutationQueue.current === save) setOutlineSaveStatus('saved'); }, () => { if (outlineMutationQueue.current === save) setOutlineSaveStatus('error'); });
+    void save.catch((error) => {
+      console.error("Error saving outline:", error);
+      showToast("Outline could not be saved. Please try again.", "error");
+    });
+    return save;
+  };
 
-    setOutlinerNodes(result.nodes);
+  const saveOutlineHabitSettings = async (node: OutlineNode): Promise<boolean> => {
+    if (!node.linked?.habitId || !node.text.trim()) return false;
+    try {
+      await database.habits.update(node.linked.habitId, {
+        name: node.text.trim(), target_per_week: node.target, frequency: node.frequency,
+      });
+      setThemes((current) => current.map((theme) => ({
+        ...theme,
+        habits: updateHabitInTree(theme.habits, node.linked!.habitId!, (habit) => ({
+          ...habit, name: node.text.trim(), targetPerWeek: node.target, frequency: node.frequency,
+        })),
+      })));
+      return true;
+    } catch (error) {
+      console.error("Error saving habit settings:", error);
+      return false;
+    }
+  };
+
+  const changeOutlineCardType = async (nodeId: string, kind: OutlineCardType) => {
+    if (!user || outlineLoading) throw new Error('Outline is still loading. Please try again.');
+    const node = outlineBranchItems(latestOutlineNodes.current).find(item => item.id === nodeId);
+    if (!node) throw new Error('This item is missing or in Trash.');
+    prepareOutlineTypeChange(node, kind);
+    let linkedCompletion: boolean | undefined;
+    if (kind === 'task' || kind === 'note' || kind === 'link') {
+      const ids = outlineTypeBlockIds(node);
+      // Include occurrences outside the visible week. Never recreate a missing block.
+      const linkedBlocks = await database.blocks.getByIds(user.id, ids);
+      linkedCompletion = linkedBlocks.find(block => block.id === node.linked?.blockId)?.completed;
+      if (linkedBlocks.some(block => block.habit_id || block.is_habit_block)) throw new Error('A linked calendar item belongs to a habit. Its history is protected.');
+      for (const block of linkedBlocks) {
+        const patch = blockTypePatch(block.label, kind);
+        await database.blocks.update(block.id, patch);
+        setBlocks(current => current.map(item => item.id === block.id ? { ...item, ...patch } : item));
+      }
+    }
+    // Read the latest tree after network writes so concurrent note edits are retained.
+    await saveOutlineNodes(updateOutlineNode(latestOutlineNodes.current, nodeId, item => ({
+      ...prepareOutlineTypeChange(item, kind),
+      ...((kind === 'task' || kind === 'link') && linkedCompletion !== undefined ? { taskDone: linkedCompletion } : {}),
+    })));
+    showToast('Type changed. Notes, children, and calendar times kept.', 'success');
+  };
+
+  const loadOutlinePlanning = async (node: OutlineNode) => {
+    if (!user || outlineLoading) throw new Error('Outline is still loading.');
+    const linkedBlocks = await database.blocks.getByIds(user.id, outlineTypeBlockIds(node));
+    return describeOutlinePlanning(node, linkedBlocks, hourlySlots);
+  };
+
+  const unlinkOutlinePlanning = async (reviewed: OutlineNode, makeGroup: boolean) => {
+    if (!user || outlineLoading) throw new Error('Outline is still loading. Please retry.');
+    if (softPlanSaving.current) throw new Error('A plan is still saving. Please try again.');
+    const reviewedKey = outlinePlanningKey(reviewed);
+    const getCurrent = () => {
+      const current = outlineBranchItems(latestOutlineNodes.current).find(item => item.id === reviewed.id);
+      if (!current || outlinePlanningKey(current) !== reviewedKey) throw new Error('This item\'s plans changed. Review them again before unlinking.');
+      return current;
+    };
+    const original = getCurrent();
+    withoutOutlinePlanning(original, makeGroup);
+    softPlanSaving.current = true;
+    try {
+      // Detach only this row. Never delete, move, or rewrite calendar history.
+      const savedNote = original.linked?.blockId ? await database.blockNotes.getByBlock(original.linked.blockId) : null;
+      const source = getCurrent();
+      const replacement = withoutOutlinePlanning(source, makeGroup, savedNote?.content ?? '');
+      try {
+        await saveOutlineNodes(updateOutlineNode(latestOutlineNodes.current, source.id, () => replacement));
+      } catch (error) {
+        const restored = updateOutlineNode(latestOutlineNodes.current, source.id, item => outlinePlanningKey(item) === outlinePlanningKey(replacement)
+          ? { ...item, tag: source.tag, isGroup: source.isGroup, linked: source.linked, plans: source.plans, planDate: source.planDate } : item);
+        latestOutlineNodes.current = restored; setOutlinerNodes(restored);
+        throw error;
+      }
+      showToast(makeGroup ? 'Group created. Existing calendar items kept.' : 'Planning links removed. Existing calendar items kept.', 'success');
+    } finally { softPlanSaving.current = false; }
+  };
+
+  const saveOutlineReadingLink = async (nodeId: string, title: string, link: ReadingLink) => {
+    if (!user || outlineLoading) throw new Error('Outline is still loading.');
+    const readingLink = normalizeReadingLink(link);
+    if (!title.trim() || !readingLink) throw new Error('Enter a title and a public http or https URL.');
+    if (link.imageUrl?.trim() && !publicWebUrl(link.imageUrl)) throw new Error('Use a public http or https thumbnail URL.');
+    const node = outlineBranchItems(latestOutlineNodes.current).find(item => item.id === nodeId);
+    if (!node || node.tag !== 'link') throw new Error('This Link is no longer available.');
+    for (const block of await database.blocks.getByIds(user.id, outlineTypeBlockIds(node))) {
+      if (block.habit_id || block.is_habit_block) throw new Error('This calendar item belongs to a habit.');
+      const patch = { label: `Link: ${title.trim()}`, hashtag: 'link' };
+      await database.blocks.update(block.id, patch);
+      setBlocks(current => current.map(item => item.id === block.id ? { ...item, ...patch } : item));
+    }
+    await saveOutlineNodes(updateOutlineNode(latestOutlineNodes.current, nodeId, item => ({ ...item, text: title.trim(), readingLink })));
+    showToast('Link saved', 'success');
+  };
+
+  const closeThemeDetails = () => {
+    setThemeDetailsId(null);
     setOutlinerRefreshKey((value) => value + 1);
-    setOutlinerFocusNodeId(result.nodeId);
-    setOutlinerFocusRequestKey((value) => value + 1);
-    openOverlayPanel("outliner");
-    showToast(
-      result.existing ? "That theme is already in Planning Outliner" : "Theme added to Planning Outliner",
-      result.existing ? "info" : "success"
-    );
   };
 
   const createHabitBlockAtSlot = async (
@@ -2761,6 +3674,7 @@ const App: React.FC = () => {
         )
       );
 
+      if (user) await cancelTileTimer(localStorage, tileTimerAlarm, user.id, blockId);
       await database.blocks.delete(blockId);
       setBlocks((prev) => prev.filter((b) => b.id !== blockId));
 
@@ -2922,6 +3836,14 @@ const App: React.FC = () => {
     }
   };
 
+  const recurringSessionForBlock = (blockId: string) => {
+    for (const node of outlineBranchItems(latestOutlineNodes.current)) {
+      if (!isRepeatingPlanNode(node)) continue;
+      const plan = node.plans.find(plan => plan.parentPlanId && (plan.scheduledBlockIds.includes(blockId) || plan.occurrenceBlockId === blockId));
+      if (plan) return { node, plan };
+    }
+    return undefined;
+  };
   const moveBlockToSlot = async (
     blockId: string,
     dayIndex: number,
@@ -2929,7 +3851,13 @@ const App: React.FC = () => {
   ) => {
     try {
       const block = blocks.find((b) => b.id === blockId);
-
+      const session = recurringSessionForBlock(blockId);
+      if (session) {
+        const date = new Date(`${getWeekStartDateString(weekOffset)}T12:00:00`);
+        date.setDate(date.getDate() + dayIndex);
+        await commitSoftPlan(session.node.id, session.plan.id, { kind: 'time', date: localDateKey(date), timeIndex });
+        return true;
+      }
       if (block?.linkedBlockId) {
         await database.blocks.update(block.linkedBlockId, {
           linked_block_id: null,
@@ -2993,14 +3921,22 @@ const App: React.FC = () => {
       setBlocks(updatedBlocks);
 
       await refreshSessionGroups();
+      return true;
     } catch (error) {
       console.error("Error moving block:", error);
+      showToast(error instanceof Error ? error.message : 'Could not move this item.', 'error');
+      return false;
     }
   };
 
   const moveBlockToUnscheduled = async (blockId: string) => {
     try {
       const block = blocks.find((b) => b.id === blockId);
+      const session = recurringSessionForBlock(blockId);
+      if (session) {
+        await commitSoftPlan(session.node.id, session.plan.id, { kind: 'week', date: session.plan.date });
+        return true;
+      }
 
       if (block?.linkedBlockId) {
         await database.blocks.update(block.linkedBlockId, {
@@ -3058,7 +3994,10 @@ const App: React.FC = () => {
       await refreshSessionGroups();
     } catch (error) {
       console.error("Error moving block:", error);
+      showToast(error instanceof Error ? error.message : 'Could not move this item.', 'error');
+      return false;
     }
+    return true;
   };
 
   const getHabitAncestorIds = (habitId: string): string[] => {
@@ -3071,29 +4010,49 @@ const App: React.FC = () => {
     return ancestors;
   };
 
-  const toggleBlockCompletion = async (blockId: string) => {
+  const toggleBlockCompletion = async (blockId: string, desiredCompleted?: boolean, offerUndo = false) => {
     const block = blocks.find((b) => b.id === blockId);
-    if (!block) return;
+    if (!block || pendingBlockCompletions.current.has(blockId)) return;
+    pendingBlockCompletions.current.add(blockId);
 
-    const newCompleted = !block.completed;
+    const newCompleted = desiredCompleted ?? !block.completed;
+    if (!!block.completed === newCompleted) { pendingBlockCompletions.current.delete(blockId); return; }
+    const notifyCompletion = () => {
+      if (offerUndo) showToast(newCompleted ? 'Completed' : 'Marked incomplete', 'success', {
+        label: 'Undo', onClick: () => { void completionAction.current(blockId, !!block.completed); },
+      });
+      else if (desiredCompleted !== undefined) showToast('Completion undone', 'info');
+    };
+    setBlocks((prev) =>
+      prev.map((b) => (b.id === blockId ? { ...b, completed: newCompleted } : b))
+    );
 
-    if (!block.isHabitBlock || !block.habitId) {
-      try {
-        await database.blocks.update(blockId, { completed: newCompleted });
-        setBlocks((prev) =>
-          prev.map((b) => (b.id === blockId ? { ...b, completed: newCompleted } : b))
-        );
-        await syncOutlinerBlockCompletion(blockId, newCompleted);
-      } catch (error) {
-        console.error("Error toggling block completion:", error);
-      }
+    try {
+      await database.blocks.update(blockId, { completed: newCompleted });
+    } catch (error) {
+      setBlocks((prev) =>
+        prev.map((b) => (b.id === blockId ? { ...b, completed: block.completed } : b))
+      );
+      console.error("Error toggling block completion:", error);
+      showToast('Could not save completion. Please try again.', 'error');
+      pendingBlockCompletions.current.delete(blockId);
       return;
     }
 
-    const primaryHabitId = block.habitId;
-    const crossCreditIds = block.creditedHabitIds ?? [];
+    const directHabitIds = Array.from(new Set([...(block.habitId ? [block.habitId] : []), ...(block.creditedHabitIds ?? [])]));
+    if (!directHabitIds.length) {
+      try {
+        await syncOutlinerBlockCompletion(blockId, newCompleted);
+        notifyCompletion();
+      } catch (error) {
+        console.error("Error syncing block completion:", error);
+        showToast('Completion saved, but Outline could not be updated.', 'error');
+      }
+      pendingBlockCompletions.current.delete(blockId);
+      return;
+    }
 
-    const directHabitIds = Array.from(new Set([primaryHabitId, ...crossCreditIds]));
+    const primaryHabitId = block.habitId ?? directHabitIds[0];
     const allAffectedHabitIds = Array.from(new Set([
       ...directHabitIds,
       ...directHabitIds.flatMap((hId) => getHabitAncestorIds(hId)),
@@ -3102,8 +4061,6 @@ const App: React.FC = () => {
     const delta = newCompleted ? 1 : -1;
 
     try {
-      await database.blocks.update(blockId, { completed: newCompleted });
-
       // Use the block's assigned day as the completion timestamp, not the current click time
       const blockDate = (() => {
         if (block.location.type === "slot") {
@@ -3176,21 +4133,23 @@ const App: React.FC = () => {
         await database.blockActivityLogs.deleteByBlock(blockId);
       }
 
-      setBlocks((prev) =>
-        prev.map((b) =>
-          b.id === blockId ? { ...b, completed: newCompleted } : b
-        )
-      );
       await syncOutlinerBlockCompletion(blockId, newCompleted);
+      notifyCompletion();
     } catch (error) {
-      console.error("Error toggling completion:", error);
+      console.error("Error updating completion side effects:", error);
+      showToast('Completion saved, but some progress could not be updated.', 'error');
+    } finally {
+      await refreshHabitProgress();
+      pendingBlockCompletions.current.delete(blockId);
     }
   };
+
+  completionAction.current = toggleBlockCompletion;
 
   const markBlockDone = async (blockId: string) => {
     const block = blocks.find((b) => b.id === blockId);
     if (!block || block.completed) return;
-    if (block.isHabitBlock && block.habitId) {
+    if (block.habitId || block.creditedHabitIds?.length) {
       await toggleBlockCompletion(blockId);
     } else {
       await database.blocks.update(blockId, { completed: true });
@@ -3215,8 +4174,9 @@ const App: React.FC = () => {
         prev.map((b) => (b.id === blockId ? { ...b, creditedHabitIds } : b))
       );
 
-      if (block.completed && creditedHabitIds.length > 0) {
-        showToast("Credits updated. Re-check the block to apply changes.", "info");
+      if (block.completed) {
+        await refreshHabitProgress();
+        showToast("Credits updated", "success");
       }
     } catch (error) {
       console.error("Error saving block credits:", error);
@@ -3224,8 +4184,8 @@ const App: React.FC = () => {
     }
   };
 
-  const saveBlockNote = async (blockId: string, content: string) => {
-    if (!user) return;
+  const saveBlockNote = async (blockId: string, content: string, throwOnError = false) => {
+    if (!user) { if (throwOnError) throw new Error('Please sign in again.'); return; }
     try {
       const savedNote = await database.blockNotes.upsert(user.id, blockId, content);
       setBlocks((prev) =>
@@ -3238,6 +4198,7 @@ const App: React.FC = () => {
 
     } catch (error) {
       console.error("Error saving block note:", error);
+      if (throwOnError) throw error;
     }
   };
 
@@ -3916,6 +4877,7 @@ const App: React.FC = () => {
   };
 
   const isWorkoutBlock = (block: Block): boolean => {
+    if (block.hashtag === 'link' || /^Link:/i.test(block.label)) return false;
     if (isStrengthTrainingBlock(block)) return true;
 
     const habit = block.habitId ? allHabits.find((h) => h.id === block.habitId) : undefined;
@@ -3979,8 +4941,19 @@ const App: React.FC = () => {
 
   const slotLabels = viewMode === "hourly" ? hourlySlots : bucketSlots;
 
+  const softPlannedBlockIds = new Set<string>();
+  const collectSoftPlannedBlocks = (nodes: OutlineNode[]) => nodes.forEach(node => {
+    if (node.trashedAt) return;
+    if (normalizeOutlinePlans(node.plans, node.id, node.planDate).length && node.linked?.blockId) softPlannedBlockIds.add(node.linked.blockId);
+    for (const plan of node.plans ?? []) {
+      plan.scheduledBlockIds.forEach(id => softPlannedBlockIds.add(id));
+      if (plan.occurrenceBlockId) softPlannedBlockIds.add(plan.occurrenceBlockId);
+    }
+    collectSoftPlannedBlocks(node.children);
+  });
+  collectSoftPlannedBlocks(outlinerNodes);
   const unscheduledBlocks = blocks.filter(
-    (b) => b.location.type === "unscheduled" && !b.themeId
+    (b) => b.location.type === "unscheduled" && !b.themeId && !b.completed && !softPlannedBlockIds.has(b.id)
   );
 
   const getBlocksForSlot = (dayIndex: number, timeIndex: number) => {
@@ -4044,6 +5017,14 @@ const App: React.FC = () => {
     e.currentTarget.classList.remove("drag-over");
 
     const hourlyIndex = viewMode === "buckets" ? BUCKET_TO_HOURLY[timeIndex] ?? timeIndex : timeIndex;
+    const plainDrag = e.dataTransfer.getData('text/plain');
+    const outlineId = e.dataTransfer.getData('application/outline-node-id') || (plainDrag.startsWith('outline-link:') ? plainDrag.slice('outline-link:'.length) : '');
+    const reading = outlineBranchItems(latestOutlineNodes.current).find(node => node.id === outlineId && node.tag === 'link');
+    if (reading) {
+      const date = new Date(`${getWeekStartDateString(weekOffset)}T12:00:00`); date.setDate(date.getDate() + dayIndex);
+      void savePlanItem(reading.id, localDateKey(date), hourlyIndex, 'time').catch(error => showToast(error instanceof Error ? error.message : 'Could not schedule this link. Please retry.', 'error'));
+      return;
+    }
     const droppedBlockId = currentDragBlockId || dragBlockId;
     if (droppedBlockId) {
       moveBlockToSlot(droppedBlockId, dayIndex, hourlyIndex);
@@ -4054,6 +5035,7 @@ const App: React.FC = () => {
 
   const handleSlotDragOver = (e: React.DragEvent<HTMLTableCellElement>) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
     e.currentTarget.classList.add("drag-over");
   };
 
@@ -4061,9 +5043,48 @@ const App: React.FC = () => {
     e.currentTarget.classList.remove("drag-over");
   };
 
+  const handleWaitingDragOver = (e: React.DragEvent<HTMLElement>) => {
+    const droppedBlockId = currentDragBlockId || dragBlockId;
+    const block = droppedBlockId ? blocks.find((item) => item.id === droppedBlockId) : null;
+    if (!block || block.location.type === "unscheduled") return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    e.currentTarget.classList.add("drag-over");
+  };
+
+  const handleWaitingDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      e.currentTarget.classList.remove("drag-over");
+    }
+  };
+
+  const handleWaitingDrop = async (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove("drag-over");
+
+    const droppedBlockId =
+      currentDragBlockId ||
+      dragBlockId ||
+      e.dataTransfer.getData("application/block-id") ||
+      e.dataTransfer.getData("text/plain");
+    const block = droppedBlockId ? blocks.find((item) => item.id === droppedBlockId) : null;
+    if (!droppedBlockId || !block || block.location.type === "unscheduled") {
+      currentDragBlockId = null;
+      setDragBlockId(null);
+      return;
+    }
+
+    await moveBlockToUnscheduled(droppedBlockId);
+    showMoveUndoToast("Moved to Waiting", block);
+    currentDragBlockId = null;
+    setDragBlockId(null);
+  };
+
   const deleteBlockWithUndo = async (blockId: string) => {
     const block = blocks.find((b) => b.id === blockId);
     if (!block) return;
+    const completionRecord = habitProgressRecords.find((record) => record.id === blockId);
 
     try {
       if (block.linkedBlockId) {
@@ -4082,7 +5103,9 @@ const App: React.FC = () => {
         }
       }
 
+      if (user) await cancelTileTimer(localStorage, tileTimerAlarm, user.id, blockId);
       await database.blocks.delete(blockId);
+      setHabitProgressRecords(current => current.filter(record => record.id !== blockId));
       setBlocks((prev) =>
         prev
           .filter((b) => b.id !== blockId)
@@ -4132,8 +5155,22 @@ const App: React.FC = () => {
               completed: restored.completed,
               hashtag: restored.hashtag ?? undefined,
               workoutSubmitted: restored.workout_submitted,
+              creditedHabitIds: block.creditedHabitIds,
             };
+            for (const habitId of block.creditedHabitIds ?? []) {
+              await database.blockHabitCredits.create(user.id, restored.id, habitId);
+            }
+            for (const log of completionRecord?.block_activity_logs ?? []) {
+              await database.blockActivityLogs.create(
+                user.id, restored.id, log.habit_id,
+                completionRecord?.week_start_date ?? null,
+                completionRecord?.day_index ?? null,
+                block.location.type === "slot" ? block.location.timeIndex : null,
+                log.completed_at
+              );
+            }
             setBlocks((prev) => [...prev, restoredBlock]);
+            await refreshHabitProgress();
             showToast("Block restored", "success");
           } catch (err) {
             console.error("Error restoring block:", err);
@@ -4339,6 +5376,50 @@ const App: React.FC = () => {
     return null;
   };
 
+  const isCompletedOneTimeSmartSetupBlock = (block: DBBlock, blockTasks: BlockTask[] = []) =>
+    !block.is_habit_block &&
+    !block.habit_id &&
+    !block.is_standing &&
+    !block.standing_block_id &&
+    (block.completed || (blockTasks.length > 0 && blockTasks.every((task) => task.completed)));
+
+  const isCompletedOneTimeWaitingBlock = (block: Block) =>
+    !block.isHabitBlock &&
+    !block.habitId &&
+    (block.completed || ((block.blockTasks?.length ?? 0) > 0 && block.blockTasks!.every((task) => task.completed)));
+
+  const isOneTimeSmartSetupBlock = (block: DBBlock) =>
+    !block.is_habit_block &&
+    !block.habit_id &&
+    !block.is_standing &&
+    !block.standing_block_id;
+
+  const isOneTimeWaitingBlock = (block: Block) =>
+    !block.isHabitBlock && !block.habitId;
+
+  const normalizeOneTimeSuggestionLabel = (label: string) =>
+    label.replace(/^(Task|Note|Block):\s*/i, "").trim().toLowerCase();
+
+  const hasSpecificDateText = (label: string) => {
+    const normalized = label.toLowerCase();
+    return (
+      /\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}\b/.test(normalized) ||
+      /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/.test(normalized)
+    );
+  };
+
+  const isDatedOneTimeSmartSetupTask = (block: DBBlock) =>
+    /^Task:\s*/i.test(block.label) && isOneTimeSmartSetupBlock(block) && hasSpecificDateText(block.label);
+
+  const isDatedOneTimeWaitingTask = (block: Block) =>
+    /^Task:\s*/i.test(block.label) && isOneTimeWaitingBlock(block) && hasSpecificDateText(block.label);
+
+  const isPlainOneTimeSmartSetupTask = (block: DBBlock) =>
+    /^Task:\s*/i.test(block.label) && isOneTimeSmartSetupBlock(block);
+
+  const isPlainOneTimeWaitingTask = (block: Block) =>
+    /^Task:\s*/i.test(block.label) && isOneTimeWaitingBlock(block);
+
   const openSmartWeeklySetup = async () => {
     if (!user) return;
 
@@ -4351,6 +5432,25 @@ const App: React.FC = () => {
         database.blocks.getForWeek(user.id, prevWeekStart),
         getActiveStandingBlocks(user.id),
       ]);
+      const prevBlockTaskRows = await database.blockTasks.getByBlocks(prevBlocks.map((block) => block.id));
+      const prevBlockTasksByBlock = new Map<string, BlockTask[]>();
+      prevBlockTaskRows.forEach((task) => {
+        const existing = prevBlockTasksByBlock.get(task.block_id) ?? [];
+        existing.push(task);
+        prevBlockTasksByBlock.set(task.block_id, existing);
+      });
+      const completedOneTimeSuggestionLabels = new Set([
+        ...prevBlocks
+          .filter((block) =>
+            block.week_start_date === prevWeekStart &&
+            (isCompletedOneTimeSmartSetupBlock(block, prevBlockTasksByBlock.get(block.id) ?? []) ||
+              isDatedOneTimeSmartSetupTask(block))
+          )
+          .map((block) => normalizeOneTimeSuggestionLabel(block.label)),
+        ...blocks
+          .filter((block) => isCompletedOneTimeWaitingBlock(block) || isDatedOneTimeWaitingTask(block))
+          .map((block) => normalizeOneTimeSuggestionLabel(block.label)),
+      ].filter(Boolean));
       const occupiedSlots = getSmartSetupOccupiedSlots();
       const currentScheduledKeys = new Set(
         blocks
@@ -4383,7 +5483,15 @@ const App: React.FC = () => {
       });
 
       prevBlocks
-        .filter((b) => b.location_type === "slot" && b.week_start_date === prevWeekStart)
+        .filter(
+          (b) =>
+            b.location_type === "slot" &&
+            b.week_start_date === prevWeekStart &&
+            !isPlainOneTimeSmartSetupTask(b) &&
+            !isCompletedOneTimeSmartSetupBlock(b, prevBlockTasksByBlock.get(b.id) ?? []) &&
+            !isDatedOneTimeSmartSetupTask(b) &&
+            !(isOneTimeSmartSetupBlock(b) && completedOneTimeSuggestionLabels.has(normalizeOneTimeSuggestionLabel(b.label)))
+        )
         .forEach((block) => {
           if (block.day_index === null || block.time_index === null) return;
           const slotKey = `${block.day_index}-${block.time_index}`;
@@ -4411,7 +5519,15 @@ const App: React.FC = () => {
         });
 
       blocks
-        .filter((b) => b.location.type === "unscheduled" && !b.themeId)
+        .filter(
+          (b) =>
+            b.location.type === "unscheduled" &&
+            !b.themeId &&
+            !isPlainOneTimeWaitingTask(b) &&
+            !isCompletedOneTimeWaitingBlock(b) &&
+            !isDatedOneTimeWaitingTask(b) &&
+            !(isOneTimeWaitingBlock(b) && completedOneTimeSuggestionLabels.has(normalizeOneTimeSuggestionLabel(b.label)))
+        )
         .slice(0, 8)
         .forEach((block) => {
           const slot = findNextSmartSetupSlot(occupiedSlots);
@@ -4604,16 +5720,25 @@ const App: React.FC = () => {
     incompleteMobileSelectedBlocks.length - (mobileSelectedNowBlock ? 1 : 0) - mobileSelectedNextBlocks.length
   );
   const isMobileSelectedDayToday = todayDayIndex >= 0 && mobileSelectedDayIndex === todayDayIndex;
-  const todayDate = new Date().toISOString().split("T")[0];
+  const mobileSelectedDateLabel = (() => {
+    const date = new Date(`${getWeekStartDateString(weekOffset)}T12:00:00`);
+    date.setDate(date.getDate() + mobileSelectedDayIndex);
+    const month = date.toLocaleDateString("en-US", { month: "short" });
+    return `${month === "Sep" ? "Sept" : month} ${date.getDate()}`;
+  })();
+  const todayDate = localDateKey(new Date());
 
   const collectOutlinerNodes = (
     nodes: OutlineNode[],
-    path: string[] = []
-  ): Array<{ node: OutlineNode; path: string[] }> =>
+    path: string[] = [],
+    parentThemeId?: string
+  ): Array<{ node: OutlineNode; path: string[]; themeId?: string }> =>
     nodes.flatMap((node) => {
+      if (node.trashedAt) return [];
       const nodeLabel = node.text.trim() || "Untitled";
       const nextPath = [...path, nodeLabel];
-      return [{ node, path: nextPath }, ...collectOutlinerNodes(node.children, nextPath)];
+      const themeId = node.linked?.themeId ?? parentThemeId;
+      return [{ node, path: nextPath, themeId }, ...collectOutlinerNodes(node.children, nextPath, themeId)];
     });
 
   const outlinerNodeEntries = collectOutlinerNodes(outlinerNodes);
@@ -4621,20 +5746,75 @@ const App: React.FC = () => {
     id: node.id,
     label: path.join(" > "),
   }));
-  const outlinerLinkedBlockIdSet = new Set(
+  const outlinerBlockLinks = outlinerNodeEntries.flatMap(({ node, path }) =>
+    [...new Set([node.linked?.blockId, ...(node.plans ?? []).flatMap(plan => [...plan.scheduledBlockIds, plan.occurrenceBlockId])])]
+      .filter((id): id is string => !!id).map(blockId => ({ blockId, nodeId: node.id, path })));
+  const outlinerLinkedBlockIdSet = new Set(outlinerBlockLinks.map(link => link.blockId));
+  const outlinerLinkedBlockNodeIdMap = new Map(outlinerBlockLinks.map(link => [link.blockId, link.nodeId]));
+  const outlinerLinkedBlockPathMap = new Map(outlinerBlockLinks.map(link => [link.blockId, link.path]));
+  const collectThemeOutlineMeta = (
+    themeNode: OutlineNode,
+    themeId: string,
+    themePath: string[]
+  ): ThemeOutlineMeta => {
+    const habitOrder: string[] = [];
+    const outlineItems: ThemeOutlineItem[] = [];
+    const nestedThemes: ThemeOutlineMeta["nestedThemes"] = [];
+
+    const visit = (nodes: OutlineNode[], depth: number) => {
+      for (const node of nodes) {
+        if (node.trashedAt) continue;
+        const label = node.text.trim() || node.linked?.label || "Untitled";
+        const isNestedTheme = !!node.linked?.themeId && !node.linked.habitId;
+        if (isNestedTheme) {
+          nestedThemes.push({
+            id: node.linked!.themeId!,
+            name: label,
+            nodeId: node.id,
+          });
+          continue;
+        }
+
+        if (node.linked?.habitId && node.linked.themeId === themeId) {
+          habitOrder.push(node.linked.habitId);
+          visit(node.children, depth + 1);
+          continue;
+        }
+
+        outlineItems.push({
+          id: node.id,
+          text: label,
+          tag: node.tag,
+          depth,
+          linkedLabel: node.linked?.routineId
+            ? "Routine"
+            : node.linked?.blockId
+              ? "Block"
+              : node.linked?.habitId
+                ? "Habit"
+                : undefined,
+        });
+        visit(node.children, depth + 1);
+      }
+    };
+
+    visit(themeNode.children, 0);
+
+    return {
+      nodeId: themeNode.id,
+      path: themePath,
+      habitOrder,
+      outlineItems,
+      nestedThemes,
+    };
+  };
+  const themeOutlineMetaMap = new Map<string, ThemeOutlineMeta>(
     outlinerNodeEntries
-      .map(({ node }) => node.linked?.blockId)
-      .filter((blockId): blockId is string => !!blockId)
-  );
-  const outlinerLinkedBlockNodeIdMap = new Map(
-    outlinerNodeEntries
-      .filter(({ node }) => !!node.linked?.blockId)
-      .map(({ node }) => [node.linked!.blockId!, node.id])
-  );
-  const outlinerLinkedBlockPathMap = new Map(
-    outlinerNodeEntries
-      .filter(({ node }) => !!node.linked?.blockId)
-      .map(({ node, path }) => [node.linked!.blockId!, path])
+      .filter(({ node }) => !!node.linked?.themeId && !node.linked.habitId)
+      .map(({ node, path }) => [
+        node.linked!.themeId!,
+        collectThemeOutlineMeta(node, node.linked!.themeId!, path),
+      ])
   );
   const dueOutlinerItems = outlinerNodeEntries
     .filter(({ node }) => {
@@ -4663,6 +5843,94 @@ const App: React.FC = () => {
     dueOutlinerItems.length,
     outlinerReminder ? 1 : 0
   );
+  const mobileOutlineMiniItems = outlinerNodeEntries
+    .filter(({ node }) => node.text.trim() && !((node.tag === "task" || node.tag === 'link') && node.taskDone))
+    .sort((a, b) => {
+      const aDue = !!a.node.reminderAt && !a.node.reminderDismissedAt && new Date(a.node.reminderAt).getTime() <= Date.now();
+      const bDue = !!b.node.reminderAt && !b.node.reminderDismissedAt && new Date(b.node.reminderAt).getTime() <= Date.now();
+      if (aDue !== bDue) return aDue ? -1 : 1;
+      const aPlannedToday = a.node.planDate === todayDate;
+      const bPlannedToday = b.node.planDate === todayDate;
+      if (aPlannedToday !== bPlannedToday) return aPlannedToday ? -1 : 1;
+      return a.path.length - b.path.length;
+    })
+    .slice(0, 4);
+
+  const stackWeekDays = days.map((day, dayIndex) => {
+    const scheduled = blocks.filter(
+      (block) =>
+        block.location.type === "slot" &&
+        block.location.dayIndex === dayIndex &&
+        !(block.linkedBlockId && !block.isLinkedGroup)
+    );
+    const open = scheduled.filter((block) => !block.completed).length;
+    const habits = scheduled.filter((block) => block.isHabitBlock).length;
+    const intentions =
+      weeklyIntentions.reduce(
+        (total, intention) =>
+          total + intention.placements.filter((placement) => placement.dayIndex === dayIndex).length,
+        0
+      ) +
+      weeklyRoutineIntentions.reduce(
+        (total, intention) =>
+          total + intention.placements.filter((placement) => placement.dayIndex === dayIndex).length,
+        0
+      );
+    return {
+      day,
+      dayIndex,
+      scheduledCount: scheduled.length,
+      openCount: open,
+      habitCount: habits,
+      intentionCount: intentions,
+      isToday: dayIndex === todayDayIndex,
+      isSelected: dayIndex === mobileSelectedDayIndex,
+    };
+  });
+  const stackTodayOpenBlocks = todayScheduledBlocks.filter((block) => !block.completed).slice(0, 5);
+  const stackWaitingBlocks = unscheduledBlocks.slice(0, 5);
+  const stackOutlineItems = outlinerNodeEntries
+    .filter(({ node }) => {
+      if (!node.text.trim() || ((node.tag === "task" || node.tag === 'link') && node.taskDone)) return false;
+      const reminderDue = !!node.reminderAt && !node.reminderDismissedAt && new Date(node.reminderAt).getTime() <= Date.now();
+      return reminderDue || node.planDate === todayDate || node.tag === "task" || !!node.linked?.blockId;
+    })
+    .slice(0, 5);
+  const stackHabitThemes = themes
+    .filter((theme) => theme.themeType === "habit")
+    .map((theme) => {
+      const habits = flattenHabits(theme.habits, theme.name, theme.id);
+      const done = habits.reduce((total, habit) => total + getHabitDoneCount(habit.id, habit.frequency), 0);
+      const target = habits.reduce(
+        (total, habit) => total + (habit.frequency === "none" ? 0 : Math.max(1, habit.targetPerWeek)),
+        0
+      );
+      return { id: theme.id, name: theme.name, done, target, count: habits.length };
+    })
+    .filter((theme) => theme.count > 0)
+    .slice(0, 4);
+  const stackHouseholdThemes = themes
+    .filter((theme) => theme.themeType === "household")
+    .map((theme) => {
+      const habits = flattenHabits(theme.habits, theme.name, theme.id);
+      const needCounts = habits.reduce(
+        (counts, habit) => {
+          const need = getHouseholdChoreNeed(habit);
+          return { ...counts, [need.className]: (counts[need.className] ?? 0) + 1 };
+        },
+        {} as Record<string, number>
+      );
+      return {
+        id: theme.id,
+        name: theme.name,
+        due: needCounts.due ?? 0,
+        soon: needCounts.soon ?? 0,
+        fresh: needCounts.fresh ?? 0,
+      };
+    })
+    .slice(0, 3);
+  const stackMealTheme = themes.find((theme) => theme.themeType === "meals");
+  const stackMeals = stackMealTheme?.meals.slice(0, 4) ?? [];
 
   const isQuickCaptureBlock = (block: Block) => {
     const label = block.label.trim().toLowerCase();
@@ -4674,30 +5942,76 @@ const App: React.FC = () => {
     (total, block) => total + (block.blockTasks ?? []).filter((task) => !task.completed).length,
     0
   );
+  const mobileTimelinePreviewBlocks = mobileSelectedScheduledBlocks.slice(0, 6);
   const mobileIntentionStartDay =
     weekOffset === 0 && todayDayIndex >= 0 ? todayDayIndex : mobileSelectedDayIndex;
-  const mobileWeeklyIntentionPlacements = weeklyIntentions
-    .flatMap((intention) =>
-      intention.placements.map((placement) => ({
+  const mobileWeeklyIntentionPlacements: SoftPlanPlacement[] = [
+    ...weeklyIntentions.flatMap((intention) =>
+      intention.placements.map((placement): SoftPlanPlacement => ({
+        kind: "habit" as const,
         intention,
         placement,
+        title: intention.habitName,
+        detail: intention.themeName,
       }))
-    )
-    .sort((a, b) => {
+    ),
+    ...weeklyRoutineIntentions.flatMap((intention) =>
+      intention.placements.map((placement): SoftPlanPlacement => ({
+          kind: "routine" as const,
+          intention,
+          placement,
+          title: intention.routineName,
+          detail: "Routine",
+        }))
+    ),
+  ].sort((a, b) => {
       const aDayDistance = (a.placement.dayIndex - mobileIntentionStartDay + days.length) % days.length;
       const bDayDistance = (b.placement.dayIndex - mobileIntentionStartDay + days.length) % days.length;
       return aDayDistance === bDayDistance
         ? a.placement.timeIndex - b.placement.timeIndex
         : aDayDistance - bDayDistance;
     });
+  const softPlanPreviewItems = mobileWeeklyIntentionPlacements.slice(0, 6);
+  const softPlanTotal = mobileWeeklyIntentionPlacements.length;
+  const openSoftPlanPanel = (dayIndex?: number) => {
+    if (typeof dayIndex === "number") {
+      setMobileDayIndex(dayIndex);
+    }
+    setShowSoftPlanPanel(false);
+    setMobileHomeView("planner");
+    window.setTimeout(() => document.getElementById("day-commitments")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  };
 
   const cleanBlockLabel = (block: Block) =>
-    block.label.replace(/^(Note|Task|Habit):\s*/i, "").trim() || block.label;
+    block.label.replace(/^(Note|Task|Habit|Routine|Link):\s*/i, "").trim() || block.label;
 
-  const getBlockKindLabel = (block: Block): "Habit" | "Task" | "Note" | "Routine" | "Workout" | "Block" => {
+  const getBlockReadingLink = (block: Block) => {
+    const owner = findGridOutlineEntry(outlinerNodes, block);
+    return owner?.node.tag === 'link' ? normalizeReadingLink(owner.node.readingLink) : undefined;
+  };
+
+  const nativeWidgetStatus = mobileNowBlock
+    ? `Next: ${cleanBlockLabel(mobileNowBlock)}`
+    : todayScheduledBlocks.length > 0
+      ? "All open blocks are complete."
+      : "Nothing scheduled yet.";
+  const nativeWidgetWaitingLabel =
+    unscheduledBlocks.length === 1 ? "1 waiting item" : `${unscheduledBlocks.length} waiting items`;
+
+  useEffect(() => {
+    updateNativePlannerWidget({
+      title: "Today",
+      status: nativeWidgetStatus,
+      waitingLabel: nativeWidgetWaitingLabel,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [nativeWidgetStatus, nativeWidgetWaitingLabel]);
+
+  const getBlockKindLabel = (block: Block): "Habit" | "Task" | "Note" | "Routine" | "Workout" | "Block" | "Link" => {
     const label = block.label.trim().toLowerCase();
     const hashtag = block.hashtag?.trim().toLowerCase();
     if (block.isHabitBlock) return "Habit";
+    if (getBlockReadingLink(block) || hashtag === 'link' || label.startsWith('link:')) return 'Link';
     if (hashtag === "task" || label.startsWith("task:")) return "Task";
     if (hashtag === "note" || label.startsWith("note:")) return "Note";
     if (hashtag === "routine" || routineTabs.some((routine) => routine.name.trim().toLowerCase() === label)) {
@@ -4733,6 +6047,10 @@ const App: React.FC = () => {
         : undefined;
     if (theme) chips.push(`Theme: ${theme.name}`);
     if (habit) chips.push(`Habit: ${habit.name}`);
+    for (const id of block.creditedHabitIds ?? []) {
+      const credited = allHabits.find(item => item.id === id);
+      if (credited && id !== block.habitId) chips.push(`Counts toward: ${credited.name}`);
+    }
     if (block.hashtag) chips.push(`#${block.hashtag}`);
     const outlinerPath = outlinerLinkedBlockPathMap.get(block.id);
     if (outlinerPath) {
@@ -4813,12 +6131,15 @@ const App: React.FC = () => {
   const addHabitToMobileSlot = async (habitId: string) => {
     if (!mobileHabitPickerSlot) return;
 
+    const targetSlot = mobileHabitPickerSlot;
+    setMobileHabitPickerSlot(null);
+    setMobileHabitPickerQuery("");
+
     await createHabitBlockAtSlot(
       habitId,
-      mobileHabitPickerSlot.dayIndex,
-      mobileHabitPickerSlot.timeIndex
+      targetSlot.dayIndex,
+      targetSlot.timeIndex
     );
-    setMobileHabitPickerSlot(null);
     showToast("Habit added to planner", "success");
   };
 
@@ -5047,6 +6368,97 @@ const App: React.FC = () => {
     return true;
   };
 
+  const openSlotCapture = (dayIndex: number, timeIndex: number, mode: SlotCaptureMode) => {
+    if (slotCaptureSaving.current) return;
+    setSlotCaptureTarget({ dayIndex, timeIndex, mode });
+    setSlotCaptureText("");
+    setSlotCaptureHabitId('');
+    setSlotCaptureError('');
+    slotCaptureDraft.current = null;
+  };
+
+  const closeSlotCapture = () => {
+    if (slotCaptureSaving.current) return;
+    setSlotCaptureTarget(null);
+    setSlotCaptureText("");
+    setSlotCaptureHabitId('');
+    setSlotCaptureError('');
+    slotCaptureDraft.current = null;
+  };
+
+  const saveSlotCapture = async () => {
+    if (slotCaptureSaving.current || !user) return;
+    const text = slotCaptureText.trim();
+    if (!slotCaptureTarget || !text) {
+      showToast("Enter a task or note for this slot.", "error");
+      return;
+    }
+
+    if (slotCaptureHabitId && !gridHabitCreditChoices(latestOutlineNodes.current).some(item => item.id === slotCaptureHabitId)) {
+      setSlotCaptureError('That habit is no longer in the active Outline.'); return;
+    }
+    const { dayIndex, timeIndex, mode } = slotCaptureTarget;
+    slotCaptureSaving.current = true; setSlotCaptureBusy(true); setSlotCaptureError('');
+    slotCaptureDraft.current ??= { id: crypto.randomUUID(), taskId: crypto.randomUUID(), text, mode,
+      dayIndex, timeIndex: getHourlyIndexForMobileSlot(timeIndex), weekStartDate: getWeekStartDateString(weekOffset), creditHabitId: slotCaptureHabitId };
+    try {
+      const result = await persistGridCapture(user.id, slotCaptureDraft.current);
+      const next: Block = { id: result.block.id, label: result.block.label, isHabitBlock: false,
+        location: { type: 'slot', dayIndex: result.block.day_index!, timeIndex: result.block.time_index! },
+        completed: result.block.completed, hashtag: result.block.hashtag ?? undefined,
+        blockNote: result.note?.content, blockNoteUpdatedAt: result.note?.updated_at, blockTasks: result.tasks,
+        creditedHabitIds: result.credits.map(credit => credit.habit_id) };
+      setBlocks(current => current.some(block => block.id === next.id) ? current.map(block => block.id === next.id ? next : block) : [...current, next]);
+      slotCaptureSaving.current = false;
+      closeSlotCapture();
+      showToast(`${mode === 'note' ? 'Note' : 'Task'} added to ${days[dayIndex]}`, 'success');
+    } catch {
+      setSlotCaptureError('Could not finish saving. Retry will complete this same block.');
+    } finally { slotCaptureSaving.current = false; setSlotCaptureBusy(false); }
+  };
+
+  const renderSlotCaptureComposer = (dayIndex: number, timeIndex: number) => {
+    const isActive =
+      slotCaptureTarget?.dayIndex === dayIndex &&
+      slotCaptureTarget.timeIndex === timeIndex;
+
+    if (!isActive) return null;
+
+    const modeLabel = slotCaptureTarget.mode === "note" ? "note" : "task";
+
+    return (
+      <form
+        className="slot-capture-panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void saveSlotCapture();
+        }}
+      >
+        <label>
+          <span>{modeLabel}</span>
+          <input
+            required disabled={slotCaptureBusy || !!slotCaptureDraft.current}
+            value={slotCaptureText}
+            onChange={(event) => setSlotCaptureText(event.target.value)}
+            placeholder={`Add ${modeLabel}`}
+            autoFocus
+          />
+        </label>
+        <label><span>Counts toward</span><select aria-label="Counts toward" value={slotCaptureHabitId} disabled={slotCaptureBusy || !!slotCaptureDraft.current || outlineLoading} onChange={event => setSlotCaptureHabitId(event.target.value)}>
+          <option value="">Nothing (one-off)</option>
+          {gridHabitCreditChoices(outlinerNodes).filter(item => allHabits.some(habit => habit.id === item.id)).map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+        </select></label>
+        {slotCaptureError && <p role="alert">{slotCaptureError}</p>}
+        <div className="slot-capture-actions">
+          <button type="submit" disabled={slotCaptureBusy}>{slotCaptureBusy ? 'Saving...' : slotCaptureDraft.current ? 'Retry' : 'Add'}</button>
+          <button type="button" disabled={slotCaptureBusy} onClick={closeSlotCapture}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    );
+  };
+
   const quickCapture = async () => {
     const captured = await captureEntry(blockLabel, mobileCaptureMode, mobileCaptureDestination, {
       hashtag: blockHashtag,
@@ -5055,6 +6467,7 @@ const App: React.FC = () => {
     setBlockLabel("");
     setBlockHashtag("");
     setMobileQuickCapturePrimed(false);
+    setMobileQuickCaptureOpen(false);
   };
 
   const captureAmbientQuickNote = async () => {
@@ -5175,6 +6588,13 @@ const App: React.FC = () => {
     viewMode === "buckets" ? BUCKET_TO_HOURLY[slotIndex] ?? slotIndex : slotIndex;
 
   const restoreBlockPlacement = async (previousBlock: Block) => {
+    if (recurringSessionForBlock(previousBlock.id)) {
+      const restored = previousBlock.location.type === 'slot'
+        ? await moveBlockToSlot(previousBlock.id, previousBlock.location.dayIndex, previousBlock.location.timeIndex)
+        : await moveBlockToUnscheduled(previousBlock.id);
+      if (restored) showToast('Move undone', 'info');
+      return;
+    }
     const originalHabit = allHabits.find((habit) => habit.id === previousBlock.habitId);
     const restoredLabel = originalHabit && previousBlock.isHabitBlock
       ? `Habit: ${originalHabit.name}`
@@ -5247,7 +6667,7 @@ const App: React.FC = () => {
 
   const showMoveUndoToast = (message: string, previousBlock?: Block) => {
     showToast(
-      message,
+      message === 'Moved to Waiting' && previousBlock && recurringSessionForBlock(previousBlock.id) ? 'Returned to its week' : message,
       "success",
       previousBlock
         ? {
@@ -5270,22 +6690,22 @@ const App: React.FC = () => {
         : block.location.timeIndex;
 
     if (visibleSlotIndex < slotLabels.length - 1) {
-      await moveBlockToSlot(
+      if (!await moveBlockToSlot(
         blockId,
         block.location.dayIndex,
         getHourlyIndexForMobileSlot(visibleSlotIndex + 1)
-      );
+      )) return;
       showMoveUndoToast("Moved later today", block);
       return;
     }
 
     if (block.location.dayIndex < days.length - 1) {
-      await moveBlockToSlot(blockId, block.location.dayIndex + 1, getHourlyIndexForMobileSlot(0));
+      if (!await moveBlockToSlot(blockId, block.location.dayIndex + 1, getHourlyIndexForMobileSlot(0))) return;
       showMoveUndoToast("Moved to tomorrow morning", block);
       return;
     }
 
-    await moveBlockToUnscheduled(blockId);
+    if (!await moveBlockToUnscheduled(blockId)) return;
     showMoveUndoToast("Moved to Waiting", block);
   };
 
@@ -5294,19 +6714,48 @@ const App: React.FC = () => {
     if (!block || block.location.type !== "slot") return;
 
     if (block.location.dayIndex >= days.length - 1) {
-      await moveBlockToUnscheduled(blockId);
+      if (!await moveBlockToUnscheduled(blockId)) return;
       showMoveUndoToast("Moved to Waiting", block);
       return;
     }
 
-    await moveBlockToSlot(blockId, block.location.dayIndex + 1, block.location.timeIndex);
+    if (!await moveBlockToSlot(blockId, block.location.dayIndex + 1, block.location.timeIndex)) return;
     showMoveUndoToast("Moved to tomorrow", block);
   };
 
   const moveMobileBlockToWaiting = async (blockId: string) => {
     const block = blocks.find((item) => item.id === blockId);
-    await moveBlockToUnscheduled(blockId);
+    if (!await moveBlockToUnscheduled(blockId)) return;
     showMoveUndoToast("Moved to Waiting", block);
+  };
+
+  const handleMobileBlockDrop = async (
+    blockId: string,
+    target:
+      | { type: "slot"; dayIndex: number; timeIndex: number }
+      | { type: "waiting" }
+  ) => {
+    const block = blocks.find((item) => item.id === blockId);
+    if (!block) return;
+
+    if (target.type === "waiting") {
+      if (block.location.type === "unscheduled") return;
+      if (!await moveBlockToUnscheduled(blockId)) return;
+      showMoveUndoToast("Moved to Waiting", block);
+      return;
+    }
+
+    const nextTimeIndex = getHourlyIndexForMobileSlot(target.timeIndex);
+    if (
+      block.location.type === "slot" &&
+      block.location.dayIndex === target.dayIndex &&
+      block.location.timeIndex === nextTimeIndex
+    ) {
+      return;
+    }
+
+    if (!await moveBlockToSlot(blockId, target.dayIndex, nextTimeIndex)) return;
+    showMoveUndoToast(`Moved to ${days[target.dayIndex]} ${slotLabels[target.timeIndex]}`, block);
   };
 
   const firstOpenVisibleSlotIndex = (dayIndex: number) => {
@@ -5814,6 +7263,459 @@ const App: React.FC = () => {
     );
   };
 
+  const navigateMain = (view: "today" | "planner" | "themes") => {
+    const root = document.getElementById("root");
+    if (mobileHomeView === "themes") outlineScrollPosition.current = { root: root?.scrollTop ?? 0, window: window.scrollY };
+    closeOverlayPanels();
+    setMobileMoreOpen(false);
+    setMobileHomeView(view);
+    requestAnimationFrame(() => {
+      root?.scrollTo({ top: view === "themes" ? outlineScrollPosition.current.root : 0, left: 0 });
+      window.scrollTo({ top: view === "themes" ? outlineScrollPosition.current.window : 0, left: 0 });
+    });
+    if (view === "today") { setWeekOffset(0); setMobileDayIndex(todayDayIndex >= 0 ? todayDayIndex : 0); }
+    if (view === "planner") setDesktopPlannerSurface(planView === "stack" ? "stack" : "week");
+  };
+  const selectPlanView = (view: PlanView) => {
+    setPlanView(view);
+    setDesktopPlannerSurface(view === "stack" ? "stack" : "week");
+    setMobileHomeView("planner");
+  };
+  const selectedPlanDate = (() => {
+    const date = new Date(`${getWeekStartDateString(weekOffset)}T12:00:00`);
+    date.setDate(date.getDate() + mobileSelectedDayIndex);
+    return localDateKey(date);
+  })();
+  const openPlanItem = (id?: string, date?: string, preferredMode?: PlanMode, selectedPlanId?: string) => {
+    const node = outlineBranchItems(latestOutlineNodes.current).find(node => node.id === id);
+    const plans = node ? normalizeOutlinePlans(node.plans, node.id, node.planDate) : [];
+    const repeating = node && isRepeatingPlanNode(node);
+    const desiredWeek = planningDate(date ?? selectedPlanDate).weekStartDate;
+    const plan = selectedPlanId ? plans.find(plan => plan.id === selectedPlanId) : repeating
+      ? plans.find(plan => plan.scope === 'week' && !plan.parentPlanId && plan.date === desiredWeek) ?? plans.find(plan => plan.legacyPlanDate)
+      : plans.length === 1 ? plans[0] : undefined;
+    const block = blocks.find(block => plan?.scheduledBlockIds.includes(block.id) || (!repeating && node?.linked?.blockId === block.id));
+    const blockDate = new Date(`${getWeekStartDateString(weekOffset)}T12:00:00`);
+    if (block?.location.type === 'slot') blockDate.setDate(blockDate.getDate() + block.location.dayIndex);
+    setPlanSelection({ id, softPlanId: plan?.id, requestId: crypto.randomUUID(), targetCount: plan?.targetCount ?? (node && repeating ? defaultWeeklyTarget(node) : undefined),
+      date: date ?? plan?.date ?? (block?.location.type === 'slot' ? localDateKey(blockDate) : mobileHomeView === 'planner' || mobileHomeView === 'stack' ? selectedPlanDate : todayDate),
+      mode: preferredMode ?? (plan ? plan.scheduledBlockIds.length ? 'time' : plan.scope : block?.location.type === 'slot' ? 'time' : date ? 'day' : 'week'),
+      time: block?.location.type === 'slot' ? block.location.timeIndex : undefined,
+    });
+  };
+  const openTodayReschedule = (blockId: string) => {
+    const block = blocks.find(block => block.id === blockId);
+    if (block?.location.type !== 'slot') return;
+    setPlanSelection({ id: `block:${blockId}`, blockId, date: todayDate, time: block.location.timeIndex });
+  };
+  const reschedulingBlock = blocks.find(block => block.id === planSelection?.blockId);
+  const editingRecurringSession = outlineBranchItems(outlinerNodes).some(node => node.id === planSelection?.id && isRepeatingPlanNode(node) &&
+    node.plans.some(plan => plan.id === planSelection.softPlanId && (plan.parentPlanId || plan.scope === 'day')));
+  const reschedulingOwner = reschedulingBlock && outlineBranchItems(outlinerNodes).find(node => node.plans.some(plan => plan.scheduledBlockIds.includes(reschedulingBlock.id)));
+  const canLoosenReschedulingBlock = !!reschedulingBlock && (!!reschedulingOwner || (!reschedulingBlock.habitId && ['Task', 'Note'].includes(getBlockKindLabel(reschedulingBlock))));
+  const waitingBlockIds = new Set(unscheduledBlocks.filter(block => !block.completed).map(block => block.id));
+  const planChoices: PlanChoice[] = [
+    ...outlinerNodeEntries.filter(({ node }) => !((node.tag === 'task' || node.tag === 'link') && node.taskDone) && !node.isGroup && !isThemeOutlineNode(node)).map(({ node, path }): PlanChoice => ({ id: node.id, name: path.join(" / "), kind: node.linked?.routineId ? "routine" : node.tag, weeklyTarget: node.plans.find(plan => plan.scope === 'week' && !plan.parentPlanId && plan.date === getWeekStartDateString(weekOffset))?.targetCount ?? defaultWeeklyTarget(node), section: node.linked?.blockId && waitingBlockIds.has(node.linked.blockId) ? "Waiting" : "Outline" })),
+    ...unscheduledBlocks.filter(block => !block.completed && !outlinerLinkedBlockIdSet.has(block.id)).map((block): PlanChoice => ({ id: `block:${block.id}`, name: cleanBlockLabel(block), kind: getBlockKindLabel(block).toLowerCase(), section: "Waiting" })),
+  ];
+  const selectedWeekStart = getWeekStartDateString(weekOffset);
+  const visibleWeekPlans = getSoftPlansForWeek(outlinerNodes, selectedWeekStart);
+  const progressBlocks = blocks.map(block => ({ id: block.id, completed: !!block.completed, location_type: block.location.type,
+    week_start_date: block.location.type === 'slot' ? selectedWeekStart : null, day_index: block.location.type === 'slot' ? block.location.dayIndex : null, time_index: block.location.type === 'slot' ? block.location.timeIndex : null }));
+  const weeklyLooseEntries = visibleWeekPlans.filter(entry => entry.placement === 'week').map(entry => ({ ...entry,
+    ...(isRepeatingPlanNode(entry.node) ? { progress: recurringPlanProgress(entry.node, entry.plan, progressBlocks) } : {}) }));
+  const weeklyChoices = outlinerNodeEntries.filter(({ node }) => {
+    if (isThemeOutlineNode(node) || node.isGroup || ((node.tag === 'task' || node.tag === 'link') && node.taskDone)) return false;
+    if (isRepeatingPlanNode(node)) return !node.plans.some(plan => plan.scope === 'week' && !plan.parentPlanId && plan.date === selectedWeekStart);
+    if (normalizeOutlinePlans(node.plans, node.id, node.planDate).length) return false;
+    const block = blocks.find(block => block.id === node.linked?.blockId);
+    return !node.linked?.blockId || (block?.location.type === 'unscheduled' && !block.completed);
+  }).map(({ node, path }) => ({ id: node.id, name: path.join(' / '), kind: node.linked?.routineId ? 'routine' : node.tag }));
+  const dayCommitments = visibleWeekPlans.filter(entry => entry.placement === 'day').map(entry => ({
+    node: { ...entry.node, planDate: entry.plan.date }, planId: entry.plan.id, legacy: !!entry.plan.legacyPlanDate,
+    themeId: outlinerNodeEntries.find(item => item.node.id === entry.node.id)?.themeId,
+  }));
+  const commitSoftPlan = async (nodeId: string, planId: string, destination: SoftPlanDestination, parentPlanId?: string, targetCount?: number) => {
+    if (!user || outlineLoading) throw new Error('Outline is still loading. Please try again.');
+    const linkNode = outlineBranchItems(latestOutlineNodes.current).find(node => node.id === nodeId);
+    if (destination.kind !== 'unplanned' && linkNode?.tag === 'link' && !normalizeReadingLink(linkNode.readingLink)) throw new Error('Add a valid URL in Link details before planning it.');
+    if (softPlanSaving.current) throw new Error('A plan is still saving. Please try again.');
+    softPlanSaving.current = true;
+    try {
+      const key = `${user.id}:${nodeId}:${planId}`;
+      if (destination.kind === 'time' && !softPlanBlockIds.current.has(key)) softPlanBlockIds.current.set(key, crypto.randomUUID());
+      const result = await persistSoftPlan(user.id, {
+        nodeId, planId, destination, parentPlanId, targetCount, newBlockId: softPlanBlockIds.current.get(key),
+      }, hourlySlots.length, { current: () => latestOutlineNodes.current, save: async nodes => { await saveOutlineNodes(nodes); },
+        routine: routineTabs.find(routine => routine.id === outlineBranchItems(latestOutlineNodes.current).find(node => node.id === nodeId)?.linked?.routineId) });
+      const source = outlineBranchItems(result.nodes).find(node => node.id === nodeId);
+      setBlocks(current => {
+        const updated = new Map(current.map(block => [block.id, block]));
+        for (const block of result.blocks) {
+          if (block.location_type === 'slot' && block.week_start_date !== selectedWeekStart) { updated.delete(block.id); continue; }
+          const existing = updated.get(block.id);
+          updated.set(block.id, { ...existing, id: block.id, label: block.label, isHabitBlock: block.is_habit_block,
+            completed: block.completed, hashtag: block.hashtag ?? undefined, themeId: block.theme_id ?? undefined,
+            habitId: block.habit_id ?? undefined, linkedBlockId: block.linked_block_id ?? undefined,
+            isLinkedGroup: block.is_linked_group, workoutSubmitted: block.workout_submitted,
+            blockNote: block.id === result.scheduledId ? result.note?.content ?? existing?.blockNote ?? source?.draftNote : existing?.blockNote,
+            blockTasks: block.id === result.scheduledId && source?.linked?.routineId ? result.tasks : existing?.blockTasks,
+            location: block.location_type === 'slot' ? { type: 'slot', dayIndex: block.day_index!, timeIndex: block.time_index! } : { type: 'unscheduled' },
+          });
+        }
+        return [...updated.values()];
+      });
+    } finally { softPlanSaving.current = false; }
+  };
+  const removeDayCommitment = async (nodeId: string, planId: string, legacy: boolean) => {
+    try {
+      if (legacy) await saveOutlineNodes(updateOutlineNode(latestOutlineNodes.current, nodeId, node => ({ ...node, planDate: null })));
+      else await commitSoftPlan(nodeId, planId, { kind: 'unplanned' });
+      showToast('Day removed. Kept in Outline.', 'success');
+    } catch { showToast('Could not remove the day. Please retry.', 'error'); }
+  };
+  const todayNoteNode = outlinerNodeEntries.find(({ node }) => node.id === todayNoteId)?.node;
+  const todayNoteBlockId = todayNoteId?.startsWith('block:') ? todayNoteId.slice(6) : todayNoteNode?.linked?.blockId;
+  const todayNoteName = todayNoteNode?.text ?? cleanBlockLabel(blocks.find(block => block.id === todayNoteBlockId) ?? { label: 'Note' } as Block);
+  const occurrenceNoteOwner = todayNoteBlockId ? findGridOutlineEntry(outlinerNodes, {
+    id: todayNoteBlockId, habitId: blocks.find(block => block.id === todayNoteBlockId)?.habitId,
+  }) : undefined;
+  const copyOccurrenceNoteToOutline = async (draft: { id: string; title: string; content: string; parentId: string }) => {
+    if (!user || outlineLoading || !todayNoteBlockId) throw new Error('Outline is still loading. Please retry.');
+    const note: OutlineNode = { ...createOutlineNode(draft.title), id: draft.id, draftNote: draft.content, draftNoteUpdatedAt: new Date().toISOString() };
+    await saveOutlineNodes(placeOccurrenceNote(latestOutlineNodes.current, note, draft.parentId));
+    showToast('Separate note saved to Outline. Occurrence note kept.', 'success', { label: 'Open', onClick: () => viewCapturedItem(draft.id) });
+  };
+  const loadTodayNote = async () => {
+    if (todayNoteBlockId) return (await database.blockNotes.getByBlock(todayNoteBlockId))?.content ?? '';
+    if (todayNoteNode?.linked?.habitId || todayNoteNode?.linked?.routineId) return (await loadLinkedOutlinerNote(todayNoteNode.linked)).content;
+    return todayNoteNode?.draftNote ?? '';
+  };
+  const saveTodayNote = async (content: string) => {
+    if (todayNoteBlockId) await saveBlockNote(todayNoteBlockId, content, true);
+    else if (todayNoteNode?.linked?.habitId || todayNoteNode?.linked?.routineId) {
+      if (!await saveLinkedOutlinerNote(todayNoteNode.linked, content)) throw new Error('Could not save note.');
+    } else if (todayNoteNode) {
+      saveOutlineNodes(updateOutlineNode(latestOutlineNodes.current, todayNoteNode.id, node => ({ ...node, draftNote: content, draftNoteUpdatedAt: new Date().toISOString() })));
+      await outlineMutationQueue.current;
+    } else throw new Error('This item is no longer available.');
+    showToast(todayNoteBlockId ? 'Occurrence note saved' : 'Note saved', 'success');
+  };
+  const completeAnytimeTask = async (id: string) => {
+    const node = outlinerNodeEntries.find(entry => entry.node.id === id)?.node;
+    if (!node || !['task', 'link'].includes(node.tag) || node.linked?.habitId || node.linked?.routineId) return;
+    if (node.linked?.blockId) { await toggleBlockCompletion(node.linked.blockId, true, true); return; }
+    saveOutlineNodes(updateOutlineNode(latestOutlineNodes.current, id, row => ({ ...row, taskDone: true })));
+    try {
+      await outlineMutationQueue.current;
+      showToast('Completed', 'success', { label: 'Undo', onClick: () => {
+        saveOutlineNodes(updateOutlineNode(latestOutlineNodes.current, id, row => ({ ...row, taskDone: false })));
+      } });
+    } catch {
+      const restored = updateOutlineNode(latestOutlineNodes.current, id, row => ({ ...row, taskDone: false }));
+      latestOutlineNodes.current = restored; setOutlinerNodes(restored);
+    }
+  };
+  const rescheduleTodayBlock = async (id: string, date: string, timeIndex: number | null, mode: PlanMode) => {
+    if (mode !== 'time') {
+      if (!canLoosenReschedulingBlock) throw new Error('Choose a time for this calendar item.');
+      await savePlanItem(id, date, timeIndex, mode);
+      return;
+    }
+    const block = reschedulingBlock;
+    if (!block || block.location.type !== 'slot') throw new Error('This item is no longer scheduled.');
+    if (timeIndex === null || !Number.isInteger(timeIndex) || timeIndex < 0 || timeIndex >= hourlySlots.length) throw new Error('Choose a time.');
+    const target = planningDate(date);
+    const previousWeekOffset = weekOffset;
+    const previousWeek = getWeekStartDateString(weekOffset);
+    const previousLocation = block.location;
+    const owner = outlineBranchItems(latestOutlineNodes.current).find(node => normalizeOutlinePlans(node.plans, node.id, node.planDate).some(plan => !plan.legacyPlanDate && plan.scheduledBlockIds.includes(block.id)));
+    const ownedPlan = owner && normalizeOutlinePlans(owner.plans, owner.id, owner.planDate).find(plan => plan.scheduledBlockIds.includes(block.id));
+    if (owner && ownedPlan) await commitSoftPlan(owner.id, ownedPlan.id, { kind: 'time', date, timeIndex });
+    else await database.blocks.update(block.id, { location_type: 'slot', week_start_date: target.weekStartDate, day_index: target.dayIndex, time_index: timeIndex });
+    setBlocks(current => current.flatMap(item => item.id !== block.id ? [item] : target.weekOffset === weekOffset ? [{ ...item, location: { type: 'slot' as const, dayIndex: target.dayIndex, timeIndex } }] : []));
+    setWeekOffset(target.weekOffset); setMobileDayIndex(target.dayIndex); navigateMain('planner');
+    showToast('Rescheduled', 'success', { label: 'Undo', onClick: () => { void (async () => {
+      try {
+        if (owner && ownedPlan) {
+          const previousDate = new Date(`${previousWeek}T12:00:00`);
+          previousDate.setDate(previousDate.getDate() + previousLocation.dayIndex);
+          await commitSoftPlan(owner.id, ownedPlan.id, { kind: 'time', date: localDateKey(previousDate), timeIndex: previousLocation.timeIndex });
+        } else await database.blocks.update(block.id, { location_type: 'slot', week_start_date: previousWeek, day_index: previousLocation.dayIndex, time_index: previousLocation.timeIndex });
+        setWeekOffset(previousWeekOffset); setMobileDayIndex(previousLocation.dayIndex);
+        setBlocks(current => current.some(item => item.id === block.id) ? current.map(item => item.id === block.id ? { ...item, location: previousLocation } : item) : [...current, block]);
+        navigateMain('planner'); showToast('Move undone', 'info');
+      } catch { showToast('Could not undo the move. Please try again.', 'error'); }
+    })(); } });
+  };
+  const openStackDay = (index: number) => { setMobileDayIndex(index); selectPlanView("day"); };
+  const stackDays: StackDay[] = days.map((_, dayIndex) => {
+    const date = new Date(`${getWeekStartDateString(weekOffset)}T12:00:00`);
+    date.setDate(date.getDate() + dayIndex);
+    const dateKey = localDateKey(date);
+    return {
+      date: dateKey,
+      anytime: dayCommitments.filter(({ node }) => node.planDate === dateKey).map(({ node, themeId, planId, legacy }) => ({
+        id: `${node.id}:${planId}`, name: node.text, themeId,
+        readingLink: node.tag === 'link' ? node.readingLink : undefined,
+        detail: [node.linked?.routineId ? 'Routine' : node.tag === 'task' ? 'Task' : node.tag === 'habit' ? 'Habit' : node.tag === 'link' ? 'Link' : 'Note', themes.find(theme => theme.id === themeId)?.name].filter(Boolean).join(' · '),
+        onDone: node.tag === 'link' ? () => { void completeAnytimeTask(node.id); } : undefined,
+        onOpen: () => openPlanItem(node.id, dateKey, 'day', planId),
+        onRemove: () => { void removeDayCommitment(node.id, planId, legacy); },
+      })),
+      timed: blocks.filter(block => block.location.type === "slot" && block.location.dayIndex === dayIndex && !(block.linkedBlockId && !block.isLinkedGroup))
+        .sort((a, b) => (a.location.type === "slot" ? a.location.timeIndex : 0) - (b.location.type === "slot" ? b.location.timeIndex : 0))
+        .map(block => {
+          const themeId = block.themeId ?? allHabits.find(habit => habit.id === block.habitId)?.themeId ?? outlinerNodeEntries.find(({ node }) => node.linked?.blockId === block.id)?.themeId;
+          return { id: block.id, name: cleanBlockLabel(block), themeId, completed: !!block.completed,
+            readingLink: getBlockReadingLink(block),
+            detail: [getBlockKindLabel(block), themes.find(theme => theme.id === themeId)?.name].filter(Boolean).join(' · '),
+            time: block.location.type === "slot" ? hourlySlots[block.location.timeIndex] ?? "Scheduled" : "Scheduled",
+            onOpen: () => openStackDay(dayIndex), onDone: () => { void toggleBlockCompletion(block.id); },
+            onActions: () => openGridItemActions(block.id),
+            hasNote: !!block.blockNote?.trim(), onNote: () => setTodayNoteId(`block:${block.id}`),
+          };
+        }),
+      suggestions: mobileWeeklyIntentionPlacements.filter(({ placement }) => placement.dayIndex === dayIndex).map(({ kind, intention, placement, title, detail }) => ({
+        id: `${kind}-${intention.id}-${placement.id}`, name: title, detail: `${detail} · ${hourlySlots[placement.timeIndex] ?? "Choose a time"}`,
+        openLabel: `Schedule ${title}`, removeLabel: `Dismiss ${title}`,
+        themeId: kind === "habit" ? intention.themeId : undefined,
+        onOpen: () => { if (kind === "habit") void acceptWeeklyHabitIntention(intention.id, placement.id); else void acceptWeeklyRoutineIntention(intention.id, placement.id); },
+        onRemove: () => { if (kind === "habit") dismissWeeklyHabitIntention(intention.id, placement.id); else dismissWeeklyRoutineIntention(intention.id, placement.id); },
+      })),
+    };
+  });
+
+  const savePlanItem = async (id: string, date: string, timeIndex: number | null, mode: PlanMode, targetCount?: number) => {
+    if (!user || outlineLoading) throw new Error("Outline is still loading. Please try again.");
+    const target = planningDate(date);
+    if (mode === 'time' && (timeIndex === null || !Number.isInteger(timeIndex) || timeIndex < 0 || timeIndex >= hourlySlots.length)) throw new Error('Choose a valid time.');
+    if (mode !== 'time') timeIndex = null;
+    let node = outlineBranchItems(latestOutlineNodes.current).find(item => item.id === id);
+    let nextNodes = latestOutlineNodes.current;
+    if (!node && id.startsWith("block:")) {
+      const block = blocks.find(block => block.id === id.slice(6));
+      if (!block) throw new Error("That item is no longer available.");
+      const existing = findGridOutlineEntry(nextNodes, block);
+      if (existing?.inTrash) throw new Error('Restore this item from Outline Trash before planning it.');
+      node = existing?.node;
+      if (!node) {
+        node = { ...createOutlineNode(cleanBlockLabel(block)), tag: block.habitId ? 'habit' : getBlockKindLabel(block) === 'Task' ? 'task' : 'note',
+          taskDone: !!block.completed, draftNote: block.blockNote ?? '',
+          linked: { blockId: block.id, label: cleanBlockLabel(block), ...(block.habitId ? { habitId: block.habitId, themeId: block.themeId } : {}) } };
+        nextNodes = [...nextNodes, node];
+        // Persist identity first so a retry from Waiting reuses the same Outline entry.
+        await saveOutlineNodes(nextNodes);
+      }
+    }
+    if (!node) throw new Error("Choose an item from Outline or Waiting.");
+    if (node.tag === 'link' && !normalizeReadingLink(node.readingLink)) throw new Error('Add a valid URL in the Link details before planning it.');
+    if (isRepeatingPlanNode(node)) {
+      const plans = normalizeOutlinePlans(node.plans, node.id, node.planDate);
+      const selected = plans.find(plan => plan.id === (planSelection?.id === id ? planSelection.softPlanId : undefined))
+        ?? (id.startsWith('block:') ? plans.find(plan => plan.scheduledBlockIds.includes(id.slice(6))) : undefined);
+      const parent = plans.find(plan => plan.scope === 'week' && !plan.parentPlanId && plan.date === target.weekStartDate);
+      const parentId = parent?.id ?? weeklyPlanId(node.id, date);
+      const draftKey = `${node.id}:${planSelection?.requestId ?? 'calendar'}`;
+      const existingSession = selected && (selected.parentPlanId || selected.scope === 'day') ? selected : undefined;
+      if (mode === 'week' && !existingSession) {
+        const pending = recurringDraftIds.current.get(draftKey);
+        if (pending) await commitSoftPlan(node.id, pending, { kind: 'week', date }, parentId);
+        await commitSoftPlan(node.id, parentId, { kind: 'week', date }, undefined, targetCount ?? parent?.targetCount ?? defaultWeeklyTarget(node));
+      } else {
+        let sessionId = existingSession?.id ?? recurringDraftIds.current.get(draftKey);
+        if (!sessionId) {
+          sessionId = plans.find(plan => plan.parentPlanId === parentId && plan.scope === 'week')?.id ?? crypto.randomUUID();
+          recurringDraftIds.current.set(draftKey, sessionId);
+        }
+        await commitSoftPlan(node.id, sessionId, mode === 'week' ? { kind: 'week', date } : mode === 'day' ? { kind: 'day', date } : { kind: 'time', date, timeIndex: timeIndex! }, existingSession?.parentPlanId ?? parentId);
+      }
+      recurringDraftIds.current.delete(draftKey);
+      setWeekOffset(target.weekOffset);
+      if (mode !== 'week') setMobileDayIndex(target.dayIndex);
+      navigateMain('planner');
+      if (mode === 'week' && planView === 'day') selectPlanView('week');
+      showToast(mode === 'week' ? 'Week intention saved.' : 'Session placed.', 'success');
+      return;
+    }
+    if (!node.linked?.habitId && !node.linked?.routineId && node.tag !== 'habit') {
+      const plans = normalizeOutlinePlans(node.plans, node.id, node.planDate);
+      const planId = planSelection?.id === id && planSelection.softPlanId
+        ? planSelection.softPlanId : plans.length === 1 ? plans[0].id : plans.length === 0 ? `plan:${node.id}` : null;
+      if (!planId) throw new Error('Choose the plan you want to move.');
+      await commitSoftPlan(node.id, planId, mode === 'week' ? { kind: 'week', date } : mode === 'day' ? { kind: 'day', date } : { kind: 'time', date, timeIndex: timeIndex! });
+      setWeekOffset(target.weekOffset);
+      if (mode !== 'week') setMobileDayIndex(target.dayIndex);
+      navigateMain('planner');
+      if (mode === 'week' && planView === 'day') selectPlanView('week');
+      showToast(mode === 'week' ? 'Planned for the week. Day left open.' : mode === 'day' ? 'Day chosen. Time left open.' : 'Scheduled.', 'success');
+      return;
+    }
+  };
+
+  const openGridItemActions = (blockId: string) => {
+    const block = blocks.find(item => item.id === blockId);
+    if (!block) return;
+    const existing = findGridOutlineEntry(latestOutlineNodes.current, block);
+    setGridItemSelection({ blockId, existing: existing ? { id: existing.node.id, inTrash: existing.inTrash } : undefined });
+  };
+  const gridSelectedBlock = blocks.find(block => block.id === gridItemSelection?.blockId);
+  const changeGridCardType = async (kind: 'task' | 'note') => {
+    if (!user || outlineLoading || !gridSelectedBlock) throw new Error('This item is still loading. Please try again.');
+    const block = gridSelectedBlock;
+    if (block.habitId || block.isHabitBlock || getBlockKindLabel(block) === 'Routine' || getBlockKindLabel(block) === 'Workout') throw new Error('This card has a linked routine, workout, or habit history. Its type is protected.');
+    const owner = findGridOutlineEntry(latestOutlineNodes.current, block);
+    if (owner?.inTrash) throw new Error('Restore this item from Outline Trash before changing its type.');
+    if (owner) { await changeOutlineCardType(owner.node.id, kind); return; }
+    const patch = blockTypePatch(block.label, kind);
+    await database.blocks.update(block.id, patch);
+    setBlocks(current => current.map(item => item.id === block.id ? { ...item, ...patch } : item));
+    showToast('Card type changed. Kept on the calendar only.', 'success');
+  };
+  const saveGridItemToOutline = async (choice: GridOutlineChoice) => {
+    if (!user || outlineLoading || !gridSelectedBlock) throw new Error("Outline is still loading, or this calendar item is no longer available.");
+    const block = gridSelectedBlock;
+    const destinations = gridOutlineDestinations(latestOutlineNodes.current);
+    const parent = destinations.find(item => item.id === choice.parentId);
+    if (choice.parentId && !parent) throw new Error("Choose an available place in Outline.");
+    if (choice.kind === "habit" && (!Number.isFinite(choice.target) || choice.target < 1)) throw new Error("Choose a goal of at least 1.");
+    if (block.habitId && choice.kind !== "habit") throw new Error("Add this scheduled habit as a habit to keep its history.");
+    const name = cleanBlockLabel(block);
+    let habit = block.habitId ? { habitId: block.habitId, themeId: allHabits.find(item => item.id === block.habitId)?.themeId ?? block.themeId ?? "" } : undefined;
+    if (choice.kind === "habit" && !habit) {
+      habit = gridHabitDrafts.current.get(block.id);
+      if (!habit) {
+        const created = await createOrLinkOutlinerHabit(parent?.themeId, name, choice.target, choice.frequency);
+        if (!created) throw new Error("Could not create the habit. Please retry.");
+        habit = created;
+        gridHabitDrafts.current.set(block.id, created);
+      }
+    }
+    const existing = findGridOutlineEntry(latestOutlineNodes.current, { id: block.id, habitId: habit?.habitId });
+    if (existing?.inTrash) throw new Error("This item is in Outline's Trash. Restore it there first.");
+    const newHabit = !!habit && gridHabitDrafts.current.has(block.id) && !gridHabitDrafts.current.get(block.id)?.linkedExisting;
+    if (existing && (newHabit || !habit) && outlineBranchItems([existing.node]).some(item => item.id === choice.parentId)) throw new Error("Choose a place outside this item.");
+    if (habit && newHabit) {
+      if (parent?.parentHabitId === habit.habitId) throw new Error("Choose a place outside this habit.");
+      habit = { ...habit, themeId: parent?.themeId ?? habit.themeId };
+      const updatedHabit = habit;
+      await database.habits.update(habit.habitId, { theme_id: habit.themeId, parent_habit_id: parent?.parentHabitId ?? null, target_per_week: choice.target, frequency: choice.frequency });
+      setThemes(current => {
+        const habits = current.flatMap(theme => flattenHabits(theme.habits, theme.name, theme.id)).map(item => item.id === updatedHabit.habitId
+          ? { ...item, themeId: updatedHabit.themeId, parentHabitId: parent?.parentHabitId, targetPerWeek: choice.target, frequency: choice.frequency } : item);
+        const buildTree = (themeId: string, parentId?: string): Habit[] => habits.filter(item => item.themeId === themeId && item.parentHabitId === parentId).map(item => ({ ...item, subtasks: buildTree(themeId, item.id) }));
+        return current.map(theme => ({ ...theme, habits: buildTree(theme.id) }));
+      });
+    }
+    const label = `${choice.kind === "task" ? "Task" : choice.kind === "note" ? "Note" : "Habit"}: ${name}`;
+    // Update classification only; never move or recreate the scheduled block.
+    await database.blocks.update(block.id, { label, hashtag: choice.kind,
+      ...(habit ? { habit_id: habit.habitId, theme_id: habit.themeId, is_habit_block: true } : {}),
+    });
+    setBlocks(current => current.map(item => item.id !== block.id ? item : { ...item, label, hashtag: choice.kind,
+      ...(habit ? { habitId: habit.habitId, themeId: habit.themeId, isHabitBlock: true } : {}),
+    }));
+    const current = latestOutlineNodes.current;
+    const draft: OutlineNode = { ...createOutlineNode(name), tag: choice.kind,
+      taskDone: choice.kind === "task" && !!block.completed, draftNote: block.blockNote ?? "",
+      target: choice.target, frequency: choice.frequency,
+      linked: { blockId: block.id, label: name, ...(habit ?? {}) },
+    };
+    // A failed write or canonical habit sync may already have inserted this row.
+    const placed = placeGridOutlineEntry(current, draft, choice.parentId, newHabit);
+    await saveOutlineNodes(placed.nodes);
+    gridHabitDrafts.current.delete(block.id);
+    showToast(`${name} added to Outline. Calendar time kept.`, "success", { label: "Open", onClick: () => viewCapturedItem(placed.node.id) });
+  };
+  const rescheduleGridItem = () => {
+    if (!gridSelectedBlock || gridSelectedBlock.location.type !== "slot") return;
+    const date = new Date(`${getWeekStartDateString(weekOffset)}T12:00:00`);
+    date.setDate(date.getDate() + gridSelectedBlock.location.dayIndex);
+    setPlanSelection({ id: `block:${gridSelectedBlock.id}`, blockId: gridSelectedBlock.id, date: localDateKey(date), time: gridSelectedBlock.location.timeIndex });
+    setGridItemSelection(null);
+  };
+
+  const addPlannerItem = async (item: NewPlannerItem): Promise<string> => {
+    if (!user || outlineLoading) throw new Error("Outline is still loading. Please try again.");
+    if (!item.name.trim()) throw new Error("Give this item a name.");
+    if (item.kind === 'link' && !normalizeReadingLink(item.readingLink)) throw new Error('Enter a public http or https URL.');
+    if (item.kind === 'link' && item.readingLink?.imageUrl?.trim() && !publicWebUrl(item.readingLink.imageUrl)) throw new Error('Enter a public thumbnail URL or leave it empty.');
+    if (item.kind === "habit" && (!Number.isFinite(item.target) || item.target < 1)) throw new Error("Choose a goal of at least 1.");
+    // An explicit null means Ungrouped; omission retains the legacy theme-based flow.
+    const explicitParent = item.parentId !== undefined;
+    const destinationPath = (nodes: OutlineNode[], id: string): OutlineNode[] | null => {
+      for (const candidate of nodes) {
+        if (candidate.trashedAt) continue;
+        if (candidate.id === id) return [candidate];
+        const child = destinationPath(candidate.children, id);
+        if (child) return [candidate, ...child];
+      }
+      return null;
+    };
+    const initialPath = item.parentId ? destinationPath(latestOutlineNodes.current, item.parentId) : null;
+    if (item.parentId && !initialPath) throw new Error("That destination is no longer available. Choose another place.");
+    const destinationTheme = initialPath?.slice().reverse().find(isThemeOutlineNode)?.linked?.themeId;
+    const key = JSON.stringify([user.id, item]);
+    let node = pendingCapture.current?.key === key ? pendingCapture.current.node : null;
+    if (!node) {
+      node = { ...createOutlineNode(item.name.trim()), draftNote: item.notes, ...(item.kind === 'link' ? { readingLink: normalizeReadingLink(item.readingLink) } : {}) };
+      if (item.kind === "habit") {
+        const result = await createOrLinkOutlinerHabit(destinationTheme || item.themeId || null, item.name, item.target, item.frequency);
+        if (!result) throw new Error("Could not add the habit.");
+        node = { ...node, tag: "habit", frequency: item.frequency, target: item.target, linked: { ...result, label: item.name } };
+      } else if (item.kind === "theme") {
+        const result = await createThemeFromOutliner(item.name, []);
+        if (!result) throw new Error("Could not add the theme.");
+        node = { ...node, linked: { themeId: result.themeId, label: item.name } };
+      } else if (item.kind === "routine") {
+        const result = await createRoutineFromOutliner(item.name, item.notes.split("\n").filter(Boolean));
+        if (!result) throw new Error("Could not add the routine.");
+        node = { ...node, linked: { routineId: result.routineId, label: item.name } };
+      } else node = { ...node, tag: item.kind };
+      pendingCapture.current = { key, node };
+    }
+    // Canonical theme/habit sync may have inserted the row while capture was saving.
+    const current = latestOutlineNodes.current;
+    const entries = outlineBranchItems(current);
+    if (item.parentId && !destinationPath(current, item.parentId)) throw new Error("That destination is no longer available. Choose another place.");
+    const existing = entries.find(entry => entry.id === node!.id ||
+      (node!.linked?.habitId ? entry.linked?.habitId === node!.linked.habitId :
+        isThemeOutlineNode(node!) ? isThemeOutlineNode(entry) && entry.linked?.themeId === node!.linked?.themeId :
+          node!.linked?.routineId ? entry.linked?.routineId === node!.linked.routineId : false));
+    if (existing) {
+      node = { ...existing, draftNote: item.notes || existing.draftNote };
+      const updated = updateOutlineNode(current, existing.id, () => node!);
+      if (explicitParent && item.parentId && !outlineBranchItems([existing]).every(entry => entry.id !== item.parentId)) {
+        throw new Error("An item cannot be placed inside itself or its descendants.");
+      }
+      await saveOutlineNodes(explicitParent ? moveOutlineSelection(updated, new Set([existing.id]), item.parentId ?? null, { revealParent: false }) : updated);
+    } else {
+      const themeId = item.kind === "habit" ? node.linked?.themeId : item.themeId;
+      const parent = explicitParent ? entries.find(entry => entry.id === item.parentId) : item.kind === "theme" ? null : entries.find(entry => isThemeOutlineNode(entry) && entry.linked?.themeId === themeId);
+      await saveOutlineNodes(parent ? updateOutlineNode(current, parent.id, row => ({ ...row, collapsed: explicitParent ? row.collapsed : false, children: [...row.children, node!] })) : [...current, node]);
+    }
+    pendingCapture.current = null;
+    return node.id;
+  };
+
+  const openCapture = (themeId = "") => { setCaptureThemeId(themeId); setCaptureKind("task"); setShowAddPlanner(true); };
+  const viewCapturedItem = (id: string) => {
+    setShowAddPlanner(false);
+    setOutlinerFocusNodeId(id);
+    setOutlinerFocusRequestKey(value => value + 1);
+    navigateMain("themes");
+    outlineScrollPosition.current = { root: 0, window: 0 };
+  };
+  const sendCaptureToRoutine = async (routineId: string) => {
+    if (!user || !routineCaptureNode) throw new Error("Choose an Outline item.");
+    const node = outlineBranchItems(latestOutlineNodes.current).find(item => item.id === routineCaptureNode.id);
+    if (!node) throw new Error("This item is no longer in Outline.");
+    const next = addOutlineItemToRoutine(routineTabs, routineId, node);
+    saveRoutineNotes(user.id, next);
+    setRoutineTabs(next);
+    showToast(`${node.text} added to ${next.find(routine => routine.id === routineId)?.name}.`, "success");
+  };
+
   if (!hasSupabaseConfig) {
     return <MissingSupabaseConfigScreen />;
   }
@@ -5838,9 +7740,30 @@ const App: React.FC = () => {
   }
 
   return (
-    <>
+    <TileTimersProvider key={user.id} userId={user.id}>
+      <PlannerNavigation view={mobileHomeView === "stack" ? "planner" : mobileHomeView}
+        onView={navigateMain} onAdd={() => openCapture()} onMore={() => setMobileMoreOpen(value => !value)}
+        more={mobileMoreOpen ? <>
+          <button type="button" onClick={() => { setShowCalendarSettings(true); setMobileMoreOpen(false); }}>Settings & calendars</button>
+          <button type="button" onClick={() => { setShowAnalytics(true); setMobileMoreOpen(false); }}>History</button>
+          <button type="button" onClick={() => { openOverlayPanel("workout"); setMobileMoreOpen(false); }}>Workouts</button>
+          <button type="button" onClick={() => { openOverlayPanel("routines"); setMobileMoreOpen(false); }}>Edit routines</button>
+          <button type="button" onClick={() => { openAmbientMode(); setMobileMoreOpen(false); }}>Ambient</button>
+          <button type="button" onClick={() => void supabase.auth.signOut()}>Sign out</button>
+        </> : null} />
+      <AddPlannerDialog key={user.id} open={showAddPlanner} themes={themes.filter(theme => outlineBranchItems(outlinerNodes).some(node => isThemeOutlineNode(node) && node.linked?.themeId === theme.id))} initialKind={captureKind} initialThemeId={captureThemeId} onSave={addPlannerItem} onView={viewCapturedItem} onClose={() => setShowAddPlanner(false)} />
+      {routineCaptureNode && <AddToRoutineDialog name={routineCaptureNode.text} routines={routineTabs} onSave={sendCaptureToRoutine} onClose={() => setRoutineCaptureNode(null)} />}
+      {gridItemSelection && gridSelectedBlock && <GridOutlineDialog key={gridSelectedBlock.id} blockId={gridSelectedBlock.id} name={cleanBlockLabel(gridSelectedBlock)} currentType={getBlockKindLabel(gridSelectedBlock)} initialKind={gridSelectedBlock.habitId ? "habit" : getBlockKindLabel(gridSelectedBlock) === "Task" ? "task" : "note"} destinations={gridOutlineDestinations(outlinerNodes)} existing={gridItemSelection.existing} onSave={saveGridItemToOutline} onChangeType={changeGridCardType} onOpen={() => { if (gridItemSelection.existing) viewCapturedItem(gridItemSelection.existing.id); setGridItemSelection(null); }} onReschedule={rescheduleGridItem} onClose={() => setGridItemSelection(null)} />}
+      <PlannerConnectionStatus />
+      {outlineSaveStatus !== 'idle' && (mobileHomeView === 'themes' || outlineSaveStatus !== 'saved') && <div className="outline-save-status" role="status">{outlineSaveStatus === 'saving' ? 'Saving Outline...' : outlineSaveStatus === 'saved' ? 'Outline saved' : 'Outline not saved'}{outlineSaveStatus === 'error' && <button type="button" onClick={() => saveOutlineNodes(latestOutlineNodes.current)}>Retry</button>}</div>}
+      {todayNoteId && <PlannerNoteDialog key={todayNoteId} name={todayNoteName} occurrence={!!todayNoteBlockId} outlineCopy={todayNoteBlockId ? {
+        destinations: gridOutlineDestinations(outlinerNodes), initialParentId: occurrenceNoteOwner && !occurrenceNoteOwner.inTrash ? occurrenceNoteOwner.node.id : '', onSave: copyOccurrenceNoteToOutline,
+      } : undefined} onLoad={loadTodayNote} onSave={saveTodayNote} onClose={() => setTodayNoteId(null)} />}
+      {planSelection && <PlanItemDialog choices={reschedulingBlock ? [{ id: `block:${reschedulingBlock.id}`, name: cleanBlockLabel(reschedulingBlock), kind: getBlockKindLabel(reschedulingBlock).toLowerCase(), section: 'Outline' }] : planChoices} initialId={planSelection.id} initialDate={planSelection.date} initialTime={planSelection.time} initialMode={planSelection.mode} initialTarget={planSelection.targetCount} rescheduling={!!planSelection.blockId || editingRecurringSession} allowLoose={!planSelection.blockId || canLoosenReschedulingBlock} slots={hourlySlots} onSave={planSelection.blockId ? rescheduleTodayBlock : savePlanItem} onClose={() => setPlanSelection(null)} />}
       <div
-        className={`app ${mobileHomeView === "themes" ? "app-mobile-themes" : ""}`}
+        className={`app streamlined-app ${mobileHomeView === "themes" ? "app-mobile-themes" : ""}`}
+        data-main-view={mobileHomeView === "stack" ? "planner" : mobileHomeView}
+        data-plan-view={mobileHomeView === "stack" ? "stack" : planView}
         style={{ gridTemplateColumns: `${leftColWidth}px 4px 1fr` }}
       >
         <div className="left-column">
@@ -5868,9 +7791,82 @@ const App: React.FC = () => {
             onCreateBlock={(label) => createBlock(label)}
           />
 
-          <div className="card themes-card">
+          <section id="planning-outline" className="themes-card outline-home">
+            <PlanningOutlinerPanel
+          key={user.id}
+          userId={user.id}
+          nodes={outlinerNodes}
+          loading={dataLoading || outlineLoading}
+          onPlan={(node) => openPlanItem(node.id, node.planDate ?? undefined)}
+          onAdd={openCapture}
+          onAddToRoutine={setRoutineCaptureNode}
+          onChangeType={changeOutlineCardType}
+          onLoadPlanning={loadOutlinePlanning}
+          onUnlinkPlanning={unlinkOutlinePlanning}
+          onSaveReadingLink={saveOutlineReadingLink}
+          getHabitProgress={(id) => {
+            const habit = allHabits.find(habit => habit.id === id);
+            return habit && habit.frequency !== "none" ? `${getHabitDoneCount(id, habit.frequency)}/${habit.targetPerWeek}` : "";
+          }}
+          onHabitDragStart={handleHabitDragStart}
+          onHabitDragEnd={handleHabitDragEnd}
+          onSaveHabitSettings={saveOutlineHabitSettings}
+          onToggleTask={(node) => {
+            if (node.linked?.blockId && blocks.some((block) => block.id === node.linked?.blockId)) {
+              void toggleBlockCompletion(node.linked.blockId);
+            } else {
+              saveOutlineNodes(updateOutlineNode(outlinerNodes, node.id, (item) => ({ ...item, taskDone: !item.taskDone })));
+            }
+          }}
+          presentation="inline"
+          focusNodeIdRequest={outlinerFocusNodeId}
+          focusRequestKey={outlinerFocusRequestKey}
+          themes={themes
+            .filter((theme) => theme.themeType === "habit" || theme.themeType === "household")
+            .map((theme) => ({
+              id: theme.id,
+              name: theme.name,
+              habits: flattenHabits(theme.habits, theme.name, theme.id).map((habit) => ({
+                id: habit.id,
+                name: habit.name,
+              })),
+            }))}
+          boardHabitIds={blocks
+            .map((block) => block.habitId)
+            .filter((habitId): habitId is string => !!habitId)}
+          onClose={() => setShowPlanningOutliner(false)}
+          onCreateBlock={createOutlinerBlock}
+          onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
+            return createOrLinkOutlinerHabit(themeId, name, targetPerWeek, frequency);
+          }}
+          onCreateHabitBlock={async (themeId, name, targetPerWeek, frequency) => {
+            const result = await createOrLinkOutlinerHabit(themeId, name, targetPerWeek, frequency);
+            if (!result) return null;
+            const boardResult = await addLinkedHabitToBoard({
+              habitId: result.habitId,
+              themeId: result.themeId,
+              label: name,
+            });
+            return boardResult ? { ...result, blockId: boardResult.blockId } : result;
+          }}
+          onCreateThemeFromRow={async (name, habits) => {
+            return createThemeFromOutliner(name, habits);
+          }}
+          onCreateRoutineFromRow={createRoutineFromOutliner}
+          onOpenLinked={openLinkedOutlinerItem}
+          onRenameLinked={renameLinkedOutlinerItem}
+          onLoadLinkedNote={loadLinkedOutlinerNote}
+          onSaveLinkedNote={saveLinkedOutlinerNote}
+          onNodesChange={saveOutlineNodes}
+          saveStatus={outlineSaveStatus}
+        />
+          </section>
+
+          {themeDetailsId && <div className="modal-overlay theme-details-overlay" onClick={closeThemeDetails}>
+          <div className="card theme-details-panel" role="dialog" aria-modal="true" aria-label="Theme details" onClick={(event) => event.stopPropagation()}>
             <div className="top-row">
-              <h2>Habit themes</h2>
+              <h2>Theme details</h2>
+              <button type="button" className="secondary" onClick={closeThemeDetails}>Close</button>
               <div className="theme-top-actions">
                 <button
                   type="button"
@@ -5904,18 +7900,35 @@ const App: React.FC = () => {
             ) : (
               <>
                 <div className="theme-list">
-                  {themes.map((theme) => {
+                  {themes.filter((theme) => themeDetailsId === "all" || theme.id === themeDetailsId).map((theme) => {
                     const isThemeExpanded = expandedThemes.has(theme.id);
                     const themedBlocks = blocks.filter(
                       (b) => b.location.type === "unscheduled" && b.themeId === theme.id
                     );
                     const isDropTarget = dragOverThemeId === theme.id;
                     const isDraggingBlock = !!(dragBlockId || currentDragBlockId);
+                    const isHouseholdTheme = theme.themeType === "household";
+                    const themeOutlineMeta = themeOutlineMetaMap.get(theme.id);
+                    const shapeTargetThemes = themes.filter(
+                      (candidate) =>
+                        candidate.id !== theme.id &&
+                        (candidate.themeType === "habit" || candidate.themeType === "household")
+                    );
+                    const householdHabits = isHouseholdTheme
+                      ? flattenHabits(theme.habits, theme.name, theme.id)
+                      : [];
+                    const householdNeedCounts = householdHabits.reduce(
+                      (counts, habit) => {
+                        const need = getHouseholdChoreNeed(habit);
+                        return { ...counts, [need.className]: (counts[need.className] ?? 0) + 1 };
+                      },
+                      {} as Record<string, number>
+                    );
                     return (
                     <div
                       id={`theme-${theme.id}`}
                       key={theme.id}
-                      className={`theme-card${isDropTarget ? " theme-card-drop-target" : ""}`}
+                      className={`theme-card${isHouseholdTheme ? " theme-card-household" : ""}${isDropTarget ? " theme-card-drop-target" : ""}`}
                     >
                       <div
                         className="theme-title-row"
@@ -5955,7 +7968,15 @@ const App: React.FC = () => {
                               {theme.themeType === "meals" && (
                                 <span className="meals-theme-icon" title="Meals theme">&#127860;</span>
                               )}
+                              {isHouseholdTheme && (
+                                <span className="household-theme-icon" title="Household theme">Home</span>
+                              )}
                               {theme.name}
+                              {themeOutlineMeta && themeOutlineMeta.path.length > 1 && (
+                                <span className="theme-outline-path">
+                                  {themeOutlineMeta.path.slice(0, -1).join(" / ")}
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -5977,20 +7998,28 @@ const App: React.FC = () => {
                                   }
                                 }}
                               >
-                                {theme.themeType === "meals" ? "Add meal" : "Add habit"}
+                                {theme.themeType === "meals" ? "Add meal" : isHouseholdTheme ? "Add chore" : "Add habit"}
                               </button>
                               <button
                                 type="button"
                                 className="secondary small-btn"
-                                onClick={() => addThemeViewToOutliner(theme)}
-                                title="Add this theme to Planning Outliner"
+                                onClick={() => {
+                                  if (themeOutlineMeta) {
+                                    setOutlinerFocusNodeId(themeOutlineMeta.nodeId);
+                                    setOutlinerFocusRequestKey((value) => value + 1);
+                                    openOverlayPanel("outliner");
+                                  } else {
+                                    addThemeViewToOutliner(theme);
+                                  }
+                                }}
+                                title="Open this theme in Outline"
                               >
-                                Plan
+                                Outline
                               </button>
                               <button
                                 type="button"
                                 className="secondary small-btn"
-                                onClick={() => setNotesThemeId(theme.id)}
+                                onClick={() => { closeThemeDetails(); setNotesThemeId(theme.id); }}
                               >
                                 Notes
                               </button>
@@ -6007,8 +8036,20 @@ const App: React.FC = () => {
                                   }
                                 }}
                               >
-                                {managingGroupsForTheme === theme.id ? "Hide" : "Groups"}
+                                {managingGroupsForTheme === theme.id ? "Hide" : isHouseholdTheme ? "Areas" : "Groups"}
                               </button>
+                              {theme.themeType !== "meals" && (
+                                <button
+                                  type="button"
+                                  className="secondary small-btn"
+                                  onClick={() => {
+                                    setReshapingThemeId(reshapingThemeId === theme.id ? null : theme.id);
+                                    setShapeTargetThemeId(shapeTargetThemes[0]?.id ?? "");
+                                  }}
+                                >
+                                  Shape
+                                </button>
+                              )}
                             </>
                           )}
                           <button
@@ -6025,12 +8066,57 @@ const App: React.FC = () => {
 
                       <div className={`theme-body ${isThemeExpanded ? "expanded" : "collapsed"}`}>
 
+                      {reshapingThemeId === theme.id && theme.themeType !== "meals" && (
+                        <div className="shape-change-panel">
+                          <div>
+                            <strong>Change shape</strong>
+                            <span>Turn this theme into a habit inside another theme.</span>
+                          </div>
+                          {shapeTargetThemes.length === 0 ? (
+                            <p>Create another habit theme first, then this can move into it.</p>
+                          ) : (
+                            <>
+                              <label className="small-label">Put inside</label>
+                              <select
+                                value={shapeTargetThemeId}
+                                onChange={(event) => setShapeTargetThemeId(event.target.value)}
+                              >
+                                {shapeTargetThemes.map((candidate) => (
+                                  <option key={candidate.id} value={candidate.id}>
+                                    {candidate.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <div className="shape-change-actions">
+                                <button
+                                  type="button"
+                                  onClick={() => makeThemeIntoHabit(theme, shapeTargetThemeId)}
+                                  disabled={!shapeTargetThemeId}
+                                >
+                                  Make habit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  onClick={() => {
+                                    setReshapingThemeId(null);
+                                    setShapeTargetThemeId("");
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+
                       {managingGroupsForTheme === theme.id && (
                         <div className="add-habit-form" style={{ marginBottom: "8px" }}>
-                          <label className="small-label">Groups in this theme</label>
+                          <label className="small-label">{isHouseholdTheme ? "Areas in this home" : "Groups in this theme"}</label>
                           {theme.groups.length === 0 ? (
                             <div style={{ fontSize: "12px", color: "#666", padding: "4px 0" }}>
-                              No groups yet
+                              {isHouseholdTheme ? "No areas yet" : "No groups yet"}
                             </div>
                           ) : (
                             <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "8px" }}>
@@ -6053,39 +8139,76 @@ const App: React.FC = () => {
                               ))}
                             </div>
                           )}
-                          <label className="small-label">Add new group</label>
+                          <label className="small-label">{isHouseholdTheme ? "Add new area" : "Add new group"}</label>
                           <input
                             type="text"
                             value={newGroupName}
                             onChange={(e) => setNewGroupName(e.target.value)}
-                            placeholder="e.g. Strength Training"
+                            placeholder={isHouseholdTheme ? "e.g. Bedroom" : "e.g. Strength Training"}
                           />
-                          <label className="small-label">Group type</label>
-                          <select
-                            value={newGroupType}
-                            onChange={(e) => setNewGroupType(e.target.value as "strength_training" | "custom")}
-                          >
-                            <option value="custom">Custom</option>
-                            <option value="strength_training">Strength Training (auto-link)</option>
-                          </select>
+                          {!isHouseholdTheme && (
+                            <>
+                              <label className="small-label">Group type</label>
+                              <select
+                                value={newGroupType}
+                                onChange={(e) => setNewGroupType(e.target.value as "strength_training" | "custom")}
+                              >
+                                <option value="custom">Custom</option>
+                                <option value="strength_training">Strength Training (auto-link)</option>
+                              </select>
+                            </>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
-                              addGroupToTheme(theme.id, newGroupName, newGroupType);
+                              addGroupToTheme(theme.id, newGroupName, isHouseholdTheme ? "custom" : newGroupType);
                             }}
                             style={{ marginTop: "4px" }}
                           >
-                            Add group
+                            {isHouseholdTheme ? "Add area" : "Add group"}
                           </button>
+                        </div>
+                      )}
+
+                      {isHouseholdTheme && (
+                        <div className="household-dashboard">
+                          <div>
+                            <span>Needs care</span>
+                            <strong>{householdNeedCounts.due ?? 0}</strong>
+                          </div>
+                          <div>
+                            <span>Getting there</span>
+                            <strong>{householdNeedCounts.soon ?? 0}</strong>
+                          </div>
+                          <div>
+                            <span>Okay</span>
+                            <strong>{householdNeedCounts.fresh ?? 0}</strong>
+                          </div>
+                          <div>
+                            <span>Areas</span>
+                            <strong>{theme.groups.length}</strong>
+                          </div>
                         </div>
                       )}
 
                       <div className="habit-list theme-habit-list">
                         {(() => {
-                          const ungroupedHabits = theme.habits.filter(h => !h.habitGroupId);
+                          const outlineHabitRank = new Map(
+                            (themeOutlineMeta?.habitOrder ?? []).map((habitId, index) => [habitId, index])
+                          );
+                          const orderThemeHabits = (habits: Habit[]) =>
+                            [...habits].sort((a, b) => {
+                              const aRank = outlineHabitRank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+                              const bRank = outlineHabitRank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+                              if (aRank !== bRank) return aRank - bRank;
+                              return theme.habits.findIndex((habit) => habit.id === a.id) -
+                                theme.habits.findIndex((habit) => habit.id === b.id);
+                            });
+                          const orderedThemeHabits = orderThemeHabits(theme.habits);
+                          const ungroupedHabits = orderedThemeHabits.filter(h => !h.habitGroupId);
                           const groupsWithHabits = theme.groups.map(g => ({
                             ...g,
-                            habits: theme.habits.filter(h => h.habitGroupId === g.id)
+                            habits: orderedThemeHabits.filter(h => h.habitGroupId === g.id)
                           })).filter(g => g.habits.length > 0);
                           const emptyGroups = theme.groups.filter(g => !theme.habits.some(h => h.habitGroupId === g.id));
 
@@ -6093,6 +8216,7 @@ const App: React.FC = () => {
                             const isExpanded = expandedHabits.has(habit.id);
                             const habitWithTheme: HabitWithTheme = { ...habit, themeName: theme.name, themeId: theme.id };
                             const activeIntention = getWeeklyIntentionForHabit(habit.id);
+                            const choreNeed = isHouseholdTheme ? getHouseholdChoreNeed(habit) : null;
                             const intentionChoices = Array.from(
                               new Set([
                                 1,
@@ -6130,7 +8254,11 @@ const App: React.FC = () => {
                                   ? "Target met"
                                   : `${habitRemaining} left`;
                             return (
-                              <div id={`habit-${habit.id}`} key={habit.id} className="habit-item">
+                              <div
+                                id={`habit-${habit.id}`}
+                                key={habit.id}
+                                className={`habit-item${choreNeed ? ` household-chore household-chore--${choreNeed.className}` : ""}`}
+                              >
                                 <button
                                   onClick={() => toggleHabitExpanded(habit.id)}
                                   style={{
@@ -6174,6 +8302,11 @@ const App: React.FC = () => {
                                     <div style={{ flex: 1 }}>
                                       <div style={{ fontWeight: 500, color: "#333", marginBottom: "2px", display: "flex", alignItems: "center", gap: "6px" }}>
                                         {habit.name}
+                                        {choreNeed && (
+                                          <span className={`household-need-pill household-need-pill--${choreNeed.className}`}>
+                                            {choreNeed.label}
+                                          </span>
+                                        )}
                                         <span style={{
                                           fontSize: "9px",
                                           fontWeight: 600,
@@ -6215,6 +8348,11 @@ const App: React.FC = () => {
                                         </div>
                                       )}
                                       <div className="habit-care-mini">
+                                        {choreNeed && (
+                                          <span className="household-mini-meter">
+                                            <i style={{ width: `${choreNeed.pct}%` }} />
+                                          </span>
+                                        )}
                                         <span>{habitCareSummary}</span>
                                         <span>Last: {habitLastDoneLabel}</span>
                                         {intentionPlacementCount > 0 && (
@@ -6237,16 +8375,16 @@ const App: React.FC = () => {
                                     </button>
 
                                     <div className="add-habit-form" style={{ paddingLeft: "24px", paddingRight: "24px" }}>
-                                      <label className="small-label">Habit name</label>
+                                      <label className="small-label">{isHouseholdTheme ? "Chore name" : "Habit name"}</label>
                                       <input
                                         type="text"
                                         value={editHabitName}
                                         onChange={(e) => setEditHabitName(e.target.value)}
-                                        placeholder="e.g. Clean kitchen"
+                                        placeholder={isHouseholdTheme ? "e.g. Reset entryway" : "e.g. Clean kitchen"}
                                       />
                                       {theme.groups.length > 0 && (
                                         <>
-                                          <label className="small-label">Group (optional)</label>
+                                          <label className="small-label">{isHouseholdTheme ? "Area (optional)" : "Group (optional)"}</label>
                                           <select
                                             value={editHabitGroupId}
                                             onChange={(e) => setEditHabitGroupId(e.target.value)}
@@ -6381,6 +8519,12 @@ const App: React.FC = () => {
                                         )}
                                       </div>
                                       <div className="habit-care-panel">
+                                        {choreNeed && (
+                                          <div className={`household-need-tile household-need-tile--${choreNeed.className}`}>
+                                            <span>Need</span>
+                                            <strong>{choreNeed.label}</strong>
+                                          </div>
+                                        )}
                                         <div>
                                           <span>Progress</span>
                                           <strong>{habitCareSummary}</strong>
@@ -6430,14 +8574,14 @@ const App: React.FC = () => {
                                         style={{ fontSize: 12 }}
                                         className="secondary"
                                         onClick={() => addHabitViewToOutliner(habit, theme)}
-                                        title="Add this habit to Planning Outliner"
+                                        title="Open this habit in Outline"
                                       >
                                         Plan
                                       </button>
                                       <button
                                         style={{ fontSize: 12 }}
                                         className="secondary"
-                                        onClick={() => setNotesThemeId(theme.id)}
+                                        onClick={() => { closeThemeDetails(); setNotesThemeId(theme.id); }}
                                         title="Open this theme's habit notes"
                                       >
                                         Notes
@@ -6470,6 +8614,15 @@ const App: React.FC = () => {
                                       <button
                                         style={{ fontSize: 12 }}
                                         className="secondary"
+                                        onClick={() =>
+                                          setReshapingHabitId(reshapingHabitId === habit.id ? null : habit.id)
+                                        }
+                                      >
+                                        Shape
+                                      </button>
+                                      <button
+                                        style={{ fontSize: 12 }}
+                                        className="secondary"
                                         onClick={() => {
                                           setAddingSubtaskForHabitId(habit.id);
                                           setNewSubtaskName("");
@@ -6481,6 +8634,27 @@ const App: React.FC = () => {
                                         + Subtask
                                       </button>
                                     </div>
+
+                                    {reshapingHabitId === habit.id && (
+                                      <div className="shape-change-panel shape-change-panel--habit">
+                                        <div>
+                                          <strong>Change shape</strong>
+                                          <span>Make this habit its own theme. Its subtasks and history move with it.</span>
+                                        </div>
+                                        <div className="shape-change-actions">
+                                          <button type="button" onClick={() => makeHabitIntoTheme(habit.id)}>
+                                            Make theme
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="secondary"
+                                            onClick={() => setReshapingHabitId(null)}
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {planningIntentionHabitId === habit.id && (
                                       <div className="habit-intention-panel">
@@ -6649,7 +8823,7 @@ const App: React.FC = () => {
                                                   <button
                                                     className="subtask-add-btn"
                                                     onClick={() => addHabitViewToOutliner(subtask, theme)}
-                                                    title="Add this subtask to Planning Outliner"
+                                                    title="Open this subtask in Outline"
                                                   >
                                                     Plan
                                                   </button>
@@ -6820,7 +8994,7 @@ const App: React.FC = () => {
                                         <span className="habit-group-type-badge">Strength</span>
                                       )}
                                       <span className="habit-group-count">
-                                        {group.habits.length} {group.habits.length === 1 ? "habit" : "habits"}
+                                        {group.habits.length} {isHouseholdTheme ? group.habits.length === 1 ? "chore" : "chores" : group.habits.length === 1 ? "habit" : "habits"}
                                       </span>
                                       {groupTarget > 0 && (
                                         <span className="habit-group-progress">{groupDone}/{groupTarget}</span>
@@ -6852,11 +9026,11 @@ const App: React.FC = () => {
                                       {group.groupType === "strength_training" && (
                                         <span className="habit-group-type-badge">Strength</span>
                                       )}
-                                      <span className="habit-group-count">0 habits</span>
+                                      <span className="habit-group-count">{isHouseholdTheme ? "0 chores" : "0 habits"}</span>
                                     </button>
                                     {isGroupExpanded && (
                                       <div className="habit-group-children habit-group-empty">
-                                        No habits in this group yet
+                                        {isHouseholdTheme ? "No chores in this area yet" : "No habits in this group yet"}
                                       </div>
                                     )}
                                   </div>
@@ -6867,18 +9041,70 @@ const App: React.FC = () => {
                         })()}
                       </div>
 
+                      {themeOutlineMeta && (themeOutlineMeta.outlineItems.length > 0 || themeOutlineMeta.nestedThemes.length > 0) && (
+                        <div className="theme-outline-summary">
+                          <div className="theme-outline-summary-header">
+                            <span>Notes & Outline</span>
+                            <button
+                              type="button"
+                              className="secondary small-btn"
+                              onClick={() => {
+                                setOutlinerFocusNodeId(themeOutlineMeta.nodeId);
+                                setOutlinerFocusRequestKey((value) => value + 1);
+                                openOverlayPanel("outliner");
+                              }}
+                            >
+                              Open row
+                            </button>
+                          </div>
+                          <div className="theme-outline-summary-list">
+                            {themeOutlineMeta.nestedThemes.map((nestedTheme) => (
+                              <button
+                                type="button"
+                                key={nestedTheme.nodeId}
+                                className="theme-outline-summary-row theme-outline-summary-row--theme"
+                                onClick={() => {
+                                  setOutlinerFocusNodeId(nestedTheme.nodeId);
+                                  setOutlinerFocusRequestKey((value) => value + 1);
+                                  openOverlayPanel("outliner");
+                                }}
+                              >
+                                <span>Theme</span>
+                                <strong>{nestedTheme.name}</strong>
+                              </button>
+                            ))}
+                            {themeOutlineMeta.outlineItems.map((item) => (
+                              <button
+                                type="button"
+                                key={item.id}
+                                className={`theme-outline-summary-row theme-outline-summary-row--${item.tag}`}
+                                style={{ paddingLeft: `${10 + item.depth * 14}px` }}
+                                onClick={() => {
+                                  setOutlinerFocusNodeId(item.id);
+                                  setOutlinerFocusRequestKey((value) => value + 1);
+                                  openOverlayPanel("outliner");
+                                }}
+                              >
+                                <span>{item.linkedLabel ?? (item.tag === "task" ? "Task" : item.tag === "habit" ? "Habit" : "Row")}</span>
+                                <strong>{item.text}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {addingThemeId === theme.id && (
                         <div className="add-habit-form">
-                          <label className="small-label">Habit name</label>
+                          <label className="small-label">{isHouseholdTheme ? "Chore name" : "Habit name"}</label>
                           <input
                             type="text"
                             value={newThemeHabitName}
                             onChange={(e) => setNewThemeHabitName(e.target.value)}
-                            placeholder="e.g. Clean kitchen"
+                            placeholder={isHouseholdTheme ? "e.g. Change sheets" : "e.g. Clean kitchen"}
                           />
                           {theme.groups.length > 0 && (
                             <>
-                              <label className="small-label">Group (optional)</label>
+                              <label className="small-label">{isHouseholdTheme ? "Area (optional)" : "Group (optional)"}</label>
                               <select
                                 value={newThemeHabitGroupId}
                                 onChange={(e) => setNewThemeHabitGroupId(e.target.value)}
@@ -7084,6 +9310,8 @@ const App: React.FC = () => {
                                     defaultScheduleDayIndex={todayDayIndex >= 0 ? todayDayIndex : 0}
                                     kindLabel={getBlockKindLabel(block)}
                                     relationshipChips={getBlockRelationshipChips(block)}
+                                    outlineItems={getBoardOutlineItemsForBlock(block)}
+                                    onToggleOutlineTask={toggleBoardOutlineTask}
                                     themeId={theme.id}
                                     themes={themes}
                                     mealPopoverBlockId={mealPopoverBlockId}
@@ -7123,10 +9351,11 @@ const App: React.FC = () => {
                     />
                     <select
                       value={newThemeType}
-                      onChange={(e) => setNewThemeType(e.target.value as "habit" | "meals")}
+                      onChange={(e) => setNewThemeType(e.target.value as ThemeType)}
                       style={{ minWidth: 80 }}
                     >
                       <option value="habit">Habit</option>
+                      <option value="household">Household</option>
                       <option value="meals">Meals</option>
                     </select>
                     <button
@@ -7141,6 +9370,8 @@ const App: React.FC = () => {
               </>
             )}
           </div>
+
+          </div>}
 
           <div className="card">
             <h3>Unscheduled blocks</h3>
@@ -7195,7 +9426,13 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              <div className="block-list" style={{ marginTop: 8 }}>
+              <div
+                className="block-list waiting-drop-zone"
+                style={{ marginTop: 8 }}
+                onDragOver={handleWaitingDragOver}
+                onDragLeave={handleWaitingDragLeave}
+                onDrop={handleWaitingDrop}
+              >
                 {unscheduledBlocks.map((block) => (
                   <div key={block.id} className="waiting-item">
                     <BlockCard
@@ -7225,6 +9462,8 @@ const App: React.FC = () => {
                       onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
                       kindLabel={getBlockKindLabel(block)}
                       relationshipChips={getBlockRelationshipChips(block)}
+                                    outlineItems={getBoardOutlineItemsForBlock(block)}
+                                    onToggleOutlineTask={toggleBoardOutlineTask}
                       themes={themes}
                       mealPopoverBlockId={mealPopoverBlockId}
                       onSetMealPopover={setMealPopoverBlockId}
@@ -7251,6 +9490,44 @@ const App: React.FC = () => {
         <div className="col-resize-handle" onMouseDown={handleResizeMouseDown} />
 
         <div className="right-column">
+          {mobileHomeView === "today" && <TodayHome date={todayDate}
+            anytime={dayCommitments.filter(({ node }) => node.planDate === todayDate).map(({ node, planId }) => ({ id: planId, name: node.text, canComplete: (node.tag === 'task' || node.tag === 'link') && !node.linked?.habitId && !node.linked?.routineId }))}
+            blocks={todayScheduledBlocks.map(block => ({ id: block.id, name: cleanBlockLabel(block), completed: !!block.completed, time: block.location.type === "slot" ? hourlySlots[block.location.timeIndex] ?? "Any time" : "" }))}
+            waiting={unscheduledBlocks.filter(block => !block.completed).map(block => ({ id: outlinerLinkedBlockNodeIdMap.get(block.id) ?? `block:${block.id}`, name: cleanBlockLabel(block) }))}
+            routineWidget={user && <RoutineWidget key={user.id} userId={user.id} routines={routineTabs} onOpenOutline={routineId => {
+              const node = outlineBranchItems(outlinerNodes).find(item => !item.trashedAt && item.linked?.routineId === routineId);
+              if (routineId && node) viewCapturedItem(node.id); else navigateMain('themes');
+            }} />}
+            onDone={id => void toggleBlockCompletion(id, undefined, true)} onAnytimeDone={id => { const entry = dayCommitments.find(item => item.planId === id); if (entry) void completeAnytimeTask(entry.node.id); }} onNote={id => setTodayNoteId(dayCommitments.find(item => item.planId === id)?.node.id ?? id)} onReschedule={openTodayReschedule} onPlan={id => { const entry = dayCommitments.find(item => item.planId === id); if (entry) openPlanItem(entry.node.id, entry.node.planDate!, 'day', entry.planId); else openPlanItem(id); }} onOpenPlan={() => navigateMain("planner")} />}
+          {(mobileHomeView === "planner" || mobileHomeView === "stack") && <>
+            <header className="plan-toolbar"><h1>Plan</h1><div className="plan-view-tabs" role="tablist" aria-label="Plan view">{(["day", "week", "stack"] as const).map(view => <button key={view} type="button" role="tab" aria-selected={planView === view} onClick={() => selectPlanView(view)}>{view === "day" ? "Day" : view === "week" ? "Week" : "Stack"}</button>)}</div><button type="button" onClick={() => openPlanItem()}><CalendarClock size={18} /> Plan an item</button></header>
+            <div className="plan-week-nav"><button type="button" onClick={() => setWeekOffset(offset => offset - 1)} aria-label="Previous week" title="Previous week"><ChevronLeft size={18} /></button><strong>{getCurrentWeekRange(weekOffset)}</strong><button type="button" onClick={() => setWeekOffset(offset => offset + 1)} aria-label="Next week" title="Next week"><ChevronRight size={18} /></button><button type="button" onClick={() => { setWeekOffset(0); setMobileDayIndex(todayDayIndex >= 0 ? todayDayIndex : (new Date().getDay() + 6) % 7); }}>This week</button></div>
+            <details className="reading-outline-tray">
+              <summary>Links from Outline <span>{outlinerNodeEntries.filter(({ node }) => node.tag === 'link' && !node.taskDone && normalizeReadingLink(node.readingLink)).length}</span></summary>
+              <ul>{outlinerNodeEntries.filter(({ node }) => node.tag === 'link' && !node.taskDone && normalizeReadingLink(node.readingLink)).map(({ node, path }) => <li key={node.id}>
+                <button type="button" className="reading-drag-handle" draggable title={`Drag ${node.text} to calendar`} aria-label={`Drag ${node.text} to calendar`} onDragStart={event => { event.dataTransfer.setData('application/outline-node-id', node.id); event.dataTransfer.setData('text/plain', `outline-link:${node.id}`); event.dataTransfer.effectAllowed = 'move'; }}><GripVertical size={20} /></button>
+                <div><ReadingLinkCard link={node.readingLink!} title={node.text} /><small>{path.slice(0, -1).join(' / ') || 'Outline'}</small></div>
+                <button type="button" title={`Schedule ${node.text}`} aria-label={`Schedule ${node.text}`} onClick={() => openPlanItem(node.id, selectedPlanDate, 'time')}><CalendarClock size={20} /></button>
+              </li>)}</ul>
+              <button type="button" onClick={() => navigateMain('themes')}>Open Outline</button>
+            </details>
+            {(planView === 'week' || planView === 'stack') && <WeeklySoftPlan key={selectedWeekStart}
+              title={weekOffset === 0 ? 'This week' : weekOffset === 1 ? 'Next week' : getCurrentWeekRange(weekOffset)}
+              entries={weeklyLooseEntries} choices={weeklyChoices} loading={outlineLoading}
+              onAdd={async id => { await commitSoftPlan(id, `week:${id}:${selectedWeekStart}`, { kind: 'week', date: selectedWeekStart }); showToast('Added to the week.', 'success'); }}
+              onRemove={async entry => { await commitSoftPlan(entry.node.id, entry.plan.id, { kind: 'unplanned' }); showToast('Removed from week. Kept in Outline.', 'success'); }}
+              onDay={entry => openPlanItem(entry.node.id, selectedPlanDate, 'day', entry.plan.id)}
+              onSchedule={entry => openPlanItem(entry.node.id, selectedPlanDate, 'time', entry.plan.id)}
+              onEdit={entry => openPlanItem(entry.node.id, entry.plan.date, 'week', entry.plan.id)}
+              onOpen={viewCapturedItem} />}
+            {planView !== "stack" && <section className="day-commitments" id="day-commitments"><header><h2>Any time</h2><button type="button" onClick={() => openPlanItem(undefined, getWeekStartDateString(weekOffset))} title="Plan an item" aria-label="Plan an item"><Plus size={18} /></button></header>
+              {dayCommitments.length === 0 && softPlanTotal === 0 && <p className="quiet-empty">Nothing here yet.</p>}
+              {dayCommitments.map(({ node, planId, legacy }) => <div key={`${node.id}:${planId}`} className="day-commitment-row"><time>{new Date(`${node.planDate}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</time><button type="button" onClick={() => openPlanItem(node.id, node.planDate!, 'day', planId)}>{node.text}</button><button type="button" onClick={() => openPlanItem(node.id, node.planDate!, 'time', planId)} title="Choose a time" aria-label={`Choose a time for ${node.text}`}><CalendarClock size={18} /></button><button type="button" onClick={() => void removeDayCommitment(node.id, planId, legacy)} title="Remove day" aria-label={`Remove day for ${node.text}`}><X size={18} /></button></div>)}
+              {mobileWeeklyIntentionPlacements.map(({ kind, intention, placement, title }) => <div key={`${kind}-${intention.id}-${placement.id}`} className="day-commitment-row"><time>{days[placement.dayIndex]}</time><span>{title}</span><button type="button" onClick={() => kind === "habit" ? void acceptWeeklyHabitIntention(intention.id, placement.id) : void acceptWeeklyRoutineIntention(intention.id, placement.id)}>Schedule</button><button type="button" onClick={() => kind === "habit" ? dismissWeeklyHabitIntention(intention.id, placement.id) : dismissWeeklyRoutineIntention(intention.id, placement.id)} aria-label={`Dismiss ${title}`}><X size={18} /></button></div>)}
+            </section>}
+            {planView === "stack" && <WeeklyStack days={stackDays} today={todayDate} selectedDay={mobileSelectedDayIndex} onSelectDay={setMobileDayIndex} themes={themes} onAdd={date => openPlanItem(undefined, date)} onOpenDay={openStackDay} />}
+            <details className="plan-waiting"><summary>Waiting <span>{unscheduledBlocks.length}</span></summary>{unscheduledBlocks.length === 0 && <p className="quiet-empty">Nothing waiting.</p>}{unscheduledBlocks.map(block => <div className="day-commitment-row" key={block.id}><span>{cleanBlockLabel(block)}</span><button type="button" onClick={() => openPlanItem(outlinerLinkedBlockNodeIdMap.get(block.id) ?? `block:${block.id}`)}>Plan</button></div>)}</details>
+          </>}
           <div className="mobile-use-view">
             <section className={`mobile-today-card ${mobileHomeView !== "today" ? "mobile-view-hidden" : ""}`}>
               <div className="mobile-today-heading">
@@ -7272,8 +9549,60 @@ const App: React.FC = () => {
                   Next day
                 </button>
               </div>
-              <div className="mobile-command-center">
-                <div className="mobile-command-primary">
+              <div className="mobile-intention-preview mobile-intention-preview--primary">
+                <button
+                  type="button"
+                  className="mobile-intention-preview-header mobile-intention-preview-open"
+                  onClick={() => openSoftPlanPanel()}
+                >
+                  <span>Soft plan</span>
+                  <strong>{softPlanTotal} dotted</strong>
+                </button>
+                {softPlanPreviewItems.length === 0 ? (
+                  <button
+                    type="button"
+                    className="mobile-intention-preview-empty"
+                    onClick={() => openSoftPlanPanel()}
+                  >
+                    No soft commitments yet. Open a habit and tap Intention.
+                  </button>
+                ) : (
+                  <div className="mobile-intention-preview-list">
+                    {softPlanPreviewItems.slice(0, 3).map(({ kind, intention, placement, title }) => {
+                      const visibleSlotIndex =
+                        viewMode === "buckets"
+                          ? getBucketForHourlyIndex(placement.timeIndex)
+                          : placement.timeIndex;
+                      const slotLabel = slotLabels[visibleSlotIndex] ?? "Open slot";
+                      return (
+                        <div key={`mobile-intention-preview-${kind}-${intention.id}-${placement.id}`}>
+                          <button
+                            type="button"
+                            className="mobile-intention-preview-main"
+                            onClick={() => openSoftPlanPanel(placement.dayIndex)}
+                          >
+                            <strong>{title}</strong>
+                            <span>{days[placement.dayIndex]} · {slotLabel} · maybe</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="mobile-intention-preview-accept"
+                            onClick={() =>
+                              kind === "habit"
+                                ? acceptWeeklyHabitIntention(intention.id, placement.id)
+                                : acceptWeeklyRoutineIntention(intention.id, placement.id)
+                            }
+                          >
+                            Make real
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="mobile-structured-now">
+                <div className="mobile-structured-now-copy">
                   <span>{isMobileSelectedDayToday ? "Now" : "First open block"}</span>
                   <strong>{mobileSelectedNowBlock ? cleanBlockLabel(mobileSelectedNowBlock) : "Nothing scheduled"}</strong>
                   <em>
@@ -7287,44 +9616,119 @@ const App: React.FC = () => {
                         ? `${unscheduledBlocks.length} waiting`
                         : "Clear for the moment"}
                   </em>
-                  {mobileSelectedNowBlock ? (
-                    <div className="mobile-now-actions">
-                      <button type="button" onClick={() => markBlockDone(mobileSelectedNowBlock.id)}>
-                        Done
-                      </button>
-                      <button type="button" onClick={() => moveMobileBlockLater(mobileSelectedNowBlock.id)}>
-                        Later
-                      </button>
-                      <button type="button" onClick={() => setMobileHomeView("planner")}>
-                        Open day
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="mobile-now-actions">
-                      <button type="button" onClick={scrollToMobileWaiting}>
-                        Pick waiting
-                      </button>
-                      <button type="button" onClick={() => setMobileHomeView("themes")}>
-                        Themes
-                      </button>
-                    </div>
-                  )}
                 </div>
-                <div className="mobile-command-stats">
-                  <button type="button" onClick={() => setMobileHomeView("planner")}>
-                    <span>Scheduled</span>
-                    <strong>{mobileSelectedDoneCount}/{mobileSelectedScheduledBlocks.length}</strong>
-                  </button>
-                  <button type="button" onClick={() => openOverlayPanel("outliner")}>
-                    <span>Due</span>
-                    <strong>{mobileDueReminderCount}</strong>
-                  </button>
-                  <button type="button" onClick={scrollToMobileWaiting}>
-                    <span>Waiting</span>
-                    <strong>{unscheduledBlocks.length}</strong>
-                  </button>
-                </div>
+                {mobileSelectedNowBlock ? (
+                  <div className="mobile-now-actions">
+                    <button type="button" onClick={() => markBlockDone(mobileSelectedNowBlock.id)}>
+                      Done
+                    </button>
+                    <button type="button" onClick={() => moveMobileBlockLater(mobileSelectedNowBlock.id)}>
+                      Later
+                    </button>
+                    <button type="button" onClick={() => setMobileHomeView("planner")}>
+                      Open day
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mobile-now-actions">
+                    <button type="button" onClick={scrollToMobileWaiting}>
+                      Pick waiting
+                    </button>
+                    <button type="button" onClick={() => setMobileHomeView("themes")}>
+                      Outline
+                    </button>
+                  </div>
+                )}
               </div>
+              <div className="mobile-structured-stats">
+                <button type="button" onClick={() => setMobileHomeView("planner")}>
+                  <span>Scheduled</span>
+                  <strong>{mobileSelectedDoneCount}/{mobileSelectedScheduledBlocks.length}</strong>
+                </button>
+                <button type="button" onClick={() => openOverlayPanel("outliner")}>
+                  <span>Outline due</span>
+                  <strong>{mobileDueReminderCount}</strong>
+                </button>
+                <button type="button" onClick={scrollToMobileWaiting}>
+                  <span>Waiting</span>
+                  <strong>{unscheduledBlocks.length}</strong>
+                </button>
+              </div>
+              <section className="mobile-structured-timeline">
+                <div className="mobile-structured-timeline-head">
+                  <div>
+                    <span>Timeline</span>
+                    <strong>{mobileSelectedScheduledBlocks.length || "Open day"}</strong>
+                  </div>
+                  <button type="button" onClick={() => setMobileHomeView("planner")}>
+                    Plan
+                  </button>
+                </div>
+                {mobileTimelinePreviewBlocks.length === 0 ? (
+                  <button
+                    type="button"
+                    className="mobile-structured-empty"
+                    onClick={scrollToMobileWaiting}
+                  >
+                    Nothing scheduled yet. Pick from Waiting.
+                  </button>
+                ) : (
+                  <div className="mobile-structured-timeline-list">
+                    {mobileTimelinePreviewBlocks.map((block) => {
+                      const timeLabel =
+                        block.location.type === "slot"
+                          ? viewMode === "buckets"
+                            ? bucketSlots[getBucketForHourlyIndex(block.location.timeIndex)] ?? ""
+                            : hourlySlots[block.location.timeIndex] ?? ""
+                          : "";
+                      return (
+                        <div
+                          key={`mobile-structured-timeline-${block.id}`}
+                          className="mobile-structured-timeline-row"
+                        >
+                          <button
+                            type="button"
+                            className={`mobile-structured-timeline-item ${block.completed ? "is-done" : ""}`}
+                            onClick={() => {
+                              setMobileHomeView("planner");
+                              window.setTimeout(() => {
+                                document.getElementById(`block-${block.id}`)?.scrollIntoView({
+                                  behavior: "smooth",
+                                  block: "center",
+                                });
+                              }, 80);
+                            }}
+                          >
+                            <span>{timeLabel}</span>
+                            <strong>{cleanBlockLabel(block)}</strong>
+                            <em>{block.completed ? "Done" : getBlockKindLabel(block)}</em>
+                          </button>
+                          <label
+                            className="mobile-structured-timeline-check"
+                            title={block.completed ? "Mark not done" : "Mark done"}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={block.completed}
+                              onChange={() => void toggleBlockCompletion(block.id)}
+                              aria-label={`${block.completed ? "Mark not done" : "Mark done"}: ${cleanBlockLabel(block)}`}
+                            />
+                          </label>
+                        </div>
+                      );
+                    })}
+                    {mobileSelectedScheduledBlocks.length > mobileTimelinePreviewBlocks.length && (
+                      <button
+                        type="button"
+                        className="mobile-structured-more"
+                        onClick={() => setMobileHomeView("planner")}
+                      >
+                        {mobileSelectedScheduledBlocks.length - mobileTimelinePreviewBlocks.length} more later
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
               {mobileDueReminder && (
                 <button
                   type="button"
@@ -7338,6 +9742,51 @@ const App: React.FC = () => {
                   )}
                 </button>
               )}
+              <section className="mobile-outline-mini-pane">
+                <div className="mobile-outline-mini-header">
+                  <div>
+                    <span>Outline</span>
+                    <strong>{outlinerNodeEntries.length} rows</strong>
+                  </div>
+                  <button type="button" onClick={() => openOverlayPanel("outliner")}>
+                    Open
+                  </button>
+                </div>
+                {mobileOutlineMiniItems.length === 0 ? (
+                  <button
+                    type="button"
+                    className="mobile-outline-mini-empty"
+                    onClick={() => openOverlayPanel("outliner")}
+                  >
+                    Start a soft outline
+                  </button>
+                ) : (
+                  <div className="mobile-outline-mini-list">
+                    {mobileOutlineMiniItems.map(({ node, path }) => {
+                      const parentPath = path.slice(0, -1).join(" / ");
+                      const isDue =
+                        !!node.reminderAt &&
+                        !node.reminderDismissedAt &&
+                        new Date(node.reminderAt).getTime() <= Date.now();
+                      return (
+                        <button
+                          type="button"
+                          key={`mobile-outline-mini-${node.id}`}
+                          onClick={() => {
+                            setOutlinerFocusNodeId(node.id);
+                            setOutlinerFocusRequestKey((value) => value + 1);
+                            openOverlayPanel("outliner");
+                          }}
+                        >
+                          <span className={`mobile-outline-mini-dot mobile-outline-mini-dot--${node.tag}`} />
+                          <strong>{node.text.trim()}</strong>
+                          <em>{isDue ? "Due" : parentPath || node.tag}</em>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
               {mobileSelectedNextBlocks.length > 0 && (
                 <div className="mobile-next-preview">
                   <span>Up next</span>
@@ -7362,47 +9811,8 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
-              {mobileWeeklyIntentionPlacements.length > 0 && (
-                <div className="mobile-intention-preview">
-                  <div className="mobile-intention-preview-header">
-                    <span>Weekly intentions</span>
-                    <strong>{mobileWeeklyIntentionPlacements.length} dotted</strong>
-                  </div>
-                  <div className="mobile-intention-preview-list">
-                    {mobileWeeklyIntentionPlacements.slice(0, 3).map(({ intention, placement }) => {
-                      const visibleSlotIndex =
-                        viewMode === "buckets"
-                          ? getBucketForHourlyIndex(placement.timeIndex)
-                          : placement.timeIndex;
-                      const slotLabel = slotLabels[visibleSlotIndex] ?? "Open slot";
-                      return (
-                        <div key={`mobile-intention-preview-${intention.id}-${placement.id}`}>
-                          <button
-                            type="button"
-                            className="mobile-intention-preview-main"
-                            onClick={() => {
-                              setMobileDayIndex(placement.dayIndex);
-                              setMobileHomeView("planner");
-                            }}
-                          >
-                            <strong>{intention.habitName}</strong>
-                            <span>{days[placement.dayIndex]} · {slotLabel}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="mobile-intention-preview-accept"
-                            onClick={() => acceptWeeklyHabitIntention(intention.id, placement.id)}
-                          >
-                            Make real
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
               <form
-                className={`mobile-quick-add ${mobileQuickCapturePrimed ? "mobile-quick-add--primed" : ""}`}
+                className={`mobile-quick-add ${mobileQuickCaptureOpen ? "mobile-quick-add--open" : ""} ${mobileQuickCapturePrimed ? "mobile-quick-add--primed" : ""}`}
                 onSubmit={(event) => {
                   event.preventDefault();
                   quickCapture();
@@ -7422,73 +9832,6 @@ const App: React.FC = () => {
                     {pendingQuickCaptures.length} saved on device
                   </button>
                 )}
-                <div className="mobile-capture-modes" role="group" aria-label="Capture type">
-                  {(["block", "note", "task"] as MobileCaptureMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={mobileCaptureMode === mode ? "active" : ""}
-                      onClick={() => {
-                        triggerMobileTap();
-                        setMobileCaptureMode(mode);
-                      }}
-                    >
-                      {mode === "block" ? "Block" : mode === "note" ? "Note" : "Task"}
-                    </button>
-                  ))}
-                </div>
-                <div className="mobile-capture-destinations" role="group" aria-label="Capture destination">
-                  {([
-                    { id: "waiting" as MobileCaptureDestination, label: "Waiting" },
-                    { id: "today" as MobileCaptureDestination, label: isMobileSelectedDayToday ? "Today" : "This day" },
-                    { id: "theme-note" as MobileCaptureDestination, label: "Theme note" },
-                    { id: "habit-note" as MobileCaptureDestination, label: "Habit note" },
-                  ]).map((destination) => (
-                    <button
-                      key={destination.id}
-                      type="button"
-                      className={mobileCaptureDestination === destination.id ? "active" : ""}
-                      onClick={() => {
-                        triggerMobileTap();
-                        setMobileCaptureDestination(destination.id);
-                      }}
-                    >
-                      {destination.label}
-                    </button>
-                  ))}
-                </div>
-                {mobileCaptureDestination === "theme-note" && (
-                  <select
-                    className="mobile-capture-theme-select"
-                    value={mobileCaptureThemeId}
-                    onChange={(event) => setMobileCaptureThemeId(event.target.value)}
-                    aria-label="Choose theme note"
-                  >
-                    {themes.map((theme) => (
-                      <option key={theme.id} value={theme.id}>
-                        {theme.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {mobileCaptureDestination === "habit-note" && (
-                  allHabits.length === 0 ? (
-                    <div className="mobile-capture-empty-target">No habits yet.</div>
-                  ) : (
-                    <select
-                      className="mobile-capture-theme-select"
-                      value={mobileCaptureHabitId}
-                      onChange={(event) => setMobileCaptureHabitId(event.target.value)}
-                      aria-label="Choose habit note"
-                    >
-                      {allHabits.map((habit) => (
-                        <option key={habit.id} value={habit.id}>
-                          {habit.themeName} / {habit.name}
-                        </option>
-                      ))}
-                    </select>
-                  )
-                )}
                 <input
                   ref={mobileQuickCaptureInputRef}
                   type="text"
@@ -7499,9 +9842,92 @@ const App: React.FC = () => {
                     setMobileQuickCapturePrimed(false);
                   }}
                 />
-                <button type="submit" disabled={dataLoading}>
-                  Add
+                <button
+                  type="button"
+                  className={`mobile-quick-add-options-btn ${mobileQuickCaptureOpen ? "active" : ""}`}
+                  onClick={() => {
+                    triggerMobileTap();
+                    setMobileMoreOpen(false);
+                    setMobileQuickCaptureOpen((value) => !value);
+                  }}
+                  aria-label={mobileQuickCaptureOpen ? "Hide capture options" : "Show capture options"}
+                >
+                  +
                 </button>
+                {mobileQuickCaptureOpen && (
+                  <div className="mobile-capture-floating-menu">
+                    <div className="mobile-capture-modes" role="group" aria-label="Capture type">
+                      {(["block", "note", "task"] as MobileCaptureMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={mobileCaptureMode === mode ? "active" : ""}
+                          onClick={() => {
+                            triggerMobileTap();
+                            setMobileCaptureMode(mode);
+                          }}
+                        >
+                          {mode === "block" ? "Block" : mode === "note" ? "Note" : "Task"}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mobile-capture-destinations" role="group" aria-label="Capture destination">
+                      {([
+                        { id: "waiting" as MobileCaptureDestination, label: "Waiting" },
+                        { id: "today" as MobileCaptureDestination, label: isMobileSelectedDayToday ? "Today" : "This day" },
+                        { id: "theme-note" as MobileCaptureDestination, label: "Theme note" },
+                        { id: "habit-note" as MobileCaptureDestination, label: "Habit note" },
+                      ]).map((destination) => (
+                        <button
+                          key={destination.id}
+                          type="button"
+                          className={mobileCaptureDestination === destination.id ? "active" : ""}
+                          onClick={() => {
+                            triggerMobileTap();
+                            setMobileCaptureDestination(destination.id);
+                          }}
+                        >
+                          {destination.label}
+                        </button>
+                      ))}
+                    </div>
+                    {mobileCaptureDestination === "theme-note" && (
+                      <select
+                        className="mobile-capture-theme-select"
+                        value={mobileCaptureThemeId}
+                        onChange={(event) => setMobileCaptureThemeId(event.target.value)}
+                        aria-label="Choose theme note"
+                      >
+                        {themes.map((theme) => (
+                          <option key={theme.id} value={theme.id}>
+                            {theme.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {mobileCaptureDestination === "habit-note" && (
+                      allHabits.length === 0 ? (
+                        <div className="mobile-capture-empty-target">No habits yet.</div>
+                      ) : (
+                        <select
+                          className="mobile-capture-theme-select"
+                          value={mobileCaptureHabitId}
+                          onChange={(event) => setMobileCaptureHabitId(event.target.value)}
+                          aria-label="Choose habit note"
+                        >
+                          {allHabits.map((habit) => (
+                            <option key={habit.id} value={habit.id}>
+                              {habit.themeName} / {habit.name}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                    )}
+                    <button type="submit" disabled={dataLoading}>
+                      Add
+                    </button>
+                  </div>
+                )}
               </form>
             </section>
 
@@ -7528,6 +9954,9 @@ const App: React.FC = () => {
                         <BlockCard
                           block={block}
                           variant="slot"
+                          onItemActions={openGridItemActions}
+                          readingLink={getBlockReadingLink(block)}
+                          onOpenOccurrenceNote={id => setTodayNoteId(`block:${id}`)}
                           openDetailsOnClick
                           mobileMode
                           onMobileMoveLater={moveMobileBlockLater}
@@ -7574,6 +10003,8 @@ const App: React.FC = () => {
                           onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
                           kindLabel={getBlockKindLabel(block)}
                           relationshipChips={getBlockRelationshipChips(block)}
+                                    outlineItems={getBoardOutlineItemsForBlock(block)}
+                                    onToggleOutlineTask={toggleBoardOutlineTask}
                           onSaveBlockNote={saveBlockNote}
                           onAddBlockTask={addBlockTask}
                           onToggleBlockTask={toggleBlockTask}
@@ -7585,6 +10016,181 @@ const App: React.FC = () => {
                 </div>
               )}
             </section>
+
+            <section className={`stacked-planner-view ${mobileHomeView !== "stack" ? "mobile-view-hidden" : ""}`}>
+              <div className="stacked-hero">
+                <div>
+                  <span>Stacked planner</span>
+                  <strong>Everything in front of you</strong>
+                  <em>{getCurrentWeekRange(weekOffset)}</em>
+                </div>
+                <button type="button" onClick={() => openOverlayPanel("outliner")}>
+                  Outline
+                </button>
+              </div>
+
+              <div className="stacked-week-strip" aria-label="Week overview">
+                {stackWeekDays.map((day) => (
+                  <button
+                    key={`stack-day-${day.day}`}
+                    type="button"
+                    className={`${day.isSelected ? "active" : ""} ${day.isToday ? "today" : ""}`}
+                    onClick={() => {
+                      setMobileDayIndex(day.dayIndex);
+                      setMobileHomeView("planner");
+                    }}
+                  >
+                    <span>{day.day}</span>
+                    <strong>{day.openCount}</strong>
+                    <em>{day.habitCount} habit{day.habitCount === 1 ? "" : "s"}</em>
+                    {day.intentionCount > 0 && <small>{day.intentionCount} dotted</small>}
+                  </button>
+                ))}
+              </div>
+
+              <div className="stacked-grid">
+                <section className="stacked-panel stacked-panel--today">
+                  <div className="stacked-panel-head">
+                    <div>
+                      <span>Today insert</span>
+                      <strong>{stackTodayOpenBlocks.length || "Clear"}</strong>
+                    </div>
+                    <button type="button" onClick={() => setMobileHomeView("planner")}>
+                      Day
+                    </button>
+                  </div>
+                  {stackTodayOpenBlocks.length === 0 ? (
+                    <button type="button" className="stacked-empty" onClick={scrollToMobileWaiting}>
+                      No open blocks. Pull something from Waiting.
+                    </button>
+                  ) : (
+                    <div className="stacked-list">
+                      {stackTodayOpenBlocks.map((block) => (
+                        <div key={`stack-today-${block.id}`} className="stacked-row">
+                          <button type="button" onClick={() => markBlockDone(block.id)} aria-label={`Mark ${cleanBlockLabel(block)} done`}>
+                            ✓
+                          </button>
+                          <div>
+                            <span>{getBlockSlotLabel(block) || getBlockKindLabel(block)}</span>
+                            <strong>{cleanBlockLabel(block)}</strong>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="stacked-panel">
+                  <div className="stacked-panel-head">
+                    <div>
+                      <span>Waiting insert</span>
+                      <strong>{unscheduledBlocks.length}</strong>
+                    </div>
+                    <button type="button" onClick={scrollToMobileWaiting}>
+                      Inbox
+                    </button>
+                  </div>
+                  {stackWaitingBlocks.length === 0 ? (
+                    <div className="stacked-empty">Nothing waiting.</div>
+                  ) : (
+                    <div className="stacked-list">
+                      {stackWaitingBlocks.map((block) => (
+                        <div key={`stack-waiting-${block.id}`} className="stacked-row stacked-row--waiting">
+                          <button type="button" onClick={() => addWaitingBlockToToday(block.id)}>
+                            +
+                          </button>
+                          <div>
+                            <span>{getBlockKindLabel(block)}</span>
+                            <strong>{cleanBlockLabel(block)}</strong>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="stacked-panel">
+                  <div className="stacked-panel-head">
+                    <div>
+                      <span>Outline insert</span>
+                      <strong>{stackOutlineItems.length}</strong>
+                    </div>
+                    <button type="button" onClick={() => openOverlayPanel("outliner")}>
+                      Open
+                    </button>
+                  </div>
+                  {stackOutlineItems.length === 0 ? (
+                    <div className="stacked-empty">No outline rows asking for attention.</div>
+                  ) : (
+                    <div className="stacked-list">
+                      {stackOutlineItems.map(({ node, path }) => (
+                        <button
+                          key={`stack-outline-${node.id}`}
+                          type="button"
+                          className="stacked-outline-row"
+                          onClick={() => {
+                            setOutlinerFocusNodeId(node.id);
+                            setOutlinerFocusRequestKey((value) => value + 1);
+                            openOverlayPanel("outliner");
+                          }}
+                        >
+                          <span>{path.slice(0, -1).join(" / ") || node.tag}</span>
+                          <strong>{node.text.trim() || "Untitled"}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="stacked-panel">
+                  <div className="stacked-panel-head">
+                    <div>
+                      <span>Care inserts</span>
+                      <strong>{stackHabitThemes.length + stackHouseholdThemes.length + (stackMeals.length > 0 ? 1 : 0)}</strong>
+                    </div>
+                    <button type="button" onClick={() => setMobileHomeView("themes")}>
+                      Outline
+                    </button>
+                  </div>
+                  <div className="stacked-care-grid">
+                    {stackHabitThemes.map((theme) => (
+                      <button
+                        key={`stack-habit-theme-${theme.id}`}
+                        type="button"
+                        onClick={() => {
+                          setExpandedThemes((current) => new Set([...current, theme.id]));
+                          setMobileHomeView("themes");
+                        }}
+                      >
+                        <span>{theme.name}</span>
+                        <strong>{theme.done}{theme.target > 0 ? `/${theme.target}` : ""}</strong>
+                      </button>
+                    ))}
+                    {stackHouseholdThemes.map((theme) => (
+                      <button
+                        key={`stack-household-theme-${theme.id}`}
+                        type="button"
+                        onClick={() => {
+                          setExpandedThemes((current) => new Set([...current, theme.id]));
+                          setMobileHomeView("themes");
+                        }}
+                      >
+                        <span>{theme.name}</span>
+                        <strong>{theme.due} due</strong>
+                        <em>{theme.soon} soon</em>
+                      </button>
+                    ))}
+                    {stackMeals.length > 0 && (
+                      <button type="button" onClick={() => setMobileHomeView("themes")}>
+                        <span>Meals</span>
+                        <strong>{stackMeals.length} ideas</strong>
+                      </button>
+                    )}
+                  </div>
+                </section>
+              </div>
+            </section>
+
             <section className={`mobile-section-card mobile-day-planner-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}>
               <div className="mobile-section-header">
                 <span>Day planner</span>
@@ -7594,7 +10200,7 @@ const App: React.FC = () => {
                     className="mobile-section-link-btn"
                     onClick={() => setMobileHomeView("themes")}
                   >
-                    Themes
+                    Outline
                   </button>
                   <strong>{days[mobileSelectedDayIndex]}</strong>
                 </div>
@@ -7605,7 +10211,7 @@ const App: React.FC = () => {
                 </button>
                 <div>
                   <span>{days[mobileSelectedDayIndex]}</span>
-                  <strong>{getCurrentWeekRange(weekOffset)}</strong>
+                  <strong>{mobileSelectedDateLabel}</strong>
                 </div>
                 <button type="button" onClick={() => moveMobilePlannerDay(1)}>
                   Next day
@@ -7673,25 +10279,39 @@ const App: React.FC = () => {
                           ghost.time_index === slotIndex
                       )
                     : [];
+                  const hasSlotContent =
+                    slotBlocks.length > 0 ||
+                    slotGhostBlocks.length > 0 ||
+                    slotIntentionBlocks.length > 0 ||
+                    slotRoutineIntentionBlocks.length > 0;
                   return (
                     <div
                       key={`mobile-${mobileSelectedDayIndex}-${slotIndex}`}
-                      className="mobile-slot-card"
+                      className={`mobile-slot-card ${hasSlotContent ? "has-content" : "is-empty"}`}
+                      data-mobile-drop-day-index={mobileSelectedDayIndex}
+                      data-mobile-drop-time-index={slotIndex}
                       onDragOver={handleSlotDragOver}
+                      onDragEnter={handleSlotDragOver}
                       onDragLeave={handleSlotDragLeave}
                       onDrop={(event) => handleSlotDrop(event, mobileSelectedDayIndex, slotIndex)}
                     >
                       <div className="mobile-slot-label">{slotLabel}</div>
                       <div className="mobile-slot-content">
-                        {slotBlocks.length === 0 &&
-                          slotGhostBlocks.length === 0 &&
-                          slotIntentionBlocks.length === 0 &&
-                          slotRoutineIntentionBlocks.length === 0 && (
+                        <div className="slot-quick-actions mobile-slot-quick-actions" aria-label={`Add to ${slotLabel}`}>
+                          <button type="button" onClick={() => openSlotCapture(mobileSelectedDayIndex, slotIndex, "task")}>
+                            Task
+                          </button>
+                          <button type="button" onClick={() => openSlotCapture(mobileSelectedDayIndex, slotIndex, "note")}>
+                            Note
+                          </button>
+                        </div>
+                        {renderSlotCaptureComposer(mobileSelectedDayIndex, slotIndex)}
+                        {!hasSlotContent && (
                           <button
                             type="button"
                             className="mobile-slot-add-btn"
-                            aria-label="Add from themes"
-                            title="Add from themes"
+                            aria-label="Add from Outline"
+                            title="Add from Outline"
                             onClick={() =>
                               openMobileHabitPickerForSlot(
                                 mobileSelectedDayIndex,
@@ -7709,11 +10329,15 @@ const App: React.FC = () => {
                               key={block.id}
                               block={block}
                               variant="slot"
+                              onItemActions={openGridItemActions}
+                              readingLink={getBlockReadingLink(block)}
+                              onOpenOccurrenceNote={id => setTodayNoteId(`block:${id}`)}
                               openDetailsOnClick
                               mobileMode
                               onMobileMoveLater={moveMobileBlockLater}
                               onMobileMoveTomorrow={moveMobileBlockTomorrow}
                               onMobileMoveUnscheduled={moveMobileBlockToWaiting}
+                              onMobileDrop={handleMobileBlockDrop}
                               priorityRank={priority ? (priority.priority_rank as 1 | 2 | 3) : undefined}
                               hasAdjacentBelow={hasAdjacentBlockBelow(block)}
                               mealPopoverBlockId={mealPopoverBlockId}
@@ -7755,6 +10379,8 @@ const App: React.FC = () => {
                               onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
                               kindLabel={getBlockKindLabel(block)}
                               relationshipChips={getBlockRelationshipChips(block)}
+                                    outlineItems={getBoardOutlineItemsForBlock(block)}
+                                    onToggleOutlineTask={toggleBoardOutlineTask}
                               onSaveBlockNote={saveBlockNote}
                               onAddBlockTask={addBlockTask}
                               onToggleBlockTask={toggleBlockTask}
@@ -7762,15 +10388,12 @@ const App: React.FC = () => {
                             />
                           );
                         })}
-                        {(slotBlocks.length > 0 ||
-                          slotGhostBlocks.length > 0 ||
-                          slotIntentionBlocks.length > 0 ||
-                          slotRoutineIntentionBlocks.length > 0) && (
+                        {hasSlotContent && (
                           <button
                             type="button"
                             className="mobile-slot-add-btn mobile-slot-add-btn--compact"
-                            aria-label="Add from themes"
-                            title="Add from themes"
+                            aria-label="Add from Outline"
+                            title="Add from Outline"
                             onClick={() =>
                               openMobileHabitPickerForSlot(
                                 mobileSelectedDayIndex,
@@ -7819,10 +10442,14 @@ const App: React.FC = () => {
 
             <section
               id="mobile-waiting-section"
-              className={`mobile-section-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}
+              className={`mobile-section-card mobile-inbox-card ${mobileHomeView !== "planner" ? "mobile-view-hidden" : ""}`}
+              data-mobile-drop-waiting
+              onDragOver={handleWaitingDragOver}
+              onDragLeave={handleWaitingDragLeave}
+              onDrop={handleWaitingDrop}
             >
               <div className="mobile-section-header">
-                <span>Waiting</span>
+                <span>Inbox</span>
                 <strong>{unscheduledBlocks.length} waiting</strong>
               </div>
               {unscheduledBlocks.length === 0 ? (
@@ -7837,6 +10464,8 @@ const App: React.FC = () => {
                         openDetailsOnClick
                         mobileMode
                         onMobileScheduleToday={addWaitingBlockToToday}
+                        onMobileOpenOutliner={() => openWaitingOutlinerParentPicker(block)}
+                        mobileOutlinerActionLabel={outlinerLinkedBlockIdSet.has(block.id) ? "View in Outline" : "Add to Outline"}
                         onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
                         onDelete={deleteBlockWithUndo}
@@ -7861,6 +10490,8 @@ const App: React.FC = () => {
                         onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
                         kindLabel={getBlockKindLabel(block)}
                         relationshipChips={getBlockRelationshipChips(block)}
+                                    outlineItems={getBoardOutlineItemsForBlock(block)}
+                                    onToggleOutlineTask={toggleBoardOutlineTask}
                         themes={themes}
                         mealPopoverBlockId={mealPopoverBlockId}
                         onSetMealPopover={setMealPopoverBlockId}
@@ -7869,13 +10500,6 @@ const App: React.FC = () => {
                         onToggleBlockTask={toggleBlockTask}
                         onDeleteBlockTask={deleteBlockTask}
                       />
-                      <button
-                        type="button"
-                        className="mobile-waiting-outliner-btn"
-                        onClick={() => openWaitingOutlinerParentPicker(block)}
-                      >
-                        {outlinerLinkedBlockIdSet.has(block.id) ? "Open Outliner" : "Send to Outliner"}
-                      </button>
                       {renderWaitingOutlinerParentPicker(block)}
                     </div>
                   ))}
@@ -7883,20 +10507,60 @@ const App: React.FC = () => {
               )}
             </section>
 
+            {mobileMoreOpen && (
+              <div className="mobile-more-menu" role="menu" aria-label="More mobile views">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={showAmbientMode ? "active" : ""}
+                  onClick={(event) => handleMobileAmbientNav(event)}
+                >
+                  <strong>Ambient</strong>
+                  <span>Calm mode</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={showRoutineNotes ? "active" : ""}
+                  onClick={(event) => handleMobileOverlayNav("routines", event)}
+                >
+                  <strong>Routine</strong>
+                  <span>Checklists</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={showWorkoutLibrary ? "active" : ""}
+                  onClick={(event) => handleMobileOverlayNav("workout", event)}
+                >
+                  <strong>Workout</strong>
+                  <span>Routines + library</span>
+                </button>
+              </div>
+            )}
+
             <nav className="mobile-bottom-nav" aria-label="Mobile planner navigation">
               <button
                 type="button"
                 data-overlay-toggle="true"
                 className={mobileHomeView === "today" ? "active" : ""}
-                onPointerDown={(event) => handleMobileHomeNav("today", event)}
+                onClick={(event) => handleMobileHomeNav("today", event)}
               >
                 <span>Today</span>
               </button>
               <button
                 type="button"
                 data-overlay-toggle="true"
+                className={mobileHomeView === "stack" ? "active" : ""}
+                onClick={(event) => handleMobileHomeNav("stack", event)}
+              >
+                <span>Stack</span>
+              </button>
+              <button
+                type="button"
+                data-overlay-toggle="true"
                 className={mobileHomeView === "planner" ? "active" : ""}
-                onPointerDown={(event) => handleMobileHomeNav("planner", event)}
+                onClick={(event) => handleMobileHomeNav("planner", event)}
               >
                 <span>Plan</span>
               </button>
@@ -7904,46 +10568,68 @@ const App: React.FC = () => {
                 type="button"
                 data-overlay-toggle="true"
                 className={mobileHomeView === "themes" ? "active" : ""}
-                onPointerDown={(event) => handleMobileHomeNav("themes", event)}
-              >
-                <span>Themes</span>
-              </button>
-              <button
-                type="button"
-                data-overlay-toggle="true"
-                className={showAmbientMode ? "active" : ""}
-                onPointerDown={handleMobileAmbientNav}
-              >
-                <span>Ambient</span>
-              </button>
-              <button
-                type="button"
-                data-overlay-toggle="true"
-                className={showRoutineNotes ? "active" : ""}
-                onPointerDown={(event) => handleMobileOverlayNav("routines", event)}
-              >
-                <span>Routine</span>
-              </button>
-              <button
-                type="button"
-                data-overlay-toggle="true"
-                className={showWorkoutLibrary ? "active" : ""}
-                onPointerDown={(event) => handleMobileOverlayNav("workout", event)}
-              >
-                <span>Workout</span>
-              </button>
-              <button
-                type="button"
-                data-overlay-toggle="true"
-                className={showPlanningOutliner ? "active" : ""}
-                onPointerDown={(event) => handleMobileOverlayNav("outliner", event)}
+                onClick={(event) => handleMobileHomeNav("themes", event)}
               >
                 <span>Outline</span>
+              </button>
+              <button
+                type="button"
+                data-overlay-toggle="true"
+                className={mobileMoreOpen || showAmbientMode || showRoutineNotes || showWorkoutLibrary ? "active" : ""}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  resetMobileTabViewport(event.currentTarget);
+                  setMobileMoreOpen((value) => !value);
+                }}
+              >
+                <span>More</span>
               </button>
             </nav>
           </div>
 
-          <div className="card planner-controls-card">
+          <div className="desktop-surface-switch" aria-label="Choose main planner view">
+            <div>
+              <span>Main view</span>
+              <strong>{desktopPlannerSurface === "stack" ? "Stacked planner desk" : "Weekly planner"}</strong>
+            </div>
+            <div className="desktop-surface-switch-actions">
+              <button
+                type="button"
+                className={desktopPlannerSurface === "stack" ? "active" : ""}
+                onClick={() => setDesktopPlannerSurface("stack")}
+              >
+                Stack
+              </button>
+              <button
+                type="button"
+                className={desktopPlannerSurface === "week" ? "active" : ""}
+                onClick={() => setDesktopPlannerSurface("week")}
+              >
+                Weekly
+              </button>
+            </div>
+          </div>
+
+          <div className="soft-plan-callout">
+            <div>
+              <span>Soft plan</span>
+              <strong>{softPlanTotal} dotted intention{softPlanTotal === 1 ? "" : "s"}</strong>
+              <em>
+                {softPlanTotal > 0
+                  ? "Maybe anchors for the week. Make them real when they feel right."
+                  : "No soft commitments yet. Use a habit or routine Intention button to place dotted maybes."}
+              </em>
+            </div>
+            <button
+              type="button"
+              onClick={() => openSoftPlanPanel()}
+            >
+              Open
+            </button>
+          </div>
+
+          <div className={`card planner-controls-card ${desktopPlannerSurface !== "week" ? "desktop-surface-hidden" : ""}`}>
             <div className="top-row">
               <h2>Weekly Planner</h2>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -8073,7 +10759,7 @@ const App: React.FC = () => {
                           setShowPlanningMenu(false);
                         }}
                       >
-                        <strong>{showPlanningOutliner ? "Hide Outliner" : "Show Outliner"}</strong>
+                        <strong>Open Outline</strong>
                         <span>Plan with nested collapsible rows</span>
                       </button>
                       <button
@@ -8172,7 +10858,238 @@ const App: React.FC = () => {
             )}
           </div>
 
-          <div className="planner-wrapper desktop-planner-wrapper">
+          <section className={`stacked-planner-desktop ${desktopPlannerSurface !== "stack" ? "desktop-surface-hidden" : ""}`}>
+            <div className="stacked-hero">
+              <div>
+                <span>Stacked planner desk</span>
+                <strong>Today, week, waiting, outline, and care in one view</strong>
+                <em>{getCurrentWeekRange(weekOffset)}</em>
+              </div>
+              <div className="stacked-hero-actions">
+                <button type="button" onClick={() => openOverlayPanel("outliner")}>
+                  Outline
+                </button>
+                <button type="button" onClick={scrollToMobileWaiting}>
+                  Waiting
+                </button>
+                <button type="button" onClick={() => setDesktopPlannerSurface("week")}>
+                  Weekly
+                </button>
+              </div>
+            </div>
+
+            <div className="stacked-week-strip" aria-label="Week overview">
+              {stackWeekDays.map((day) => (
+                <button
+                  key={`desktop-stack-day-${day.day}`}
+                  type="button"
+                  className={`${day.isSelected ? "active" : ""} ${day.isToday ? "today" : ""}`}
+                  onClick={() => setMobileDayIndex(day.dayIndex)}
+                >
+                  <span>{day.day}</span>
+                  <strong>{day.openCount}</strong>
+                  <em>{day.scheduledCount} total</em>
+                  {day.intentionCount > 0 && <small>{day.intentionCount} dotted</small>}
+                </button>
+              ))}
+            </div>
+
+            <div className="stacked-grid stacked-grid--desktop">
+              <section className="stacked-panel stacked-panel--soft-plan">
+                <div className="stacked-panel-head">
+                  <div>
+                    <span>Soft plan</span>
+                    <strong>{softPlanTotal} dotted</strong>
+                  </div>
+                  <div className="stacked-panel-head-actions">
+                    <button type="button" onClick={() => openSoftPlanPanel()}>
+                      Open
+                    </button>
+                    <button type="button" onClick={() => setDesktopPlannerSurface("week")}>
+                      Grid
+                    </button>
+                  </div>
+                </div>
+                {softPlanPreviewItems.length === 0 ? (
+                  <div className="stacked-empty">No soft commitments yet.</div>
+                ) : (
+                  <div className="stacked-list">
+                    {softPlanPreviewItems.map(({ kind, intention, placement, title, detail }) => {
+                      const visibleSlotIndex =
+                        viewMode === "buckets"
+                          ? getBucketForHourlyIndex(placement.timeIndex)
+                          : placement.timeIndex;
+                      const slotLabel = slotLabels[visibleSlotIndex] ?? "Open slot";
+                      return (
+                        <div
+                          key={`desktop-soft-plan-${kind}-${intention.id}-${placement.id}`}
+                          className="stacked-row stacked-row--soft-plan"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              kind === "habit"
+                                ? acceptWeeklyHabitIntention(intention.id, placement.id)
+                                : acceptWeeklyRoutineIntention(intention.id, placement.id)
+                            }
+                            aria-label={`Make ${title} real`}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            type="button"
+                            className="stacked-row-main"
+                            onClick={() => openSoftPlanPanel(placement.dayIndex)}
+                          >
+                            <span>{days[placement.dayIndex]} · {slotLabel} · {detail}</span>
+                            <strong>{title}</strong>
+                          </button>
+                          <button
+                            type="button"
+                            className="stacked-row-dismiss"
+                            onClick={() =>
+                              kind === "habit"
+                                ? dismissWeeklyHabitIntention(intention.id, placement.id)
+                                : dismissWeeklyRoutineIntention(intention.id, placement.id)
+                            }
+                            aria-label={`Dismiss ${title} intention`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="stacked-panel stacked-panel--today">
+                <div className="stacked-panel-head">
+                  <div>
+                    <span>Today insert</span>
+                    <strong>{stackTodayOpenBlocks.length || "Clear"}</strong>
+                  </div>
+                </div>
+                {stackTodayOpenBlocks.length === 0 ? (
+                  <div className="stacked-empty">No open blocks for today.</div>
+                ) : (
+                  <div className="stacked-list">
+                    {stackTodayOpenBlocks.map((block) => (
+                      <div key={`desktop-stack-today-${block.id}`} className="stacked-row">
+                        <button type="button" onClick={() => markBlockDone(block.id)} aria-label={`Mark ${cleanBlockLabel(block)} done`}>
+                          ✓
+                        </button>
+                        <div>
+                          <span>{getBlockSlotLabel(block) || getBlockKindLabel(block)}</span>
+                          <strong>{cleanBlockLabel(block)}</strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="stacked-panel">
+                <div className="stacked-panel-head">
+                  <div>
+                    <span>Waiting insert</span>
+                    <strong>{unscheduledBlocks.length}</strong>
+                  </div>
+                </div>
+                {stackWaitingBlocks.length === 0 ? (
+                  <div className="stacked-empty">Nothing waiting.</div>
+                ) : (
+                  <div className="stacked-list">
+                    {stackWaitingBlocks.map((block) => (
+                      <div key={`desktop-stack-waiting-${block.id}`} className="stacked-row stacked-row--waiting">
+                        <button type="button" onClick={() => addWaitingBlockToToday(block.id)}>
+                          +
+                        </button>
+                        <div>
+                          <span>{getBlockKindLabel(block)}</span>
+                          <strong>{cleanBlockLabel(block)}</strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="stacked-panel">
+                <div className="stacked-panel-head">
+                  <div>
+                    <span>Outline insert</span>
+                    <strong>{stackOutlineItems.length}</strong>
+                  </div>
+                </div>
+                {stackOutlineItems.length === 0 ? (
+                  <div className="stacked-empty">No outline rows asking for attention.</div>
+                ) : (
+                  <div className="stacked-list">
+                    {stackOutlineItems.map(({ node, path }) => (
+                      <button
+                        key={`desktop-stack-outline-${node.id}`}
+                        type="button"
+                        className="stacked-outline-row"
+                        onClick={() => {
+                          setOutlinerFocusNodeId(node.id);
+                          setOutlinerFocusRequestKey((value) => value + 1);
+                          openOverlayPanel("outliner");
+                        }}
+                      >
+                        <span>{path.slice(0, -1).join(" / ") || node.tag}</span>
+                        <strong>{node.text.trim() || "Untitled"}</strong>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="stacked-panel">
+                <div className="stacked-panel-head">
+                  <div>
+                    <span>Care inserts</span>
+                    <strong>{stackHabitThemes.length + stackHouseholdThemes.length + (stackMeals.length > 0 ? 1 : 0)}</strong>
+                  </div>
+                </div>
+                <div className="stacked-care-grid">
+                  {stackHabitThemes.map((theme) => (
+                    <button
+                      key={`desktop-stack-habit-theme-${theme.id}`}
+                      type="button"
+                      onClick={() => {
+                        setExpandedThemes((current) => new Set([...current, theme.id]));
+                      }}
+                    >
+                      <span>{theme.name}</span>
+                      <strong>{theme.done}{theme.target > 0 ? `/${theme.target}` : ""}</strong>
+                    </button>
+                  ))}
+                  {stackHouseholdThemes.map((theme) => (
+                    <button
+                      key={`desktop-stack-household-theme-${theme.id}`}
+                      type="button"
+                      onClick={() => {
+                        setExpandedThemes((current) => new Set([...current, theme.id]));
+                      }}
+                    >
+                      <span>{theme.name}</span>
+                      <strong>{theme.due} due</strong>
+                      <em>{theme.soon} soon</em>
+                    </button>
+                  ))}
+                  {stackMeals.length > 0 && (
+                    <button type="button">
+                      <span>Meals</span>
+                      <strong>{stackMeals.length} ideas</strong>
+                    </button>
+                  )}
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <div className={`planner-wrapper desktop-planner-wrapper ${desktopPlannerSurface !== "week" ? "desktop-surface-hidden" : ""}`}>
             <table className="planner">
               <colgroup>
                 <col style={{ width: "60px" }} />
@@ -8251,12 +11168,22 @@ const App: React.FC = () => {
                           key={`${dayIndex}-${slotIndex}`}
                           className={`slot col-${colCategory(dayIndex)} ${dayIndex === mobileSelectedDayIndex ? "col-selected-day" : ""}`}
                           onDragOver={handleSlotDragOver}
+                          onDragEnter={handleSlotDragOver}
                           onDragLeave={handleSlotDragLeave}
                           onDrop={(e) =>
                             handleSlotDrop(e, dayIndex, slotIndex)
                           }
                         >
                           <div className="slot-inner">
+                            <div className="slot-quick-actions" aria-label={`Add to ${days[dayIndex]} ${slotLabel}`}>
+                              <button type="button" onClick={() => openSlotCapture(dayIndex, slotIndex, "task")}>
+                                Task
+                              </button>
+                              <button type="button" onClick={() => openSlotCapture(dayIndex, slotIndex, "note")}>
+                                Note
+                              </button>
+                            </div>
+                            {renderSlotCaptureComposer(dayIndex, slotIndex)}
                             {slotBlocks.map((block) => {
                               const priority = dailyPriorities.find(p => p.block_id === block.id);
                               return (
@@ -8264,6 +11191,9 @@ const App: React.FC = () => {
                                   key={block.id}
                                   block={block}
                                   variant="slot"
+                                  onItemActions={openGridItemActions}
+                                  readingLink={getBlockReadingLink(block)}
+                                  onOpenOccurrenceNote={id => setTodayNoteId(`block:${id}`)}
                                   priorityRank={priority ? (priority.priority_rank as 1 | 2 | 3) : undefined}
                                   hasAdjacentBelow={hasAdjacentBlockBelow(block)}
                                   mealPopoverBlockId={mealPopoverBlockId}
@@ -8305,6 +11235,8 @@ const App: React.FC = () => {
                                   onDetachWorkoutRoutine={detachWorkoutRoutineFromBlock}
                                   kindLabel={getBlockKindLabel(block)}
                                   relationshipChips={getBlockRelationshipChips(block)}
+                                    outlineItems={getBoardOutlineItemsForBlock(block)}
+                                    onToggleOutlineTask={toggleBoardOutlineTask}
                                   onSaveBlockNote={saveBlockNote}
                                   onAddBlockTask={addBlockTask}
                                   onToggleBlockTask={toggleBlockTask}
@@ -8353,6 +11285,121 @@ const App: React.FC = () => {
             </table>
           </div>
         </div>
+
+        {showSoftPlanPanel && (
+          <div className="modal-overlay modal-overlay--soft-plan" onClick={() => setShowSoftPlanPanel(false)}>
+            <div
+              className="modal-content soft-plan-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="soft-plan-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="modal-header">
+                <div>
+                  <span className="soft-plan-modal-kicker">Soft plan</span>
+                  <h2 id="soft-plan-title">{softPlanTotal} dotted intention{softPlanTotal === 1 ? "" : "s"}</h2>
+                </div>
+                <button
+                  className="modal-close"
+                  onClick={() => setShowSoftPlanPanel(false)}
+                  aria-label="Close soft plan"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="modal-body soft-plan-modal-body">
+                <p>
+                  Dotted intentions are maybes for the week. Make one real when you want it on the calendar, or dismiss it without penalty.
+                </p>
+                {softPlanPreviewItems.length === 0 ? (
+                  <div className="soft-plan-modal-empty">
+                    <strong>No soft commitments yet.</strong>
+                    <span>Open a habit or routine and use Intention to place dotted maybes on the week.</span>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowSoftPlanPanel(false);
+                          setMobileHomeView("themes");
+                        }}
+                      >
+                        Open Outline
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => {
+                          setShowSoftPlanPanel(false);
+                          openOverlayPanel("workout");
+                        }}
+                      >
+                        Open Routines
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="soft-plan-modal-list">
+                    {mobileWeeklyIntentionPlacements.map(({ kind, intention, placement, title, detail }) => {
+                      const visibleSlotIndex =
+                        viewMode === "buckets"
+                          ? getBucketForHourlyIndex(placement.timeIndex)
+                          : placement.timeIndex;
+                      const slotLabel = slotLabels[visibleSlotIndex] ?? "Open slot";
+                      return (
+                        <div
+                          key={`soft-plan-modal-${kind}-${intention.id}-${placement.id}`}
+                          className="soft-plan-modal-row"
+                        >
+                          <button
+                            type="button"
+                            className="soft-plan-modal-real"
+                            onClick={() => {
+                              if (kind === "habit") {
+                                void acceptWeeklyHabitIntention(intention.id, placement.id);
+                              } else {
+                                void acceptWeeklyRoutineIntention(intention.id, placement.id);
+                              }
+                            }}
+                          >
+                            Make real
+                          </button>
+                          <button
+                            type="button"
+                            className="soft-plan-modal-main"
+                            onClick={() => {
+                              setMobileDayIndex(placement.dayIndex);
+                              setDesktopPlannerSurface("week");
+                              setMobileHomeView("planner");
+                              setShowSoftPlanPanel(false);
+                            }}
+                          >
+                            <span>{days[placement.dayIndex]} · {slotLabel} · {detail}</span>
+                            <strong>{title}</strong>
+                          </button>
+                          <button
+                            type="button"
+                            className="soft-plan-modal-dismiss"
+                            onClick={() => {
+                              if (kind === "habit") {
+                                dismissWeeklyHabitIntention(intention.id, placement.id);
+                              } else {
+                                dismissWeeklyRoutineIntention(intention.id, placement.id);
+                              }
+                            }}
+                            aria-label={`Dismiss ${title} intention`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <button
           className="settings-btn"
@@ -8478,7 +11525,7 @@ const App: React.FC = () => {
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {mobileHabitPickerSlot && (() => {
-        const habitThemes = themes.filter((theme) => theme.themeType === "habit");
+        const habitThemes = themes.filter((theme) => theme.themeType === "habit" || theme.themeType === "household");
         const pickerQuery = mobileHabitPickerQuery.trim().toLowerCase();
         const allPickerHabits = habitThemes.flatMap((theme) => flattenHabits(theme.habits, theme.name, theme.id));
         const doesHabitMatch = (habit: HabitWithTheme) =>
@@ -8544,7 +11591,7 @@ const App: React.FC = () => {
             <div className="mobile-habit-picker-modal" onClick={(event) => event.stopPropagation()}>
               <div className="mobile-habit-picker-header">
                 <div>
-                  <span>Add from themes</span>
+                  <span>Add from Outline</span>
                   <strong>{days[mobileHabitPickerSlot.dayIndex]} · {slotLabel}</strong>
                 </div>
                 <button
@@ -8568,7 +11615,7 @@ const App: React.FC = () => {
                 </div>
                 {habitThemes.length === 0 ? (
                   <div className="mobile-habit-picker-empty">
-                    No habit themes yet.
+                    No habits yet.
                   </div>
                 ) : pickerQuery && !hasPickerMatches ? (
                   <div className="mobile-habit-picker-empty">
@@ -8591,10 +11638,14 @@ const App: React.FC = () => {
                       <section key={theme.id} className="mobile-habit-picker-theme">
                         <div className="mobile-habit-picker-theme-header">
                           <strong>{theme.name}</strong>
-                          <span>{habits.length} habit{habits.length === 1 ? "" : "s"}</span>
+                          <span>
+                            {habits.length} {theme.themeType === "household" ? habits.length === 1 ? "chore" : "chores" : habits.length === 1 ? "habit" : "habits"}
+                          </span>
                         </div>
                         {habits.length === 0 ? (
-                          <div className="mobile-habit-picker-empty">No habits in this theme yet.</div>
+                          <div className="mobile-habit-picker-empty">
+                            {theme.themeType === "household" ? "No chores in this theme yet." : "No habits in this theme yet."}
+                          </div>
                         ) : (
                           <div className="mobile-habit-picker-list">
                             {habits.map((habit) => renderPickerHabitButton(habit, theme.id))}
@@ -8718,8 +11769,11 @@ const App: React.FC = () => {
 
       {showRoutineNotes && user && (
         <RoutineNotesPopup
+          key={user.id}
           userId={user.id}
-          todayDate={todayDate}
+          initialRoutineId={selectedRoutineId}
+          outlineItems={outlinerNodes}
+          onOpenOutlineItem={viewCapturedItem}
           onClose={() => setShowRoutineNotes(false)}
           onCreateRoutineBlock={createRoutineBlockFromRoutine}
           workoutRoutines={workoutRoutines}
@@ -8746,52 +11800,6 @@ const App: React.FC = () => {
         />
       )}
 
-      {showPlanningOutliner && user && (
-        <PlanningOutlinerPanel
-          userId={user.id}
-          externalVersion={outlinerRefreshKey}
-          focusNodeIdRequest={outlinerFocusNodeId}
-          focusRequestKey={outlinerFocusRequestKey}
-          themes={themes
-            .filter((theme) => theme.themeType === "habit")
-            .map((theme) => ({
-              id: theme.id,
-              name: theme.name,
-              habits: flattenHabits(theme.habits, theme.name, theme.id).map((habit) => ({
-                id: habit.id,
-                name: habit.name,
-              })),
-            }))}
-          boardHabitIds={blocks
-            .map((block) => block.habitId)
-            .filter((habitId): habitId is string => !!habitId)}
-          onClose={() => setShowPlanningOutliner(false)}
-          onCreateBlock={createOutlinerBlock}
-          onCreateHabit={async (themeId, name, targetPerWeek, frequency) => {
-            return createOrLinkOutlinerHabit(themeId, name, targetPerWeek, frequency);
-          }}
-          onCreateHabitBlock={async (themeId, name, targetPerWeek, frequency) => {
-            const result = await createOrLinkOutlinerHabit(themeId, name, targetPerWeek, frequency);
-            if (!result) return null;
-            const boardResult = await addLinkedHabitToBoard({
-              habitId: result.habitId,
-              themeId: result.themeId,
-              label: name,
-            });
-            return boardResult ? { ...result, blockId: boardResult.blockId } : result;
-          }}
-          onCreateThemeFromRow={async (name, habits) => {
-            return createThemeFromOutliner(name, habits);
-          }}
-          onCreateRoutineFromRow={createRoutineFromOutliner}
-          onAddBoardForLinkedHabit={addLinkedHabitToBoard}
-          onOpenLinked={openLinkedOutlinerItem}
-          onRenameLinked={renameLinkedOutlinerItem}
-          onLoadLinkedNote={loadLinkedOutlinerNote}
-          onSaveLinkedNote={saveLinkedOutlinerNote}
-          onNodesChange={setOutlinerNodes}
-        />
-      )}
 
       {outlinerReminder && user && (
         <div
@@ -8860,7 +11868,7 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-    </>
+    </TileTimersProvider>
   );
 };
 

@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RoutineRunner } from './RoutineWidget';
+import { Star } from 'lucide-react';
 import {
   createRoutineId,
   inferRoutineCategory,
   inferRoutineCategoryFromRoutine,
   loadRoutineNotes,
   saveRoutineNotes,
+  resolveRoutineOutlineLabels,
   type RoutineTab,
 } from "../services/routineNotes";
 
@@ -16,7 +19,9 @@ type WorkoutRoutineSummary = {
 
 type Props = {
   userId: string;
-  todayDate: string;
+  outlineItems?: { id: string; text: string; children?: { id: string; text: string }[] }[];
+  onOpenOutlineItem?: (id: string) => void;
+  initialRoutineId?: string;
   onClose: () => void;
   onCreateRoutineBlock: (routine: RoutineTab) => Promise<void>;
   workoutRoutines?: WorkoutRoutineSummary[];
@@ -25,7 +30,9 @@ type Props = {
 
 export default function RoutineNotesPopup({
   userId,
-  todayDate,
+  outlineItems = [],
+  onOpenOutlineItem,
+  initialRoutineId,
   onClose,
   onCreateRoutineBlock,
   workoutRoutines = [],
@@ -43,8 +50,8 @@ export default function RoutineNotesPopup({
   const panelRef = useRef<HTMLDivElement>(null);
 
   const activeRoutine = useMemo(
-    () => routines.find((routine) => routine.id === activeRoutineId) ?? null,
-    [routines, activeRoutineId]
+    () => resolveRoutineOutlineLabels(routines, outlineItems).find((routine) => routine.id === activeRoutineId) ?? null,
+    [routines, activeRoutineId, outlineItems]
   );
   const linkedWorkoutRoutine = useMemo(
     () =>
@@ -53,21 +60,17 @@ export default function RoutineNotesPopup({
         : null,
     [activeRoutine, workoutRoutines]
   );
-  const completedItemIds = new Set(activeRoutine?.completedByDate[todayDate] ?? []);
-  const openItems = activeRoutine?.items.filter((item) => !completedItemIds.has(item.id)) ?? [];
-  const completedItemCount = activeRoutine?.items.filter((item) => completedItemIds.has(item.id)).length ?? 0;
-  const totalItemCount = activeRoutine?.items.length ?? 0;
-
   useEffect(() => {
     const loaded = loadRoutineNotes(userId);
     setRoutines(loaded);
-    setActiveRoutineId(loaded[0]?.id ?? null);
-  }, [userId]);
+    setActiveRoutineId(loaded.find(routine => routine.id === initialRoutineId)?.id ?? loaded[0]?.id ?? null);
+  }, [userId, initialRoutineId]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as HTMLElement | null;
       if (target?.closest("[data-overlay-toggle]")) return;
+      if (target?.closest('dialog')) return;
       if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
         onClose();
       }
@@ -162,40 +165,6 @@ export default function RoutineNotesPopup({
     });
   };
 
-  const toggleItem = (itemId: string) => {
-    if (!activeRoutine) return;
-    const current = activeRoutine.completedByDate[todayDate] ?? [];
-    const nextIds = current.includes(itemId)
-      ? current.filter((id) => id !== itemId)
-      : [...current, itemId];
-    updateRoutine(activeRoutine.id, {
-      completedByDate: {
-        ...activeRoutine.completedByDate,
-        [todayDate]: nextIds,
-      },
-    });
-  };
-
-  const completeRoutineToday = () => {
-    if (!activeRoutine) return;
-    updateRoutine(activeRoutine.id, {
-      completedByDate: {
-        ...activeRoutine.completedByDate,
-        [todayDate]: activeRoutine.items.map((item) => item.id),
-      },
-    });
-  };
-
-  const resetRoutineToday = () => {
-    if (!activeRoutine) return;
-    updateRoutine(activeRoutine.id, {
-      completedByDate: {
-        ...activeRoutine.completedByDate,
-        [todayDate]: [],
-      },
-    });
-  };
-
   const createRoutineBlock = async () => {
     if (!activeRoutine) return;
     await onCreateRoutineBlock(activeRoutine);
@@ -211,7 +180,7 @@ export default function RoutineNotesPopup({
   return (
     <div className="routine-notes-panel" ref={panelRef}>
       <div className="routine-notes-header">
-        <span className="routine-notes-title">Routine Notes</span>
+        <span className="routine-notes-title">Routines</span>
         <div className="routine-notes-actions">
           {editMode && activeRoutine && (
             <button
@@ -300,6 +269,8 @@ export default function RoutineNotesPopup({
       {activeRoutine ? (
         <>
           <div className="routine-notes-body">
+            {!editMode && <RoutineRunner key={activeRoutine.id} userId={userId} routine={activeRoutine} />}
+            {editMode && <>
             <label className="routine-section-label">Notes</label>
             <textarea
               className="routine-note-box"
@@ -309,41 +280,9 @@ export default function RoutineNotesPopup({
               rows={4}
             />
 
-            <div className="routine-runner-card">
-              <span>Today run</span>
-              <strong>
-                {totalItemCount === 0
-                  ? "No checklist yet"
-                  : `${completedItemCount}/${totalItemCount} done`}
-              </strong>
-              <em>
-                {openItems.length === 0 && totalItemCount > 0
-                  ? "Everything is checked off."
-                  : openItems.length > 0
-                    ? `${openItems.length} item${openItems.length === 1 ? "" : "s"} still open.`
-                    : "Add items in Edit mode."}
-              </em>
-              <div className="routine-runner-actions">
-                <button
-                  type="button"
-                  onClick={completeRoutineToday}
-                  disabled={totalItemCount === 0 || completedItemCount === totalItemCount}
-                >
-                  Complete all
-                </button>
-                <button
-                  type="button"
-                  onClick={resetRoutineToday}
-                  disabled={completedItemCount === 0}
-                >
-                  Reset today
-                </button>
-              </div>
-            </div>
-
             <div className="routine-checklist-header">
               <span className="routine-section-label">Checklist</span>
-              <span>{completedItemCount}/{activeRoutine.items.length} done today</span>
+              <span>{activeRoutine.items.length} steps</span>
             </div>
 
             <div className="routine-checklist">
@@ -351,17 +290,14 @@ export default function RoutineNotesPopup({
                 <div className="routine-empty">No routine items here yet.</div>
               )}
               {activeRoutine.items.map((item) => {
-                const done = completedItemIds.has(item.id);
                 return (
-                  <div key={item.id} className={`routine-item ${done ? "routine-item--done" : ""}`}>
-                    <button
-                      className={`routine-checkbox ${done ? "routine-checkbox--checked" : ""}`}
-                      onClick={() => toggleItem(item.id)}
-                      aria-label={done ? "Mark incomplete" : "Mark complete"}
-                    >
-                      {done ? "✓" : ""}
+                  <div key={item.id} className="routine-item">
+                    <button type="button" className="routine-essential-toggle" aria-pressed={!!item.essential}
+                      aria-label={`Essential step: ${item.label}`} title={item.essential ? 'Remove from essentials' : 'Mark as essential'}
+                      onClick={() => updateRoutine(activeRoutine.id, { items: activeRoutine.items.map(entry => entry.id === item.id ? { ...entry, essential: !entry.essential } : entry) })}>
+                      <Star size={18} fill={item.essential ? 'currentColor' : 'none'} />
                     </button>
-                    {editMode ? (
+                    {editMode && !item.sourceOutlineId ? (
                       <input
                         className="routine-item-input"
                         defaultValue={item.label}
@@ -376,6 +312,7 @@ export default function RoutineNotesPopup({
                     ) : (
                       <span className="routine-item-label">{item.label}</span>
                     )}
+                    {editMode && item.sourceOutlineId && onOpenOutlineItem && <button type="button" onClick={() => onOpenOutlineItem(item.sourceOutlineId!)}>Open in Outline</button>}
                     {editMode && (
                       <button
                         className="routine-delete-item"
@@ -389,6 +326,7 @@ export default function RoutineNotesPopup({
                 );
               })}
             </div>
+            </>}
 
             {activeRoutine.category === "workout" && (
               <div className="routine-workout-link">

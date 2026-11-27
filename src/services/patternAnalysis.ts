@@ -20,10 +20,59 @@ export interface GhostBlock {
   is_suggested: true;
 }
 
+type PatternBlockCandidate = {
+  id: string;
+  label: string;
+  day_index: number | null;
+  time_index: number | null;
+  week_start_date: string;
+  completed: boolean | null;
+  is_habit_block: boolean | null;
+  habit_id: string | null;
+  is_standing?: boolean | null;
+  standing_block_id?: string | null;
+};
+
+type PatternBlockTask = {
+  block_id: string;
+  completed: boolean | null;
+};
+
 function getTwoWeeksAgo(currentWeekStart: string): string {
   const date = new Date(currentWeekStart);
   date.setDate(date.getDate() - 14);
   return date.toISOString().split('T')[0];
+}
+
+function isRecurringBlockCandidate(block: PatternBlockCandidate): boolean {
+  return Boolean(block.is_habit_block || block.habit_id || block.is_standing || block.standing_block_id);
+}
+
+function normalizeOneTimeLabel(label: string): string {
+  return label.replace(/^(Task|Note|Block):\s*/i, '').trim().toLowerCase();
+}
+
+function hasSpecificDateText(label: string): boolean {
+  const normalized = label.toLowerCase();
+  return (
+    /\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}\b/.test(normalized) ||
+    /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/.test(normalized)
+  );
+}
+
+function isDatedOneTimeTask(block: PatternBlockCandidate): boolean {
+  return /^Task:\s*/i.test(block.label) && !isRecurringBlockCandidate(block) && hasSpecificDateText(block.label);
+}
+
+function isOneTimeTaskBlock(block: PatternBlockCandidate): boolean {
+  return /^Task:\s*/i.test(block.label) && !isRecurringBlockCandidate(block);
+}
+
+function isCompletedOneTimeBlock(block: PatternBlockCandidate, blockTasks: PatternBlockTask[] = []): boolean {
+  return (
+    !isRecurringBlockCandidate(block) &&
+    (block.completed === true || (blockTasks.length > 0 && blockTasks.every((task) => task.completed === true)))
+  );
 }
 
 export async function analyzePatterns(userId: string, currentWeekStart: string): Promise<BlockPattern[]> {
@@ -31,8 +80,9 @@ export async function analyzePatterns(userId: string, currentWeekStart: string):
 
   const { data: blocks, error } = await supabase
     .from('blocks')
-    .select('label, day_index, time_index, week_start_date')
+    .select('id, label, day_index, time_index, week_start_date, completed, is_habit_block, habit_id, is_standing, standing_block_id')
     .eq('user_id', userId)
+    .eq('location_type', 'slot')
     .gte('week_start_date', twoWeeksAgo)
     .lt('week_start_date', currentWeekStart)
     .not('day_index', 'is', null)
@@ -43,6 +93,32 @@ export async function analyzePatterns(userId: string, currentWeekStart: string):
     return [];
   }
 
+  const blockIds = (blocks as PatternBlockCandidate[]).map((block) => block.id);
+  const { data: blockTasks, error: blockTasksError } = blockIds.length > 0
+    ? await supabase
+      .from('block_tasks')
+      .select('block_id, completed')
+      .in('block_id', blockIds)
+    : { data: [], error: null };
+
+  if (blockTasksError) {
+    console.error('Error fetching block tasks for pattern analysis:', blockTasksError);
+  }
+
+  const tasksByBlock = new Map<string, PatternBlockTask[]>();
+  ((blockTasks ?? []) as PatternBlockTask[]).forEach((task) => {
+    const existing = tasksByBlock.get(task.block_id) ?? [];
+    existing.push(task);
+    tasksByBlock.set(task.block_id, existing);
+  });
+
+  const completedOneTimeLabels = new Set(
+    (blocks as PatternBlockCandidate[])
+      .filter((block) => isCompletedOneTimeBlock(block, tasksByBlock.get(block.id) ?? []) || isDatedOneTimeTask(block))
+      .map((block) => normalizeOneTimeLabel(block.label))
+      .filter(Boolean)
+  );
+
   const patternMap = new Map<string, {
     label: string;
     day_index: number;
@@ -50,7 +126,18 @@ export async function analyzePatterns(userId: string, currentWeekStart: string):
     weeks: Set<string>;
   }>();
 
-  blocks.forEach(block => {
+  (blocks as PatternBlockCandidate[]).forEach(block => {
+    if (
+      isOneTimeTaskBlock(block) ||
+      isCompletedOneTimeBlock(block, tasksByBlock.get(block.id) ?? []) ||
+      isDatedOneTimeTask(block) ||
+      (!isRecurringBlockCandidate(block) && completedOneTimeLabels.has(normalizeOneTimeLabel(block.label))) ||
+      block.day_index === null ||
+      block.time_index === null
+    ) {
+      return;
+    }
+
     const key = `${block.label}-${block.day_index}-${block.time_index}`;
 
     if (!patternMap.has(key)) {

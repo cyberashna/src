@@ -1,0 +1,20 @@
+.tile-timer-button, .tile-timer-menu { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; border: 1px solid #a7bcb2; border-radius: 4px; padding: 6px 10px; background: #f5faf7; color: #285440; cursor: pointer; font: inherit; font-size: 12px; max-width: 100%; }
+.tile-timer-countdown { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tile-timer-button[data-running=false] { width: 44px; padding: 0; border-color: transparent; background: transparent; }
+.tile-timer-button svg, .tile-timer-menu svg { flex-shrink: 0; }
+.block-main-line > .tile-timer-button { justify-self: start; grid-column: 1 / -1; }
+.stack-plan-card:has(.stack-tile-timer) { flex-wrap: wrap; }
+.stack-tile-timer { flex: 0 0 100%; min-width: 0; }
+.tile-timer-form { display: grid; gap: 18px; }
+.tile-timer-form > strong { font-size: 18px; overflow-wrap: anywhere; }
+.tile-timer-form label { display: grid; gap: 8px; }
+.tile-timer-form input { width: 100%; box-sizing: border-box; min-height: 48px; padding: 10px; font: inherit; border: 1px solid #9dafaa; border-radius: 4px; }
+.tile-timer-form footer { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.tile-timer-form footer button { min-height: 48px; }
+.tile-timer-current { display: flex; align-items: center; gap: 8px; font-size: 24px; }
+.tile-timer-notice { font-size: 13px; color: #57655f; line-height: 1.5; margin: 0; }
+.tile-timer-alerts { position: fixed; z-index: 15000; right: max(16px, var(--safe-area-inset-right, 0px)); bottom: calc(90px + var(--safe-area-inset-bottom, 0px)); width: min(440px, calc(100vw - 32px)); max-height: 40vh; overflow-y: auto; box-sizing: border-box; }
+.tile-timer-alert { display: grid; grid-template-columns: 24px minmax(0, 1fr) 44px 44px; gap: 8px; align-items: center; padding: 12px; margin-top: 8px; border: 2px solid #8f7331; border-radius: 6px; background: #fffbea; color: #3d341e; box-shadow: 0 4px 20px #0002; }
+.tile-timer-alert > div { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.tile-timer-alert button { display: grid; place-items: center; width: 44px; min-height: 44px; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.tile-timer-button:focus-visible, .tile-timer-alert button:focus-visible { outline: 2px solid #285440; outline-offset: 2px; }
